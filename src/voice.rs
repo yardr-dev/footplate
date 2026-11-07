@@ -114,7 +114,7 @@ pub const APPEND_BYTES: usize = 400;
 /// at 700 ms, and that fell inside a noise tag (run 4, 800 ms) and inside a
 /// question (run 6, 1600 ms), so this is longer than either; separate remarks
 /// stood 2200 ms or more apart in the runs.
-const UTTERANCE_GAP_MS: u64 = 2000;
+pub(crate) const UTTERANCE_GAP_MS: u64 = 2000;
 
 /// After a pause this long the server sends the next word without the space
 /// that joins it to the one before (run 6: 'blocking' after 1000 ms), and with
@@ -1484,6 +1484,16 @@ pub fn idle(quiet_since: Instant, now: Instant, limit: Duration, waiting: bool) 
     !waiting && now.saturating_duration_since(quiet_since) >= limit
 }
 
+/// Whether the person's utterance is over: their words were last heard at
+/// `last_heard`, and nothing more has come by `now`, [`UTTERANCE_GAP_MS`] on
+/// (step 1 of 3.3). The instants are arguments, as [`idle`]'s are, so that the
+/// session's thread tells them by a [`Clock`] a test can hold.
+fn utterance_over(last_heard: Option<Instant>, now: Instant) -> bool {
+    last_heard.is_some_and(|at| {
+        now.saturating_duration_since(at) >= Duration::from_millis(UTTERANCE_GAP_MS)
+    })
+}
+
 /// The session's instructions, in the shape OpenAI's prompting guide gives:
 /// the voice's part, then the guide's `Backchannel policy`, `Interruption
 /// policy` and `Delegation policy` headings in that order. `{counterpart}` is
@@ -2205,6 +2215,16 @@ const POLL: Duration = Duration::from_millis(10);
 /// `session.close`, before it ends the session anyway.
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
+/// What the thread tells the gap that ends the person's utterance by
+/// ([`utterance_over`]): a session reads the system's time, `Instant::now`,
+/// and a test holds a clock of its own, since on a loaded machine the wall's
+/// two seconds can pass between two steps of a test and let go what the gap
+/// holds back (a typed answer, the request of a delegation). It is the gap's
+/// alone: the session's moment, the close and the speaker's holdoff stay on
+/// the system's time. Shared with the thread, so `Send`, where the window's
+/// own (`Means::now`) is not.
+pub(crate) type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
 /// What the session thread tells its caller, in plain terms: no GPT-Live
 /// event, delegation or append stands among them.
 #[derive(Debug, PartialEq)]
@@ -2436,13 +2456,35 @@ pub fn start_session(
 
 /// [`start_session`] with where the session stands and how its key is read, for the
 /// tests: against a stand-in socket, with a key they script. The window's
-/// tests start theirs through it, by the window's `Means`.
+/// tests start theirs through it or [`gated_start_by`], by the window's `Means`.
 pub(crate) fn gated_start(
     voice_on: bool,
     key: impl FnOnce() -> Result<String, String>,
     url: &str,
     counterpart: &str,
     voice: &str,
+    tell: mpsc::Sender<Update>,
+) -> Start {
+    gated_start_by(
+        voice_on,
+        key,
+        url,
+        counterpart,
+        voice,
+        Arc::new(Instant::now),
+        tell,
+    )
+}
+
+/// [`gated_start`] with the [`Clock`] the thread tells the gap that ends the
+/// person's utterance by, for a test that holds it instead of racing the wall.
+pub(crate) fn gated_start_by(
+    voice_on: bool,
+    key: impl FnOnce() -> Result<String, String>,
+    url: &str,
+    counterpart: &str,
+    voice: &str,
+    clock: Clock,
     tell: mpsc::Sender<Update>,
 ) -> Start {
     if !voice_on {
@@ -2452,7 +2494,7 @@ pub(crate) fn gated_start(
         Ok(key) => key,
         Err(words) => return Start::Refused(words),
     };
-    start_at(url, key, counterpart, voice, tell)
+    start_at(url, key, counterpart, voice, clock, tell)
 }
 
 /// A session's thread at `url` with `key`, whatever stands there: the live
@@ -2463,6 +2505,7 @@ fn start_at(
     key: String,
     counterpart: &str,
     voice: &str,
+    clock: Clock,
     tell: mpsc::Sender<Update>,
 ) -> Start {
     let control = Control::default();
@@ -2473,7 +2516,7 @@ fn start_at(
         let control = control.clone();
         let speaker = speaker.clone();
         let url = url.to_string();
-        move || run(url, key, hello, heard_cmds, speaker, control, tell)
+        move || run(url, key, hello, heard_cmds, speaker, control, clock, tell)
     });
     Start::On(Voice {
         control,
@@ -2500,6 +2543,7 @@ pub(crate) fn say(line: &str) {
 /// own moment (`expires_at`, read from `session.started` and expected), on
 /// the provider's close, on a hang-up ([`Cmd::Close`]) or on
 /// [`Control::stop`], which wakes its read.
+#[allow(clippy::too_many_arguments)]
 fn run(
     url: String,
     key: String,
@@ -2507,6 +2551,7 @@ fn run(
     cmds: mpsc::Receiver<Cmd>,
     speaker: Arc<Mutex<Queue>>,
     control: Control,
+    clock: Clock,
     tell: mpsc::Sender<Update>,
 ) {
     let parsed = match WsUrl::parse(&url) {
@@ -2545,6 +2590,7 @@ fn run(
         speaker,
         control,
         tell,
+        clock,
         started: false,
         deadline: None,
         closing: None,
@@ -2573,6 +2619,9 @@ struct Session {
     speaker: Arc<Mutex<Queue>>,
     control: Control,
     tell: mpsc::Sender<Update>,
+    /// What the gap that ends the person's utterance is told by, and
+    /// nothing else of the thread's: see [`Clock`].
+    clock: Clock,
     started: bool,
     /// The session's moment, from `session.started`: it is expected, and
     /// the session is ended there as a hang-up ends it.
@@ -2580,8 +2629,8 @@ struct Session {
     /// Since when `session.close` has been sent, awaiting `session.closed`.
     closing: Option<Instant>,
     expired: bool,
-    /// When the person's words were last heard, by this thread's clock: a
-    /// gap of [`UTTERANCE_GAP_MS`] from it with nothing more heard is their
+    /// When the person's words were last heard, by `clock`: a gap of
+    /// [`UTTERANCE_GAP_MS`] from it with nothing more heard is their
     /// utterance ended (step 1 of 3.3), and what waited for that goes.
     last_heard: Option<Instant>,
 }
@@ -2633,11 +2682,7 @@ impl Session {
             // an utterance, so what waited for that goes now: a typed
             // answer for the voice, and the request of a delegation raised
             // while they spoke.
-            if self.book.speaking()
-                && self
-                    .last_heard
-                    .is_some_and(|at| at.elapsed() >= Duration::from_millis(UTTERANCE_GAP_MS))
-            {
+            if self.book.speaking() && utterance_over(self.last_heard, (self.clock)()) {
                 self.last_heard = None;
                 let steps = self.book.stopped();
                 if let Err(err) = self.obey(conn, steps) {
@@ -2797,7 +2842,7 @@ impl Session {
             }
             Server::Heard(fragment) => {
                 if !fragment.text.is_empty() {
-                    self.last_heard = Some(Instant::now());
+                    self.last_heard = Some((self.clock)());
                 }
                 let _ = self.tell.send(Update::Words(fragment.clone()));
                 if self.book.heard(fragment) {
@@ -4301,6 +4346,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_utterance_is_over_when_the_gap_has_passed_since_the_last_words_heard() {
+        let heard = Instant::now();
+        let at = |ms: u64| heard + Duration::from_millis(ms);
+        // Nothing heard, nothing to end, however late it is.
+        assert!(!utterance_over(None, at(60_000)));
+        // The gap runs from the last words, to the millisecond.
+        assert!(!utterance_over(Some(heard), heard));
+        assert!(!utterance_over(Some(heard), at(UTTERANCE_GAP_MS - 1)));
+        assert!(utterance_over(Some(heard), at(UTTERANCE_GAP_MS)));
+        assert!(utterance_over(Some(heard), at(60_000)));
+        // A clock that reads earlier than the words says no.
+        assert!(!utterance_over(Some(at(10)), heard));
+    }
+
+    #[test]
     fn the_instructions_hold_the_delegation_words_and_both_policy_headings() {
         let text = instructions("yardmaster");
         assert!(!text.contains("{counterpart}"));
@@ -5215,6 +5275,7 @@ pub(crate) mod tests {
             speaker: Arc::new(Mutex::new(Queue::default())),
             control: Control::default(),
             tell,
+            clock: Arc::new(Instant::now),
             started: true,
             deadline: None,
             closing: None,

@@ -11700,8 +11700,8 @@ yardr.dev
     /// and the machine's devices and microphones: for each session the window starts, a
     /// stand-in for OpenAI's Live socket on a loopback port of its own;
     /// devices that count themselves open and note whether the session had
-    /// been hung up on when they closed; a clock the test moves; and whether
-    /// the window shows.
+    /// been hung up on when they closed; a clock the test moves; a clock for
+    /// the sessions' gap that the test holds; and whether the window shows.
     struct Voicing {
         /// The sessions started so far, oldest first.
         lives: Rc<RefCell<Vec<Started>>>,
@@ -11727,6 +11727,12 @@ yardr.dev
         /// How far on the clock is: the window's time is the real time and
         /// this.
         later: Rc<Cell<Duration>>,
+        /// The clock the sessions' threads tell the gap that ends the
+        /// person's utterance by: the real time while none, and once a test
+        /// holds it the instant it stands at, which only the test moves.
+        gap: Arc<Mutex<Option<std::time::Instant>>>,
+        /// How many times the threads have read it.
+        gap_reads: Arc<AtomicUsize>,
         hidden: Rc<Cell<bool>>,
     }
 
@@ -11770,6 +11776,8 @@ yardr.dev
                 ])),
                 consent: Arc::new(Mutex::new(Consent::Authorized)),
                 later: Rc::default(),
+                gap: Arc::default(),
+                gap_reads: Arc::default(),
                 hidden: Rc::default(),
             }
         }
@@ -11781,6 +11789,7 @@ yardr.dev
             let (open, mics, order) = (self.open.clone(), self.mics.clone(), self.order.clone());
             let (asked, machine) = (self.asked.clone(), self.machine.clone());
             let (later, hidden) = (self.later.clone(), self.hidden.clone());
+            let (gap, gap_reads) = (self.gap.clone(), self.gap_reads.clone());
             let consent = self.consent.clone();
             let seen = current.clone();
             view.update(cx, |v, _| {
@@ -11807,7 +11816,17 @@ yardr.dev
                         .as_secs() as i64;
                     live.expires_at(now + 3600);
                     let server = live_socket(live.clone(), "Bearer sk-test");
-                    let started = voice::gated_start(true, || key, &server.url, with, voice, tell);
+                    // The thread tells its gap by the real time, until a test
+                    // holds the clock.
+                    let clock: voice::Clock = {
+                        let (gap, reads) = (gap.clone(), gap_reads.clone());
+                        Arc::new(move || {
+                            reads.fetch_add(1, Ordering::SeqCst);
+                            gap.lock().unwrap().unwrap_or_else(std::time::Instant::now)
+                        })
+                    };
+                    let started =
+                        voice::gated_start_by(true, || key, &server.url, with, voice, clock, tell);
                     *current.lock().unwrap() = Some(live.clone());
                     lives.borrow_mut().push((live, server));
                     started
@@ -11846,6 +11865,29 @@ yardr.dev
         /// by so far, oldest first.
         fn asked(&self) -> Vec<String> {
             self.asked.lock().unwrap().clone()
+        }
+
+        /// Holds the clock the sessions' threads tell the gap that ends the
+        /// person's utterance by, an hour ahead of wall time: no gap passes,
+        /// however long the machine takes between two steps of a test, until
+        /// [`Voicing::pass_gap`]. Starting in the future makes a wall-clock
+        /// check stay short of the gap even after `pass_gap`, so the test
+        /// proves the thread checks this clock too. Held before the session
+        /// starts, so every word the person says is stamped by it.
+        fn hold_gap(&self) {
+            *self.gap.lock().unwrap() = Some(std::time::Instant::now() + Duration::from_secs(3600));
+        }
+
+        /// The gap passes on the held clock, and only the gap.
+        fn pass_gap(&self) {
+            let mut held = self.gap.lock().unwrap();
+            let at = held.expect("the gap's clock is held");
+            *held = Some(at + Duration::from_millis(voice::UTTERANCE_GAP_MS));
+        }
+
+        /// How many times the sessions' threads have read the gap's clock.
+        fn gap_reads(&self) -> usize {
+            self.gap_reads.load(Ordering::SeqCst)
         }
     }
 
@@ -12235,6 +12277,12 @@ yardr.dev
         let (view, cx) = opened_kept(&yard, &file, cx);
         let voicing = Voicing::new();
         voicing.stand_in(&view, cx);
+        // The session's thread ends the person's utterance when two seconds
+        // have passed since their last words, and on a loaded machine the
+        // steps below can take that long, so the answer held while they
+        // speak would be let go early. The gap is told by a clock held here
+        // instead, and passes when the test says.
+        voicing.hold_gap();
         let commentary = |live: &Live| {
             live.appends()
                 .into_iter()
@@ -12304,6 +12352,15 @@ yardr.dev
             commentary(&live).is_empty(),
             "not while the person is speaking"
         );
+        // The clock holds the answer only if the thread tells its gap by it:
+        // with the wall in its place the answer would be held for as long as
+        // the machine is quick.
+        assert!(
+            voicing.gap_reads() > 0,
+            "the session's gap is told by the held clock"
+        );
+        // The person stops: the gap passes, and the answer goes.
+        voicing.pass_gap();
         wait(cx, "the typed answer spoken", |_| {
             !commentary(&live).is_empty()
         });

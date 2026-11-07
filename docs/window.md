@@ -528,15 +528,19 @@ then.
 A tray draws the icon and no title, so the count is on the icon:
 
 - nothing waits: footplate's mark alone;
-- something waits: the mark with the number on it, white on a red badge
+- one to nine wait: the mark with the number on it, white on a red badge
   in its lower right corner. The number is the one of the Mac's item:
   mail you have not read plus the cards to decide, over every yard;
-- a dot in place of the number where it would not be read: on an icon of
-  16 pixels, three digits on one under 32, and four digits or more.
+- ten or more wait: a white plus on the badge, where the number would
+  take two digits. A badge that wide would cover the stem of the Y, so
+  the plus has the width of one digit;
+- a dot in place of the number or the plus where it would not be read, on
+  an icon of 16 pixels.
 
 The icon is offered at 16, 22, 24, 32, 48 and 64 pixels, each with its own
-sign, and the tray takes the one it draws. The tooltip says it in words:
-"3 wait: 2 mail, 1 decision", or "nothing waiting".
+sign, and the tray takes the one it draws. The tooltip says it in words
+and has the exact count: "12 wait: 9 mail, 3 decisions", or "nothing
+waiting".
 
 A click on the item shows the window, as "Show window" in its menu does; a
 yard's row shows it on that yard. Whether the window then comes to the

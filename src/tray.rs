@@ -9,11 +9,11 @@
 //!
 //! On Linux it is an item in the desktop's tray, where a StatusNotifier
 //! host draws one (a bar's tray, a panel's), with the same menu. A tray
-//! draws the icon and no title, so the number is drawn on the mark, or a
-//! dot where the icon is too small for one, and the tooltip says it in
-//! words. A click on the item shows the window. It is spoken over D-Bus by
-//! ksni; without a host, or without a session bus, there is none and
-//! nothing else changes.
+//! draws the icon and no title, so the number is drawn on the mark, a plus
+//! from ten up, or a dot where the icon is too small for either, and the
+//! tooltip says it in words. A click on the item shows the window. It is
+//! spoken over D-Bus by ksni; without a host, or without a session bus,
+//! there is none and nothing else changes.
 //!
 //! What the item says is in plain functions, tested on any system; the
 //! items are each for their own system.
@@ -91,10 +91,14 @@ pub struct Said {
 pub enum Sign {
     /// The mark alone: nothing waits.
     Nothing,
-    /// The number that waits, drawn on the mark.
+    /// The number that waits, up to [`MOST`], drawn on the mark.
     Number(String),
-    /// A dot on the mark: something waits, and its number would not be
-    /// read at this size.
+    /// A plus on the mark: ten or more wait. A badge of two digits would
+    /// cover the stem of the Y, so the plus has the width of one, and the
+    /// tooltip has the number.
+    Many,
+    /// A dot on the mark: something waits, and neither its number nor a
+    /// plus would be read at this size.
     Dot,
 }
 
@@ -116,31 +120,38 @@ pub fn title(waiting: usize) -> String {
     crate::dock::label(waiting).unwrap_or_default()
 }
 
+/// The most that is drawn as a number. A badge holds one glyph, since two
+/// digits cover the stem of the Y from 22 pixels up, so a count above this
+/// is a plus.
+#[cfg(any(target_os = "linux", test))]
+const MOST: usize = 9;
+
 /// What the icon of `size` pixels a side shows while `waiting` things wait:
-/// their number where it is read, and a dot where it would not be. It is
-/// read where a point of its digits is two pixels or more, and a sixteenth
-/// of the icon or more: a tray that draws 20 pixels may take the largest
-/// icon and scale it. A tray is given the icon in several sizes, and each
-/// has its own sign.
+/// their number where it is read, a plus where more than [`MOST`] wait, and
+/// a dot where neither would be. A glyph is read where a point of it is two
+/// pixels or more, and a sixteenth of the icon or more: a tray that draws 20
+/// pixels may take the largest icon and scale it. A tray is given the icon
+/// in several sizes, and each has its own sign.
 #[cfg(any(target_os = "linux", test))]
 pub fn sign(waiting: usize, size: u32) -> Sign {
     match crate::dock::label(waiting) {
         None => Sign::Nothing,
-        Some(number) => match unit(number.len(), size) {
-            unit if unit >= 2 && unit * 16 >= size => Sign::Number(number),
-            _ => Sign::Dot,
+        Some(number) => match unit(1, size) {
+            unit if unit < 2 || unit * 16 < size => Sign::Dot,
+            _ if waiting > MOST => Sign::Many,
+            _ => Sign::Number(number),
         },
     }
 }
 
-/// How many pixels a point of a digit is, for a number of `digits` on an
-/// icon of `size` pixels a side. A digit is 3 points wide and 5 high, with
-/// a point between two and around them all; the number takes up to two
+/// How many pixels a point of a glyph is, for a badge of `glyphs` of them
+/// on an icon of `size` pixels a side. A glyph is 3 points wide and 5 high,
+/// with a point between two and around them all; the badge takes up to two
 /// thirds of the icon's height and all of its width.
 #[cfg(any(target_os = "linux", test))]
-fn unit(digits: usize, size: u32) -> u32 {
-    let digits = u32::try_from(digits).unwrap_or(u32::MAX);
-    (size * 2 / 3 / 7).min(size / digits.saturating_mul(4).saturating_add(1))
+fn unit(glyphs: usize, size: u32) -> u32 {
+    let glyphs = u32::try_from(glyphs).unwrap_or(u32::MAX);
+    (size * 2 / 3 / 7).min(size / glyphs.saturating_mul(4).saturating_add(1))
 }
 
 /// The item's tooltip, in words: how many things wait, and `what` they are
@@ -169,16 +180,39 @@ const DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b111, 0b001, 0b111],
 ];
 
+/// The plus, as wide and high as a digit: a cross 3 points across and 3
+/// down in the middle of the 5 rows, as a font of 3 by 5 draws it.
+#[cfg(any(target_os = "linux", test))]
+const PLUS: [u8; 5] = [0b000, 0b010, 0b111, 0b010, 0b000];
+
 /// What a sign is drawn in, red, green, blue and alpha: the red of a
-/// badge, and the white of the number on it.
+/// badge, and the white of the number or the plus on it.
 #[cfg(any(target_os = "linux", test))]
 const BADGE: [u8; 4] = [0xe5, 0x39, 0x35, 0xff];
 #[cfg(any(target_os = "linux", test))]
 const NUMBER: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
 
+#[cfg(any(target_os = "linux", test))]
+impl Sign {
+    /// The glyphs a badge holds, left to right: a digit's rows each, or the
+    /// plus's. A character of a number that is no digit has none.
+    fn glyphs(&self) -> Vec<[u8; 5]> {
+        match self {
+            Sign::Number(number) => number
+                .chars()
+                .filter_map(|digit| digit.to_digit(10))
+                .map(|digit| DIGITS[digit as usize])
+                .collect(),
+            Sign::Many => vec![PLUS],
+            Sign::Nothing | Sign::Dot => Vec::new(),
+        }
+    }
+}
+
 /// Draws `sign` on the mark in `rgba`, `size` pixels a side with four
-/// bytes a pixel, in its lower right corner: the number in white on a red
-/// badge with its corners cut, or a red dot two fifths of the icon across.
+/// bytes a pixel, in its lower right corner: the number or the plus in
+/// white on a red badge with its corners cut, or a red dot two fifths of
+/// the icon across.
 #[cfg(any(target_os = "linux", test))]
 pub fn draw(sign: &Sign, size: u32, rgba: &mut [u8]) {
     let mut fill = |left: u32, top: u32, wide: u32, high: u32, colour: [u8; 4]| {
@@ -207,9 +241,10 @@ pub fn draw(sign: &Sign, size: u32, rgba: &mut [u8]) {
                 }
             }
         }
-        Sign::Number(number) => {
-            let unit = unit(number.len(), size);
-            let places = number.len() as u32;
+        Sign::Number(_) | Sign::Many => {
+            let glyphs = sign.glyphs();
+            let unit = unit(glyphs.len(), size);
+            let places = glyphs.len() as u32;
             let (wide, high) = ((4 * places + 1) * unit, 7 * unit);
             let (left, top) = (size.saturating_sub(wide), size.saturating_sub(high));
             // How far a pixel is into the point at an end of its row or
@@ -223,9 +258,8 @@ pub fn draw(sign: &Sign, size: u32, rgba: &mut [u8]) {
                     }
                 }
             }
-            let digits = number.chars().filter_map(|digit| digit.to_digit(10));
-            for (place, digit) in (0u32..).zip(digits) {
-                for (row, points) in (0u32..).zip(DIGITS[digit as usize]) {
+            for (place, glyph) in (0u32..).zip(glyphs) {
+                for (row, points) in (0u32..).zip(glyph) {
                     for column in (0..3).filter(|column| points & (0b100 >> column) != 0) {
                         fill(
                             left + unit * (1 + 4 * place + column),
@@ -870,31 +904,28 @@ mod tests {
     }
 
     #[test]
-    fn the_icon_shows_nothing_a_number_or_a_dot_by_what_waits_and_its_size() {
+    fn the_icon_shows_nothing_a_number_a_plus_or_a_dot_by_what_waits_and_its_size() {
         let number = |n: &str| Sign::Number(n.to_string());
         // Nothing waits: the mark alone, at every size.
         for size in [16, 22, 24, 32, 48, 64] {
             assert_eq!(sign(0, size), Sign::Nothing);
         }
-        // One digit and two are read from 22 pixels up, and are a dot on
-        // the 16 of a small tray.
-        for waiting in [1, 9, 10, 99] {
+        // A digit is read from 22 pixels up, and is a dot on the 16 of a
+        // small tray.
+        for waiting in [1, 9] {
             assert_eq!(sign(waiting, 16), Sign::Dot);
             for size in [22, 24, 32, 48, 64] {
                 assert_eq!(sign(waiting, size), number(&waiting.to_string()));
             }
         }
-        // Three digits need 32 pixels, and more are a dot wherever a tray
-        // asks: they would be too small a part of the icon.
-        for size in [16, 22, 24] {
-            assert_eq!(sign(128, size), Sign::Dot);
-        }
-        for size in [32, 48, 64] {
-            assert_eq!(sign(128, size), number("128"));
-        }
-        for size in [16, 22, 24, 32, 48, 64] {
-            assert_eq!(sign(1000, size), Sign::Dot);
-            assert_eq!(sign(usize::MAX, size), Sign::Dot);
+        // Ten or more are a plus wherever a digit is read, however many
+        // digits they have: a badge of two would cover the stem of the Y.
+        // At 16 pixels they are the dot a digit is.
+        for waiting in [10, 99, 128, 1000, usize::MAX] {
+            assert_eq!(sign(waiting, 16), Sign::Dot);
+            for size in [22, 24, 32, 48, 64] {
+                assert_eq!(sign(waiting, size), Sign::Many);
+            }
         }
         // No size at all asks for nothing that cannot be had.
         assert_eq!(sign(3, 0), Sign::Dot);
@@ -1001,15 +1032,44 @@ mod tests {
                 .all(|row| row == &".".repeat(22))
         );
 
-        // Every digit is its own, and two stand side by side.
-        let digits: Vec<Vec<String>> = (0..10)
-            .map(|digit| drawn(&sign(digit + 10, 22), 22))
+        // A plus, for ten or more: the badge of one digit, with the cross in
+        // its middle.
+        assert_eq!(
+            drawn(&sign(10, 22), 22)[8..],
+            [
+                "..............######..",
+                ".............########.",
+                "............##########",
+                "............##########",
+                "............####oo####",
+                "............####oo####",
+                "............##oooooo##",
+                "............##oooooo##",
+                "............####oo####",
+                "............####oo####",
+                "............##########",
+                "............##########",
+                ".............########.",
+                "..............######..",
+            ]
+        );
+
+        // Every glyph is its own: the ten digits and the plus.
+        let glyphs: Vec<Vec<String>> = (0..10)
+            .map(|digit| Sign::Number(digit.to_string()))
+            .chain([Sign::Many])
+            .map(|sign| drawn(&sign, 22))
             .collect();
-        for (at, one) in digits.iter().enumerate() {
+        for (at, one) in glyphs.iter().enumerate() {
             assert!(one.iter().any(|row| row.contains('o')));
-            assert!(digits[at + 1..].iter().all(|other| other != one));
+            assert!(glyphs[at + 1..].iter().all(|other| other != one));
         }
-        assert_eq!(drawn(&sign(42, 22), 22)[10], "....##oo##oo##oooooo##");
+        // A badge is as wide as its glyphs: two digits stand side by side,
+        // though no count draws two now.
+        assert_eq!(
+            drawn(&Sign::Number("42".to_string()), 22)[10],
+            "....##oo##oo##oooooo##"
+        );
 
         // A dot: two fifths of the icon across, its corners off, and no
         // number.
@@ -1025,17 +1085,38 @@ mod tests {
             ]
         );
 
+        // The Y's stem is the SVG's stroke of 112 points about x 512, so
+        // 456 to 568 of 1024 across. A badge stands flush right, so it can
+        // only take the stem's right edge: three quarters of the stem's
+        // width stay clear of it, at every size and for every sign. A
+        // badge of two digits began left of the stem and hid it whole.
+        for size in [16, 22, 24, 32, 48, 64] {
+            for waiting in [1, 9, 10, 99, usize::MAX] {
+                let begins = drawn(&sign(waiting, size), size)
+                    .iter()
+                    .filter_map(|row| row.find(['#', 'o']))
+                    .min()
+                    .unwrap() as u32;
+                assert!(
+                    begins * 1024 >= (456 + 112 * 3 / 4) * size,
+                    "size {size}, {waiting} waiting: the sign begins at {begins}"
+                );
+            }
+        }
+
         // A sign is drawn within the icon whatever is asked: a number
         // too long for its size, one that is none, and no pixels at all.
         for (sign, size) in [
             (Sign::Number("123456".to_string()), 16),
             (Sign::Number("1x".to_string()), 22),
+            (Sign::Many, 16),
             (Sign::Dot, 1),
         ] {
             assert_eq!(drawn(&sign, size).len(), size as usize);
         }
         draw(&Sign::Dot, 22, &mut []);
         draw(&Sign::Number("7".to_string()), 22, &mut [0; 8]);
+        draw(&Sign::Many, 22, &mut [0; 8]);
     }
 
     #[test]
@@ -1044,7 +1125,7 @@ mod tests {
         // they stand: where either mark is painted over, both show the
         // sign's own pixels, and where neither is, each shows its own.
         for size in [16, 22, 24, 32, 48, 64] {
-            for waiting in [0, 1, 7, 42, 128, 1000] {
+            for waiting in [0, 1, 7, 9, 10, 1000] {
                 let sign = sign(waiting, size);
                 let black = painted(&sign, size, [0, 0, 0, 255]);
                 let white = painted(&sign, size, [255, 255, 255, 255]);

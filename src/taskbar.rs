@@ -20,6 +20,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use image::imageops::{self, FilterType};
+
 /// The icon as a file is this size: assets/icon-512.png.
 const ICON_SIZE: u32 = 512;
 
@@ -27,6 +29,14 @@ const ICON_SIZE: u32 = 512;
 /// 512px hicolor directory: the full tile (assets/footplate.svg), rendered
 /// at that size.
 pub const ICON: &[u8] = include_bytes!("../assets/icon-512.png");
+
+/// The small tile (assets/footplate-small.svg) rendered at 16 and at 32
+/// pixels: the line 112 thick where the full tile's is 80, so that it does
+/// not go faint. The style guide draws those two sizes from it and every
+/// size above from the full tile, so the 16 and 32 pixel hicolor directories
+/// hold these, and so does the window's 32 pixel icon under X11.
+const ICON_SMALL_16: &[u8] = include_bytes!("../assets/icon-small-16.png");
+const ICON_SMALL_32: &[u8] = include_bytes!("../assets/icon-small-32.png");
 
 /// Where a person's own desktop entries and icons are: `$XDG_DATA_HOME`
 /// when it is an absolute path, `~/.local/share` otherwise (the XDG base
@@ -110,10 +120,13 @@ fn shown(text: &str) -> bool {
 
 /// Puts the desktop entry and its icon under `data_home`, and says whether
 /// anything was written: a file that is there as it should be is left
-/// alone, so a start changes nothing after the first. The entry names the
-/// binary that ran last, unless the entry there shows in the menu. That one
-/// is the person's, and writing the program's own over it would take it out of
-/// the menu at the first start.
+/// alone, so a start changes nothing after the first. The icon goes in three
+/// hicolor directories, `icon` (the full tile) at 512 and the small tile at
+/// 16 and 32, so that a desktop drawing it that small does not scale the
+/// full tile down. The entry names the binary that ran last, unless
+/// the entry there shows in the menu. That one is the person's, and writing
+/// the program's own over it would take it out of the menu at the first
+/// start.
 pub fn install(data_home: &Path, name: &str, exe: &Path, icon: &[u8]) -> io::Result<bool> {
     let entry = entry(name, exe).ok_or_else(|| {
         io::Error::new(
@@ -121,14 +134,19 @@ pub fn install(data_home: &Path, name: &str, exe: &Path, icon: &[u8]) -> io::Res
             format!("no desktop entry can name {}", exe.display()),
         )
     })?;
-    let icon_file = data_home
-        .join(format!("icons/hicolor/{ICON_SIZE}x{ICON_SIZE}/apps"))
-        .join(format!("{name}.png"));
     let entry_file = data_home
         .join("applications")
         .join(format!("{name}.desktop"));
-    // The icon first: a desktop that reads the entry finds what it names.
-    let icon_written = put(&icon_file, icon)?;
+    // The icons first: a desktop that reads the entry finds what it names.
+    // Each is put on its own: a footplate that wrote the 512 alone left the
+    // small two to this one.
+    let mut icon_written = false;
+    for (size, png) in [(16, ICON_SMALL_16), (32, ICON_SMALL_32), (ICON_SIZE, icon)] {
+        let icon_file = data_home
+            .join(format!("icons/hicolor/{size}x{size}/apps"))
+            .join(format!("{name}.png"));
+        icon_written |= put(&icon_file, png)?;
+    }
     let kept = fs::read_to_string(&entry_file).is_ok_and(|there| shown(&there));
     let entry_written = !kept && put(&entry_file, entry.as_bytes())?;
     Ok(icon_written || entry_written)
@@ -153,6 +171,30 @@ pub fn net_wm_icon(width: u32, height: u32, rgba: &[u8]) -> Vec<u32> {
         alpha << 24 | red << 16 | green << 8 | blue
     });
     [width, height].into_iter().chain(pixels).collect()
+}
+
+/// The window's `_NET_WM_ICON`: each of `sizes` as `net_wm_icon` has it, one
+/// after the other. Every size is `icon` (the full tile, a PNG) scaled to it,
+/// except 32, which is the small tile's own render, since the full tile
+/// scaled down that far goes faint.
+pub fn net_wm_icons(icon: &[u8], sizes: &[u32]) -> Result<Vec<u32>, image::ImageError> {
+    let decode = |png: &[u8]| {
+        image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .map(|image| image.to_rgba8())
+    };
+    let full = decode(icon)?;
+    let small = decode(ICON_SMALL_32)?;
+    Ok(sizes
+        .iter()
+        .flat_map(|&size| {
+            let scaled = if size == small.width() {
+                small.clone()
+            } else {
+                imageops::resize(&full, size, size, FilterType::Lanczos3)
+            };
+            net_wm_icon(size, size, scaled.as_raw())
+        })
+        .collect())
 }
 
 /// Shows `icon` (a PNG) for the window of the application `name`. Nothing
@@ -185,7 +227,6 @@ pub(crate) mod x11 {
     use std::thread;
     use std::time::Duration;
 
-    use image::imageops::{self, FilterType};
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt, PropMode, Window};
     use x11rb::wrapper::ConnectionExt as _;
@@ -204,14 +245,7 @@ pub(crate) mod x11 {
     /// window is found on a connection of our own, by the class gpui sets
     /// from the app id and by the process id.
     pub fn show(name: &str, icon: &[u8]) -> Result<(), Box<dyn Error>> {
-        let image = image::load_from_memory_with_format(icon, image::ImageFormat::Png)?.to_rgba8();
-        let data: Vec<u32> = SIZES
-            .into_iter()
-            .flat_map(|size| {
-                let scaled = imageops::resize(&image, size, size, FilterType::Lanczos3);
-                super::net_wm_icon(size, size, scaled.as_raw())
-            })
-            .collect();
+        let data = super::net_wm_icons(icon, &SIZES)?;
 
         let (connection, screen) = x11rb::connect(None)?;
         let root = connection.setup().roots[screen].root;
@@ -371,20 +405,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let exe = Path::new("/opt/yard/footplate");
         let entry_file = dir.path().join("applications/footplate.desktop");
-        let icon_file = dir.path().join("icons/hicolor/512x512/apps/footplate.png");
+        let icon_file = |size: u32| {
+            dir.path()
+                .join(format!("icons/hicolor/{size}x{size}/apps/footplate.png"))
+        };
+        // The small tile's own renders at 16 and 32, the full tile at 512.
+        let masters: [(u32, &[u8]); 3] = [
+            (16, include_bytes!("../assets/icon-small-16.png")),
+            (32, include_bytes!("../assets/icon-small-32.png")),
+            (512, include_bytes!("../assets/icon-512.png")),
+        ];
+        let icons_are_the_masters = || {
+            for (size, master) in masters {
+                assert_eq!(fs::read(icon_file(size)).unwrap(), master, "{size}");
+            }
+        };
 
-        assert!(install(dir.path(), "footplate", exe, b"png").unwrap());
+        assert!(install(dir.path(), "footplate", exe, ICON).unwrap());
         assert_eq!(
             fs::read_to_string(&entry_file).unwrap(),
             entry("footplate", exe).unwrap()
         );
-        assert_eq!(fs::read(&icon_file).unwrap(), b"png");
+        icons_are_the_masters();
 
-        assert!(!install(dir.path(), "footplate", exe, b"png").unwrap());
+        assert!(!install(dir.path(), "footplate", exe, ICON).unwrap());
+
+        // A footplate that wrote the 512 alone is brought the small two at its
+        // next start, and a small one that is not the small tile is put right.
+        fs::remove_file(icon_file(16)).unwrap();
+        fs::write(icon_file(32), b"png").unwrap();
+        assert!(install(dir.path(), "footplate", exe, ICON).unwrap());
+        icons_are_the_masters();
+        assert!(!install(dir.path(), "footplate", exe, ICON).unwrap());
 
         // Run from elsewhere, the entry names the binary that ran last.
         let moved = Path::new("/usr/local/bin/footplate");
-        assert!(install(dir.path(), "footplate", moved, b"png").unwrap());
+        assert!(install(dir.path(), "footplate", moved, ICON).unwrap());
         assert!(
             fs::read_to_string(&entry_file)
                 .unwrap()
@@ -404,12 +460,12 @@ mod tests {
         assert!(launcher.contains("\nName=yardr footplate\n"));
         assert!(launcher.contains("\nKeywords=footplate;yardr;yard;chat;\n"));
         fs::write(&entry_file, launcher).unwrap();
-        assert!(!install(dir.path(), "footplate", exe, b"png").unwrap());
+        assert!(!install(dir.path(), "footplate", exe, ICON).unwrap());
         assert_eq!(fs::read_to_string(&entry_file).unwrap(), launcher);
 
         // A copy that did not finish is no entry: the program's own comes.
         fs::write(&entry_file, "").unwrap();
-        assert!(install(dir.path(), "footplate", exe, b"png").unwrap());
+        assert!(install(dir.path(), "footplate", exe, ICON).unwrap());
         assert_eq!(
             fs::read_to_string(&entry_file).unwrap(),
             entry("footplate", exe).unwrap()
@@ -432,11 +488,33 @@ mod tests {
     }
 
     #[test]
+    fn the_window_s_icon_is_the_small_tile_at_32_and_the_full_tile_scaled_above_it() {
+        let decode = |png: &[u8]| {
+            image::load_from_memory_with_format(png, image::ImageFormat::Png)
+                .unwrap()
+                .to_rgba8()
+        };
+        let full = decode(ICON);
+        let small = decode(include_bytes!("../assets/icon-small-32.png"));
+        let scaled = |size| imageops::resize(&full, size, size, FilterType::Lanczos3);
+
+        // Each size as the property holds it: its two numbers, then its pixels.
+        let data = net_wm_icons(ICON, &[32, 48]).unwrap();
+        let (at_32, at_48) = data.split_at(2 + 32 * 32);
+        assert_eq!(at_32, net_wm_icon(32, 32, small.as_raw()));
+        assert_eq!(at_48, net_wm_icon(48, 48, scaled(48).as_raw()));
+        // The full tile scaled to 32 is another picture: what the small tile
+        // is there to replace.
+        assert_ne!(at_32, net_wm_icon(32, 32, scaled(32).as_raw()));
+    }
+
+    #[test]
     fn the_linux_icon_is_the_size_it_is_installed_as() {
         // The PNG's header: its width and height after the IHDR chunk's name.
-        let icon = ICON;
-        let number = |at: usize| u32::from_be_bytes(icon[at..at + 4].try_into().unwrap());
-        assert_eq!(&icon[12..16], b"IHDR");
-        assert_eq!((number(16), number(20)), (ICON_SIZE, ICON_SIZE));
+        for (icon, size) in [(ICON, ICON_SIZE), (ICON_SMALL_16, 16), (ICON_SMALL_32, 32)] {
+            let number = |at: usize| u32::from_be_bytes(icon[at..at + 4].try_into().unwrap());
+            assert_eq!(&icon[12..16], b"IHDR");
+            assert_eq!((number(16), number(20)), (size, size));
+        }
     }
 }

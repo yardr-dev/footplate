@@ -20,9 +20,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use base64::Engine as _;
 use serde_json::Value;
 
 use crate::api::{Address, Client};
+use crate::e2e;
 
 /// The token of the device a yard at an address starts with, and who
 /// `/user/me` says it is.
@@ -188,6 +190,16 @@ struct State {
     opened: u32,
     /// How many devices were paired: each has a token of its own.
     paired: u32,
+    /// The yard's channel key pair, once a test has asked for it: the
+    /// key a pairing QR's fourth field prints and a sealed pairing
+    /// opens to.
+    channel: Option<e2e::ChannelKey>,
+    /// The device channel key each token proved at its sealed
+    /// pairing, by token: what a handshake is let in by.
+    pinned: HashMap<String, String>,
+    /// The live channel sessions, by their tag: the session and the
+    /// token of the device whose handshake founded it.
+    sessions: HashMap<Vec<u8>, (Arc<e2e::Session>, String)>,
     stopped: bool,
 }
 
@@ -330,15 +342,16 @@ impl Yard {
         state.pairing_for = None;
     }
 
-    pub fn pairing_open(&self) -> bool {
-        self.shared.state.lock().unwrap().pairing.is_some()
+    /// The operator opens a pairing for this yard user and device, with
+    /// the QR's code supplied by the test.
+    pub fn pair_for(&self, user: &str, device: &str, code: &str) {
+        let mut state = self.shared.state.lock().unwrap();
+        state.pairing = Some((code.to_string(), 0));
+        state.pairing_for = Some((user.to_string(), device.to_string()));
     }
 
-    /// The operator ends the pairing that is open, whoever opened it.
-    pub fn end_pairing(&self) {
-        let mut state = self.shared.state.lock().unwrap();
-        state.pairing = None;
-        state.pairing_for = None;
+    pub fn pairing_open(&self) -> bool {
+        self.shared.state.lock().unwrap().pairing.is_some()
     }
 
     /// The tokens the yard lets in.
@@ -359,13 +372,30 @@ impl Yard {
     /// The operator removes a device: its token is refused from now on,
     /// and the streams it holds are closed.
     pub fn remove_device(&self, token: &str) {
-        self.shared
-            .state
-            .lock()
-            .unwrap()
-            .devices
-            .retain(|device| device != token);
+        let mut state = self.shared.state.lock().unwrap();
+        state.devices.retain(|device| device != token);
+        // Its channel goes with it: the pinned key and every session
+        // it founded, as the yard drops them.
+        state.pinned.remove(token);
+        state.sessions.retain(|_, (_, of)| of != token);
+        drop(state);
         self.shared.changed.notify_all();
+    }
+
+    /// The yard's channel public key, as a pairing QR's fourth field
+    /// prints it: the yard's pair is made where it has none.
+    pub fn channel_public(&self) -> String {
+        let mut state = self.shared.state.lock().unwrap();
+        let key = state
+            .channel
+            .get_or_insert_with(|| e2e::ChannelKey::generate().unwrap());
+        e2e::channel_public(&key.public)
+    }
+
+    /// The device channel key a token proved at its sealed pairing,
+    /// as it is printed: none for a device paired plainly.
+    pub fn pinned_key(&self, token: &str) -> Option<String> {
+        self.shared.state.lock().unwrap().pinned.get(token).cloned()
     }
 
     /// What the yard answers to a call of the method from now on.
@@ -649,13 +679,42 @@ fn code_of(typed: &str) -> String {
 }
 
 /// `POST /user/pair`: a token for the right code, once. A wrong code is
-/// counted, and the fifth ends the pairing.
+/// counted, and the fifth ends the pairing. A sealed code is redeemed
+/// inside its handshake, and its answer sealed back: the pairing's
+/// first message is opened before any code is read, so one that does
+/// not open is no try against the pairing.
 fn pair(conn: &mut Wire, shared: &Shared, body: &[u8]) -> io::Result<()> {
     const JSON: &str = "application/json";
-    let typed = serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|body| body["code"].as_str().map(code_of))
-        .unwrap_or_default();
+    let asked: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    // The yard's channel half of a sealed redemption, opened first.
+    let mut opening: Option<(e2e::PairingHandshake, String)> = None;
+    let typed = match asked["sealed"].as_str() {
+        Some(sealed) => {
+            let first = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(sealed)
+                .unwrap_or_default();
+            let private = shared
+                .state
+                .lock()
+                .unwrap()
+                .channel
+                .as_ref()
+                .map(|key| key.private);
+            let Some(private) = private else {
+                return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n");
+            };
+            match e2e::open_pairing(&private, &first) {
+                Ok(opened) => {
+                    let code = code_of(&opened.code);
+                    let device = opened.device_key.clone();
+                    opening = Some((opened, device));
+                    code
+                }
+                Err(_) => return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n"),
+            }
+        }
+        None => asked["code"].as_str().map(code_of).unwrap_or_default(),
+    };
     if typed.len() != 8 {
         return plain(conn, "400 Bad Request", "text/plain", "no code\n");
     }
@@ -682,11 +741,337 @@ fn pair(conn: &mut Wire, shared: &Shared, body: &[u8]) -> io::Result<()> {
     state
         .who
         .insert(token.clone(), (user.clone(), device.clone()));
+    // A sealed pairing pins the device key its handshake proved,
+    // under the token it bought.
+    if let Some((_, device)) = &opening {
+        state.pinned.insert(token.clone(), device.clone());
+    }
     drop(state);
     let answer = format!(
         r#"{{"token": "{token}", "user": "{user}", "device": "{device}", "yard": "south"}}"#
     );
-    plain(conn, "200 OK", JSON, &answer)
+    match opening {
+        Some((opened, _)) => {
+            let sealed = opened.seal_answer(answer.as_bytes()).unwrap_or_default();
+            let body = format!(
+                r#"{{"sealed": "{}"}}"#,
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sealed)
+            );
+            plain(conn, "200 OK", JSON, &body)
+        }
+        None => plain(conn, "200 OK", JSON, &answer),
+    }
+}
+
+/// A sealed plaintext joined: its head length-prefixed, then its
+/// body, as the client joins and splits it.
+fn join_head(head: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut plain = Vec::with_capacity(4 + head.len() + body.len());
+    plain.extend_from_slice(&(head.len() as u32).to_be_bytes());
+    plain.extend_from_slice(head);
+    plain.extend_from_slice(body);
+    plain
+}
+
+/// [`join_head`] read back, none for a plaintext with no whole head.
+fn split_head(plain: &[u8]) -> Option<(&[u8], &[u8])> {
+    if plain.len() < 4 {
+        return None;
+    }
+    let n = u32::from_be_bytes(plain[..4].try_into().ok()?) as usize;
+    if n > plain.len() - 4 {
+        return None;
+    }
+    Some((&plain[4..4 + n], &plain[4 + n..]))
+}
+
+/// One whole sealed answer: its head and body sealed under its call,
+/// and the outer answer that carries it.
+fn sealed_answer(
+    conn: &mut Wire,
+    session: &Arc<e2e::Session>,
+    call: &[u8; e2e::CALL_SIZE],
+    binding: &e2e::FirstBinding,
+    status: u16,
+    kind: &str,
+    body: &[u8],
+) -> io::Result<()> {
+    let head = serde_json::json!({
+        "status": status,
+        "header": { "Content-Type": [kind] },
+    })
+    .to_string();
+    let run = session
+        .seal_whole(call, binding, &join_head(head.as_bytes(), body))
+        .unwrap_or_default();
+    write!(
+        conn,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nX-Edge-E2E: sealed\r\nX-Edge-E2E-Call: {}\r\nContent-Length: {}\r\n\r\n",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(call),
+        run.len()
+    )?;
+    conn.write_all(&run)?;
+    conn.flush()
+}
+
+/// `POST /user/e2e` at the yard: with no call named, a handshake,
+/// whose answer is the tag of the session it founds; with one, the
+/// enveloped call it names, opened whole and served as the plain
+/// call it is. A session the yard does not know, and a device no
+/// record pins, are refused bare, with no token's challenge: down a
+/// link there is no token to challenge.
+fn e2e_call(
+    conn: &mut Wire,
+    shared: &Shared,
+    body: &[u8],
+    call_header: Option<&str>,
+    stream_header: Option<&str>,
+) -> io::Result<()> {
+    let private = shared
+        .state
+        .lock()
+        .unwrap()
+        .channel
+        .as_ref()
+        .map(|key| key.private);
+    let Some(private) = private else {
+        return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n");
+    };
+    let Some(call_text) = call_header else {
+        // The handshake: opened to the yard's channel key, for a
+        // device whose key a sealed pairing pinned, still let in.
+        let opened = match e2e::open_channel(&private, body) {
+            Ok(opened) => opened,
+            Err(_) => return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n"),
+        };
+        let token = {
+            let state = shared.state.lock().unwrap();
+            state
+                .pinned
+                .iter()
+                .find(|(_, key)| **key == opened.device_key)
+                .map(|(token, _)| token.clone())
+                .filter(|token| state.devices.contains(token))
+        };
+        let Some(token) = token else {
+            return plain(conn, "401 Unauthorized", "text/plain", "Unauthorized\n");
+        };
+        let tag = e2e::random16().unwrap_or([0u8; e2e::TAG_SIZE]);
+        let (reply, session) = match opened.seal_answer(&tag) {
+            Ok(answer) => answer,
+            Err(_) => return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n"),
+        };
+        shared
+            .state
+            .lock()
+            .unwrap()
+            .sessions
+            .insert(tag.to_vec(), (session, token));
+        write!(
+            conn,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+            reply.len()
+        )?;
+        conn.write_all(&reply)?;
+        return conn.flush();
+    };
+    let call: [u8; e2e::CALL_SIZE] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(call_text)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .unwrap_or([0u8; e2e::CALL_SIZE]);
+    if call == [0u8; e2e::CALL_SIZE] {
+        return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n");
+    }
+    let tag = e2e::split_records(body)
+        .ok()
+        .and_then(|msgs| msgs.into_iter().next())
+        .filter(|msg| msg.len() >= e2e::TAG_SIZE)
+        .map(|msg| msg[..e2e::TAG_SIZE].to_vec());
+    let found = tag.and_then(|tag| {
+        let state = shared.state.lock().unwrap();
+        state
+            .sessions
+            .get(&tag)
+            .map(|(session, token)| (tag.clone(), session.clone(), token.clone()))
+    });
+    let Some((tag, session, token)) = found else {
+        return plain(conn, "401 Unauthorized", "text/plain", "Unauthorized\n");
+    };
+    if !shared.state.lock().unwrap().devices.contains(&token) {
+        shared.state.lock().unwrap().sessions.remove(&tag);
+        return plain(conn, "401 Unauthorized", "text/plain", "Unauthorized\n");
+    }
+    let binding = e2e::FirstBinding {
+        path: e2e::OUTER_PATH.to_string(),
+        marker: stream_header.unwrap_or_default().to_string(),
+        present: stream_header.is_some(),
+    };
+    plain_e2e(conn, shared, &session, &call, &binding, body, &token)
+}
+
+/// An enveloped call opened and served, under the session it rode.
+fn plain_e2e(
+    conn: &mut Wire,
+    shared: &Shared,
+    session: &Arc<e2e::Session>,
+    call: &[u8; e2e::CALL_SIZE],
+    binding: &e2e::FirstBinding,
+    body: &[u8],
+    token: &str,
+) -> io::Result<()> {
+    let opened = match session.open_whole(body, call, binding) {
+        Ok(opened) => opened,
+        Err(_) => return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n"),
+    };
+    let Some((head, inner)) = split_head(&opened) else {
+        return plain(conn, "400 Bad Request", "text/plain", "Bad Request\n");
+    };
+    let asked: Value = serde_json::from_slice(head).unwrap_or(Value::Null);
+    let method = asked["method"].as_str().unwrap_or_default();
+    let path = asked["path"].as_str().unwrap_or_default().to_string();
+    let is_events = path == "/user/events" || path.starts_with("/user/events?");
+    if binding.present && !is_events {
+        return sealed_answer(
+            conn,
+            session,
+            call,
+            binding,
+            403,
+            "text/plain",
+            b"a call marked long-lived is no events stream\n",
+        );
+    }
+    if is_events {
+        let after: u64 = path
+            .split("after=")
+            .nth(1)
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+        return sealed_stream(conn, shared, session, call, binding, after, token);
+    }
+    if method == "GET" && path == "/user/me" {
+        let me = shared.state.lock().unwrap().who.get(token).cloned().map_or(
+            ME.to_string(),
+            |(user, device)| {
+                format!(r#"{{"user": "{user}", "said_by": "{device}", "yard": "south"}}"#)
+            },
+        );
+        return sealed_answer(
+            conn,
+            session,
+            call,
+            binding,
+            200,
+            "application/json",
+            me.as_bytes(),
+        );
+    }
+    if let Some(hash) = path.strip_prefix("/user/blobs/") {
+        let blob = shared.state.lock().unwrap().blobs.get(hash).cloned();
+        return match blob {
+            Some(bytes) => sealed_answer(conn, session, call, binding, 200, "image/png", &bytes),
+            None => sealed_answer(
+                conn,
+                session,
+                call,
+                binding,
+                404,
+                "text/plain",
+                b"no such image\n",
+            ),
+        };
+    }
+    if method == "POST"
+        && let Some(name) = path.strip_prefix("/user/call/")
+    {
+        return match call_reply(shared, name, inner, true) {
+            Some(reply) => sealed_answer(
+                conn,
+                session,
+                call,
+                binding,
+                reply.status,
+                "application/json",
+                reply.body.as_bytes(),
+            ),
+            None => Ok(()),
+        };
+    }
+    sealed_answer(
+        conn,
+        session,
+        call,
+        binding,
+        404,
+        "text/plain",
+        b"not found\n",
+    )
+}
+
+/// The sealed events stream: the answer's records as events cross,
+/// each event a line of the joined plaintext, the first record
+/// holding the sealed head. It ends as the plain stream ends: cut on
+/// the yard's stop or its device's removal, with no final record.
+fn sealed_stream(
+    conn: &mut Wire,
+    shared: &Shared,
+    session: &Arc<e2e::Session>,
+    call: &[u8; e2e::CALL_SIZE],
+    binding: &e2e::FirstBinding,
+    after: u64,
+    token: &str,
+) -> io::Result<()> {
+    write!(
+        conn,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nX-Edge-E2E: sealed\r\nX-Edge-E2E-Call: {}\r\n\r\n",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(call)
+    )?;
+    conn.flush()?;
+    let mut sealer = e2e::CallSealer::new(session.clone(), call, binding);
+    let head = serde_json::json!({
+        "status": 200,
+        "header": { "Content-Type": ["application/x-ndjson"] },
+    })
+    .to_string();
+    let first = sealer
+        .seal(&join_head(head.as_bytes(), &[]))
+        .unwrap_or_default();
+    conn.write_all(&first)?;
+    conn.flush()?;
+    let mut reader = conn.try_clone()?;
+    let mut state = shared.state.lock().unwrap();
+    state.streams.push(after);
+    let opened = state.streams.len() - 1;
+    let mut sent = 0;
+    loop {
+        while sent < state.events.len() {
+            let event = state.events[sent].clone();
+            sent += 1;
+            let seq = serde_json::from_str::<Value>(&event)
+                .ok()
+                .and_then(|e| e["seq"].as_u64())
+                .unwrap_or(0);
+            if seq > after && opened >= state.muted {
+                let run = sealer
+                    .seal(format!("{event}\n").as_bytes())
+                    .unwrap_or_default();
+                drop(state);
+                conn.write_all(&run)?;
+                conn.flush()?;
+                state = shared.state.lock().unwrap();
+                state.events_sent += 1;
+            }
+        }
+        let removed = !state.devices.contains(&token.to_string());
+        if state.stopped || removed || opened < state.ended {
+            return Ok(());
+        }
+        state = shared.changed.wait_timeout(state, LOOK).unwrap().0;
+        if !state.held && reader.hung_up() {
+            return Ok(());
+        }
+    }
 }
 
 /// A user of the yard opens a pairing for a device of their own, as the
@@ -742,6 +1127,8 @@ fn serve_one(conn: Wire, shared: &Shared, listener: bool) -> io::Result<()> {
     let mut head = String::new();
     let mut length = 0usize;
     let mut token = None;
+    let mut e2e_call_header: Option<String> = None;
+    let mut e2e_stream_header: Option<String> = None;
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
@@ -756,6 +1143,10 @@ fn serve_one(conn: Wire, shared: &Shared, listener: bool) -> io::Result<()> {
                 length = value.trim().parse().unwrap_or(0);
             } else if name.eq_ignore_ascii_case("authorization") {
                 token = value.trim().strip_prefix("Bearer ").map(str::to_string);
+            } else if name.eq_ignore_ascii_case("x-edge-e2e-call") {
+                e2e_call_header = Some(value.trim().to_string());
+            } else if name.eq_ignore_ascii_case("x-edge-e2e-stream") {
+                e2e_stream_header = Some(value.trim().to_string());
             }
         }
     }
@@ -791,6 +1182,18 @@ fn serve_one(conn: Wire, shared: &Shared, listener: bool) -> io::Result<()> {
                 return Ok(());
             }
             return pair(&mut conn, shared, &body);
+        }
+        // The channel's path takes no token: the handshake in it is
+        // the credential. It is the yard's alone whatever state the
+        // devices stand in.
+        if target == "/user/e2e" {
+            return e2e_call(
+                &mut conn,
+                shared,
+                &body,
+                e2e_call_header.as_deref(),
+                e2e_stream_header.as_deref(),
+            );
         }
         if devices == 0 {
             return plain(
@@ -876,64 +1279,8 @@ fn serve_one(conn: Wire, shared: &Shared, listener: bool) -> io::Result<()> {
     }
 
     let method = target.strip_prefix("/call/").unwrap_or("").to_string();
-    let reply = {
-        let mut state = shared.state.lock().unwrap();
-        let args: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        state.asked.push((method.clone(), args.clone()));
-        // A held call is asked and not answered yet: it waits here, with the
-        // lock let go, for the test to let it through.
-        if state.hold_calls.contains(&method) {
-            state.calls_held.push(method.clone());
-            while !state.stopped && state.hold_calls.contains(&method) {
-                state = shared.changed.wait_timeout(state, LOOK).unwrap().0;
-            }
-            if let Some(at) = state.calls_held.iter().position(|m| *m == method) {
-                state.calls_held.remove(at);
-            }
-        }
-        let by_arg = state
-            .answers_for
-            .iter()
-            .find(|((m, arg, is), _)| *m == method && args[arg.as_str()] == is.as_str())
-            .map(|(_, reply)| reply.clone());
-        if state.silent.contains(&method) {
-            return Ok(());
-        }
-        // As the yard takes the arguments of `ApproveAsk`, where it has the
-        // call: at its listener by name, as every call's there, and on its
-        // socket in their order, since by name the socket takes only the
-        // calls its API page names.
-        let misshapen = method == "ApproveAsk"
-            && state.answers.contains_key(&method)
-            && args.is_object() != listener;
-        let refused = misshapen.then(|| {
-            let why = if listener {
-                "arguments: over the network ApproveAsk takes them as a JSON object, by name"
-            } else {
-                "arguments: ApproveAsk takes them as a JSON array: only the calls docs/api.md names take them by name"
-            };
-            Reply {
-                status: 200,
-                body: serde_json::json!({"error": {"code": "error", "message": why}}).to_string(),
-                chunk: None,
-            }
-        });
-        let once = state.once.get_mut(&method).and_then(VecDeque::pop_front);
-        let held = (method == "Conversation")
-            .then(|| conversation(&state, &args))
-            .flatten();
-        refused
-            .or(once)
-            .or(by_arg)
-            .or(held)
-            .or_else(|| state.answers.get(&method).cloned())
-            .unwrap_or_else(|| Reply {
-                status: 200,
-                body: format!(
-                    r#"{{"error":{{"code":"error","message":"no such method {method}"}}}}"#
-                ),
-                chunk: None,
-            })
+    let Some(reply) = call_reply(shared, &method, &body, listener) else {
+        return Ok(());
     };
     let head = format!(
         "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nX-Yardr-Revision: fake\r\nX-Yardr-Pid: 1\r\n",
@@ -957,6 +1304,72 @@ fn serve_one(conn: Wire, shared: &Shared, listener: bool) -> io::Result<()> {
         }
     }
     conn.flush()
+}
+
+/// The yard's answer to one call, plain or sealed: the call recorded
+/// as asked, held where the test holds it, and answered from what the
+/// test stands the yard answering. None where the method is silent:
+/// the call is taken and never answered.
+fn call_reply(shared: &Shared, method: &str, body: &[u8], listener: bool) -> Option<Reply> {
+    let mut state = shared.state.lock().unwrap();
+    let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    state.asked.push((method.to_string(), args.clone()));
+    // A held call is asked and not answered yet: it waits here, with the
+    // lock let go, for the test to let it through.
+    if state.hold_calls.contains(&method.to_string()) {
+        state.calls_held.push(method.to_string());
+        while !state.stopped && state.hold_calls.contains(&method.to_string()) {
+            state = shared.changed.wait_timeout(state, LOOK).unwrap().0;
+        }
+        if let Some(at) = state.calls_held.iter().position(|m| m == method) {
+            state.calls_held.remove(at);
+        }
+    }
+    let by_arg = state
+        .answers_for
+        .iter()
+        .find(|((m, arg, is), _)| m == method && args[arg.as_str()] == is.as_str())
+        .map(|(_, reply)| reply.clone());
+    if state.silent.contains(&method.to_string()) {
+        return None;
+    }
+    // As the yard takes the arguments of `ApproveAsk`, where it has the
+    // call: at its listener by name, as every call's there, and on its
+    // socket in their order, since by name the socket takes only the
+    // calls its API page names.
+    let misshapen = method == "ApproveAsk"
+        && state.answers.contains_key(method)
+        && args.is_object() != listener;
+    let refused = misshapen.then(|| {
+        let why = if listener {
+            "arguments: over the network ApproveAsk takes them as a JSON object, by name"
+        } else {
+            "arguments: ApproveAsk takes them as a JSON array: only the calls docs/api.md names take them by name"
+        };
+        Reply {
+            status: 200,
+            body: serde_json::json!({"error": {"code": "error", "message": why}}).to_string(),
+            chunk: None,
+        }
+    });
+    let once = state.once.get_mut(method).and_then(VecDeque::pop_front);
+    let held = (method == "Conversation")
+        .then(|| conversation(&state, &args))
+        .flatten();
+    Some(
+        refused
+            .or(once)
+            .or(by_arg)
+            .or(held)
+            .or_else(|| state.answers.get(method).cloned())
+            .unwrap_or_else(|| Reply {
+                status: 200,
+                body: format!(
+                    r#"{{"error":{{"code":"error","message":"no such method {method}"}}}}"#
+                ),
+                chunk: None,
+            }),
+    )
 }
 
 /// The answer to `Conversation` from a conversation the yard holds, none
@@ -1123,6 +1536,10 @@ struct EdgeShared {
     login_member: Mutex<Option<String>>,
     /// The head of every request that came, in order.
     heads: Mutex<Vec<String>>,
+    /// How many beats the relays have written on marked sealed
+    /// streams: a zero-length record after the answer's head, as the
+    /// link's pacing writes on the device leg.
+    beated: Mutex<usize>,
     /// The pairing the edge opened and the session it opened it for: the
     /// code stands for that session alone.
     opener: Mutex<Option<(String, String)>>,
@@ -1184,6 +1601,7 @@ impl Router {
             members: Mutex::new(HashMap::new()),
             login_member: Mutex::new(None),
             heads: Mutex::new(Vec::new()),
+            beated: Mutex::new(0),
             opener: Mutex::new(None),
             stopped: Mutex::new(false),
         });
@@ -1231,6 +1649,32 @@ impl Router {
             Address::parse(self.address()).unwrap(),
             token,
             session,
+            yard,
+        )
+    }
+
+    /// How many beats the relays have written on marked sealed
+    /// streams: one a stream that stands open.
+    pub fn beated(&self) -> usize {
+        *self.shared.beated.lock().unwrap()
+    }
+
+    /// A sealed client at the edge's address: the device whose token
+    /// and channel key these are, in a session of the account's, for
+    /// the account's own yard.
+    pub fn client_sealed(
+        &self,
+        token: &str,
+        session: &str,
+        device: [u8; 32],
+        yard: [u8; 32],
+    ) -> Client {
+        Client::remote_sealed(
+            Address::parse(self.address()).unwrap(),
+            token,
+            session,
+            "",
+            device,
             yard,
         )
     }
@@ -1734,7 +2178,7 @@ fn relay(
         .lock()
         .unwrap()
         .push((session.to_string(), conn.try_clone()?));
-    let result = relay_inner(&mut conn, head, body, target);
+    let result = relay_inner(&mut conn, head, body, target, shared);
     if let Some(peer) = peer {
         shared
             .relays
@@ -1746,7 +2190,26 @@ fn relay(
 }
 
 #[cfg(any(test, debug_assertions))]
-fn relay_inner(conn: &mut TcpStream, head: &str, body: &[u8], target: &str) -> io::Result<()> {
+fn relay_inner(
+    conn: &mut TcpStream,
+    head: &str,
+    body: &[u8],
+    target: &str,
+    shared: &EdgeShared,
+) -> io::Result<()> {
+    // A marked sealed stream is paced with beats where it stands
+    // idle: one zero-length record stands in for the link's pacing
+    // here, written before the yard's first record crosses.
+    let marked = head
+        .lines()
+        .next()
+        .is_some_and(|line| line.contains("/user/e2e"))
+        && head.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.trim().eq_ignore_ascii_case("x-edge-e2e-stream")
+                    && value.trim() == "long-lived"
+            })
+        });
     let mut yard = at_once(TcpStream::connect(target)?);
     yard.write_all(head.as_bytes())?;
     yard.write_all(body)?;
@@ -1761,6 +2224,10 @@ fn relay_inner(conn: &mut TcpStream, head: &str, body: &[u8], target: &str) -> i
         if line == "\r\n" {
             break;
         }
+    }
+    if marked {
+        conn.write_all(&[0, 0, 0, 0])?;
+        *shared.beated.lock().unwrap() += 1;
     }
     conn.flush()?;
     io::copy(&mut yard, conn)?;

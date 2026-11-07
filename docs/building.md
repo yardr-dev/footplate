@@ -380,9 +380,8 @@ it drew as a click outside it shuts it: the scripts drive no pointer, so
 the state asks the window for what the click asks), `switcher-member`
 (that list over an own and a member hosted yard, the member marked with
 its operator's handle), `member-pair` (the settings' yards, with a member
-yard's pair this device pressed while the operator holds a pairing open:
-the edge names its yard user), `member-paired` (the same with none open:
-the device paired as the member's yard user), `refs` (the conversation with the
+yard's pair this device form open, asking for the operator-opened QR from
+the yard's own screen), `refs` (the conversation with the
 yardmaster, naming an ask and two bead ids: the ask's chip with its
 preview under the mail), `decisions` (the decisions list with one
 open ask and the 156-item history open: day groups and a folded
@@ -510,7 +509,7 @@ options have no icon, so the program sees to it when it starts
 
 | File | Holds |
 |---|---|
-| `src/api.rs` | the client: the calls, the stream, their JSON, by the socket or at an address over TCP and TLS; a pairing code redeemed, a member's pairing opened at a hosted edge, a Kratos account signed in at a hosted edge; a file read from a site, and a JSON post to one, that is no yard |
+| `src/api.rs` | the client: the calls, the stream, their JSON, by the socket or at an address over TCP and TLS; a pairing code redeemed, a Kratos account signed in at a hosted edge, the legacy member-pairing request kept for API tests; a file read from a site, and a JSON post to one, that is no yard |
 | `src/feedback.rs` | what the Feedback form sends, and where: one survey answer to yardr's PostHog (EU), made as plain functions (the payload, a fresh id for each send, the words of a refusal) and sent by `api::post_json`; the write key and the survey's id are two constants, and with either empty there is no project to offer |
 | `src/fetch.rs` | the yardr on this machine, as plain functions over a `Machine`: found in order by whole path, the one an older footplate kept moved, the installer fetched from yardr.dev and run; what `yardr doctor` names for a Mac, fetched and checked by checksum; and the yardr asked its version for the About card |
 | `src/setup.rs` | the first run as yardr's commands, with no window: each run with its arguments and its JSON read, the PATH made from doctor's data, the import's questions answered, a login led by what yardr prints |

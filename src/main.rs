@@ -26,6 +26,7 @@ mod audio;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod dock;
 mod draft;
+mod e2e;
 #[cfg(any(test, debug_assertions))]
 #[cfg_attr(not(test), allow(dead_code))]
 mod fake;

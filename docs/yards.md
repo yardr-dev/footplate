@@ -307,10 +307,19 @@ Type them and press Enter, or "pair". What the pairing's QR code holds,
 `<address>#<code>`, can be pasted into the address as it is; with no name
 the yard is called by its address's host. footplate sends the code once
 (`POST <address>/user/pair`), is answered with the device's token, keeps
-it, and opens that yard. What the yard says of a code is shown under the
-fields: that it is not the code (the yard counts a wrong one, and its fifth
-ends the pairing), that no pairing is open, that the code was used up and
-the device could not be added. Nothing changes then: the window shows the
+it, and opens that yard. A yard that speaks the sealed channel prints a
+fourth field in its QR code, its channel public key (`…#<channel>`):
+with it the code is redeemed sealed, inside a Noise handshake to that
+key under a channel key pair footplate makes for the yard, and neither
+the code nor the token it buys crosses readable (see "Sealed calls").
+A fourth field that is no channel key is refused before anything is
+sent, and the code is still good. For a hosted yard, footplate requires
+that fourth field and refuses before sending a code without it; update
+yardr on the yard and paste the full QR. A direct yard without the field
+keeps its code-only pairing. What the yard says of a code is shown under
+the fields: that it is not the code (the yard counts a wrong one, and its
+fifth ends the pairing), that no pairing is open, that the code was used
+up and the device could not be added. Nothing changes then: the window shows the
 yard it showed. A name another yard has is refused before the code is sent,
 since the yard uses a code up.
 
@@ -357,6 +366,15 @@ file it did not write, a link, and a file you named by a whole path are left
 alone. The device itself stays at the yard until its operator removes it
 (`yardr user device rm <user> <device>`), and the settings say so. It is a
 file on macOS too, not the Keychain.
+
+A sealed pairing keeps a second file beside the token's: the token
+file's name with `.key` after it (`yard-mac.token.key`). It holds this
+device's channel private key for that yard, footplate's marker, the
+yard's channel public key it pinned, and the yard's address, and is
+read under the token file's rules: a regular file, yours alone, of
+the yard it names. It stands and falls with the token file: removing
+the yard deletes it where the token's file is deleted, and a pairing
+again replaces both.
 
 A token is for the yard that gave it. The first time a token file is opened
 for a yard, footplate writes that yard's address under the token, and from
@@ -453,18 +471,22 @@ pasted anywhere. Empty is the account's own yard. Signing in keeps the
 session in a file of the yard's own beside the settings, mode 0600 as the
 device's token is, with the edge's address under it; the settings keep the
 file and the signed-in account, never the session. The road goes on to
-pairing the device with the code from the ready page, and then the yard's
-conversations, with the signed-in account under the yard's name: in the
-head's line, in the whole telling the settings say, and on the yard's row.
+pairing the device from a full QR opened on the yard's own screen, then to
+the yard's conversations, with the signed-in account under the yard's name:
+in the head's line, in the whole telling the settings say, and on the yard's
+row. The edge's pairing page cannot provide a sealed pairing: the edge sees
+the code and could rewrite the QR, so the member asks the operator for the
+QR and pastes its full text into the form.
 
-Every call to a hosted yard carries both: the device token in
-`Authorization: Bearer`, as ever, and the session token in `X-Edge-Token`
-beside it, which the edge checks before the call reaches the yard. Where
-the yard names which of the account's yards, every call names it in
-`X-Edge-Yard` beside them. Pairing sends the session beside the code, and
-the yard where one is named: where the pairing's QR code names one,
-`<address>#<code>#<yard>`, pasting it for the code pairs that yard and
-names it from here on. A refused session and a refused device
+Every sealed call to a hosted yard carries the session token in
+`X-Edge-Token`, which the edge checks before the call reaches the yard,
+and names the account's yard in `X-Edge-Yard` where needed. The device
+token is inside the sealed call and never reaches the edge. The pairing
+code and the token it buys are sealed in the handshake too. A hosted yard
+refuses code-only pairing before it sends anything; the full QR's fourth
+field is required. A QR may also name which of the account's yards it is
+for, as `<address>#<code>#<yard>`; pasting the whole QR pairs that yard and
+names it in `X-Edge-Yard` from then on. A refused session and a refused device
 are told apart on screen, and neither is tried again: the edge refuses a
 session it does not know with 401 carrying `X-Edge-Refusal: session`, and
 the window says to sign in again; the yard refuses a token that is not a
@@ -480,21 +502,17 @@ revoked, and the device stays at the yard until its operator removes it.
 
 A yard of another account's, one the account is a member of, is named in
 the yard field as the edge names it, `owner/yard`, and stands marked
-"member of owner's yard" wherever it is listed. Its operator never holds
-the member's code, so there is no code on a ready page to type: "pair this
-device", beside the yard in the settings and in its code form, asks the
-edge to open a pairing with the member's own session, `POST /user/pairing`
-with `X-Edge-Yard: owner/yard` and a name for this device (this machine's
-name, made to the yard's rule for a device's name). The edge opens it for
-the yard user the yard maps the member to and answers the code. The code
-stands in the code field, and the same session redeems it as a typed code
-is, so that one that was not used up is tried again by pressing pair. The
-device calls as the member's yard user from then on. The edge's refusals
-are shown in its words: a pairing already open at the yard, with its yard
-user where the yard says it, and a code presented in another account's
-session, which is refused and spent. An edge that does not know the call
-answers it with the yard's 401 or a 404, and the window says the edge does
-not open a member's pairing from the app yet.
+"member of owner's yard" wherever it is listed. A member signs in with
+their own session, then pairs this app from a QR the operator opens on the
+yard's own screen. The edge's pairing page cannot establish the sealed
+channel: the edge reads or can rewrite the code and key shown there. The
+member asks the operator for the full QR and pastes it into the form; its
+fourth field pins the yard's channel key, and the code is redeemed inside
+the Noise handshake. Without the fourth field, footplate refuses before
+sending the code. The session and `X-Edge-Yard: owner/yard` still name
+which hosted yard to reach, but the edge never receives the device token
+or the pairing code as readable data. The device calls as the yard user
+the QR pairing names from then on.
 
 A request that fails, at a hosted yard or any other, leaves one line on
 stderr and in footplate's own log (below), so that it can be found in the log
@@ -546,6 +564,32 @@ machine. A flow the edge forgot meanwhile is opened once more; one that is
 forgotten twice is said. The password is in the request's body and in
 nothing else of footplate: no field once it is sent, no file, no setting,
 no error and no log.
+
+**Sealed calls.** A hosted yard this device paired with sealed —
+its pairing's words held the yard's channel key, and the key file
+beside its token reads for it — is never called in the clear. At the
+yard's opening footplate runs a Noise handshake to the pinned key
+(`POST <origin>/user/e2e`, naming no call); every call from then on
+is sealed whole — method, path, headers and body as one inner call —
+under a call id minted for it, and its answer is opened against that
+call alone: an answer of another call, a gap, a replay and a
+truncation are each refused. The stream is one long-lived sealed
+call, opened record by record as its events cross, past the empty
+beats the edge writes on it. The device's token never crosses on a
+sealed call: the handshake, and what it pins, is the credential.
+The switcher's and the settings' yards say a yard so held is
+"sealed to this yard".
+
+Two ends are said in words, and neither retries in the clear. A
+handshake that does not open — the key pinned is not the yard's, or
+the yard does not speak the channel yet — says "The yard could not
+be reached sealed; update or pair again.", and no plain call is sent
+after it. A yard that no longer pins this device's key, or has
+dropped its session, refuses bare: the session is discarded and the
+device reads as no longer let in, as a removed plain device does,
+and pairing again is the way back. A yard paired plainly, and every
+yard reached direct or by its socket, is called as before: the yard
+takes sealed calls down its link alone.
 
 ## yardr, a dependency
 

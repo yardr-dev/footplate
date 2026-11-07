@@ -1831,7 +1831,7 @@ impl Footplate {
             true => "signing in…",
             false => "sign in (enter)",
         };
-        const OPERATOR: &str = "The yard's operator opens a pairing for this device and gives you the address and the code: yardr user device pair <user> <device>. A code is for one yard, and is used up there.";
+        const OPERATOR: &str = "The yard's operator opens a pairing on the yard's own screen. Paste the full QR, including its fourth field, to seal this device; a code alone is not enough for a hosted yard.";
         // What came of the last change stands directly under the button,
         // where a person looks the moment it is pressed: the help stands
         // under that. Below the help, a refusal falls off a short window
@@ -1887,30 +1887,23 @@ impl Footplate {
                     ),
                     Err(why) => why,
                 };
-                // A yard of another account's is paired by its member
-                // alone: the edge opens the pairing for them, so no
-                // operator gives them a code, and with none typed the
-                // button asks for one.
+                // A member pairs from the operator-opened QR on the yard's
+                // own screen. The edge's own pairing page can read or
+                // rewrite a code, so it cannot establish the pinned key.
                 let member = self
                     .settings
                     .yard(name)
                     .filter(|_| self.env.yard.is_none())
-                    .and_then(|yard| Some((yard, yard.member()?.0)));
-                let opening = self.pairs_by_opening(name, cx);
-                let (line, submit, explained) = match member {
-                    Some((yard, owner)) => (
+                    .filter(|yard| yard.member().is_some());
+                let (line, explained) = match member {
+                    Some(yard) => (
                         format!("pair this device with {}, at {address}", yard.title()),
-                        match (self.pairing, opening) {
-                            (false, true) => "pair this device (enter)",
-                            _ => pair,
-                        },
                         format!(
-                            "footplate asks the edge, as you, to open a pairing for this device and uses its code at once; {owner} never holds the code. {token}"
+                            "Pairing from this page cannot seal the app. Ask the yard's operator to open a pairing QR on the yard's own screen, then paste the full QR here. {token}"
                         ),
                     ),
                     None => (
                         format!("a code for {whose}, at {address}"),
-                        pair,
                         format!("{OPERATOR} {token}"),
                     ),
                 };
@@ -1920,7 +1913,7 @@ impl Footplate {
                         .child(line)
                         .into_any_element(),
                     yard_field("code", &self.code, palette, cx).into_any_element(),
-                    yard_submit(submit, "yard pair", busy, palette, cx).into_any_element(),
+                    yard_submit(pair, "yard pair", busy, palette, cx).into_any_element(),
                 ]);
                 help = Some(yard_help(explained, palette).into_any_element());
             }
@@ -1935,7 +1928,7 @@ impl Footplate {
                 ]);
                 help = Some(
                     yard_help(
-                        "The edge's one origin, as the ready page shows it, which of the account's yards there, and the Kratos account's email and password. Empty is the account's own yard. Signing in keeps the session in a file of this yard's own beside the settings, for you alone, and never with the settings; pairing the device comes next, with the code from the ready page."
+                        "The edge's one origin, as the ready page shows it, which of the account's yards there, and the Kratos account's email and password. Empty is the account's own yard. Signing in keeps the session in a file of this yard's own beside the settings, for you alone, and never with the settings; pairing the device comes next with the full QR from the yard's own screen."
                             .to_string(),
                         palette,
                     )

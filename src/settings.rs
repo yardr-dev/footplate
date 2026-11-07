@@ -153,6 +153,25 @@ impl Yard {
         }
     }
 
+    /// Whether this yard is sealed to this device: a hosted yard with
+    /// a channel key kept beside its token, reading for its address,
+    /// so its calls are sealed in the channel that key founded. The
+    /// yards list says a yard so held is sealed to this yard; a key
+    /// that stands but does not read for the yard seals nothing, and
+    /// says nothing here.
+    pub fn sealed(&self, file: Option<&Path>) -> bool {
+        if !self.is_hosted() {
+            return false;
+        }
+        let Ok(address) = crate::api::Address::parse(&self.address) else {
+            return false;
+        };
+        let Ok(token) = yard::token_path(&self.token_file, file) else {
+            return false;
+        };
+        matches!(yard::channel_for(&token, &address), Ok(Some(_)))
+    }
+
     /// A hosted yard of another account, one the account is a member of, as
     /// its `edge_yard` names it: its owner's handle and the yard's name.
     /// None for any other yard: one reached direct, the account's own yard
@@ -1053,6 +1072,15 @@ impl Settings {
                 },
             ),
         };
+        // The yard's channel key stands beside its token's file and
+        // falls with it: deleted where the token's file was, and only
+        // there — a file beside one that was left is left too.
+        if matches!(token, TokenLeft::Deleted(_))
+            && let Ok(path) = yard::token_path(&yard.token_file, file)
+            && yard::is_managed_channel_file(&path)
+        {
+            let _ = fs::remove_file(yard::key_path(&path));
+        }
         self.yards.retain(|other| other.name != name);
         if self.yards.is_empty() {
             self.yards.push(Yard::near(HERE, ""));
@@ -2387,6 +2415,59 @@ mod tests {
             format!("{}\n", crate::fake::TOKEN)
         );
         assert!(less.yard("external").is_none());
+    }
+
+    #[test]
+    fn a_yard_is_sealed_to_this_device_where_its_channel_key_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let set = Settings::default()
+            .with_yard(
+                None,
+                Yard::hosted(
+                    "south",
+                    "https://south.example.net",
+                    "yard-south.token",
+                    "yard-south.session",
+                ),
+                Some(&file),
+            )
+            .unwrap()
+            .with_yard(
+                None,
+                Yard::far("mac", "https://mac.example.net", "yard-mac.token"),
+                Some(&file),
+            )
+            .unwrap();
+        let south = set.yard("south").unwrap();
+        let mac = set.yard("mac").unwrap();
+        assert!(!south.sealed(Some(&file)));
+        // A channel key kept beside the hosted yard's token seals it;
+        // the same beside a direct yard's seals nothing that is said.
+        let key = crate::e2e::ChannelKey::generate().unwrap();
+        let yard = crate::e2e::ChannelKey::generate().unwrap();
+        let address = crate::api::Address::parse("https://south.example.net").unwrap();
+        crate::yard::keep_token(&dir.path().join("yard-south.token"), "yardr-dev-kept").unwrap();
+        crate::yard::keep_channel(
+            &dir.path().join("yard-south.token"),
+            &key.private,
+            &yard.public,
+            &address,
+        )
+        .unwrap();
+        crate::yard::keep_channel(
+            &dir.path().join("yard-mac.token"),
+            &key.private,
+            &yard.public,
+            &crate::api::Address::parse("https://mac.example.net").unwrap(),
+        )
+        .unwrap();
+        assert!(south.sealed(Some(&file)));
+        assert!(!mac.sealed(Some(&file)));
+        // Removing the yard takes its channel key with its token's.
+        let (less, _, _) = set.without("south", Some(&file));
+        assert!(less.yard("south").is_none());
+        assert!(!dir.path().join("yard-south.token.key").exists());
     }
 
     #[test]

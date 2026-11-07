@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::api::{self, Address, Client};
+use crate::e2e;
 use crate::settings::{self, Settings};
 
 /// The file beside the settings that holds the token of the device of the
@@ -47,6 +48,11 @@ const FOOTPLATE_SESSION: &str = "!footplate-session-v1";
 /// never in a token's or a session's, so neither is ever taken for the
 /// voice key.
 const FOOTPLATE_VOICE: &str = "!footplate-voice-v1";
+
+/// Marks a channel key file that footplate wrote at a sealed pairing:
+/// the device's channel private key for one yard, with the yard's
+/// channel public key it pinned under it.
+const FOOTPLATE_CHANNEL: &str = "!footplate-channel-v1";
 
 /// What the environment says of the yard, read once when footplate starts.
 #[derive(Debug, Clone, Default)]
@@ -168,9 +174,22 @@ impl Env {
         let file = self.token_of(set, &opened.name, settings)?;
         let token = token_for(&file, &address)?;
         Ok(match session {
-            Some(session) => {
-                Client::remote_hosted(address, token, session, opened.edge_yard.trim())
-            }
+            // A hosted yard the device paired with sealed is opened
+            // sealed, with the channel key kept beside its token; one
+            // paired plainly is opened as it was. A key file that
+            // stands but may not be read for this yard refuses here,
+            // and no plain call is made for it.
+            Some(session) => match channel_for(&file, &address)? {
+                Some(channel) => Client::remote_sealed(
+                    address,
+                    token,
+                    session,
+                    opened.edge_yard.trim(),
+                    channel.private,
+                    channel.yard_public,
+                ),
+                None => Client::remote_hosted(address, token, session, opened.edge_yard.trim()),
+            },
             None => Client::remote(address, token),
         })
     }
@@ -713,6 +732,31 @@ pub struct TokenPlace {
     kept: bool,
 }
 
+/// A channel key's already-open place and the two halves it must keep:
+/// prepared before a pairing code is sent, then written before its token.
+pub(crate) struct ChannelPlace {
+    place: TokenPlace,
+    private: [u8; 32],
+    yard_public: [u8; 32],
+}
+
+impl ChannelPlace {
+    fn keep(self, address: &Address) -> io::Result<()> {
+        let Self {
+            place,
+            private,
+            yard_public,
+        } = self;
+        place.keep_channel(&private, &yard_public, address)
+    }
+}
+
+/// Which of a pairing's two credentials could not be kept.
+pub(crate) enum PairingKeepError {
+    Channel(io::Error),
+    Token(io::Error),
+}
+
 /// Makes the place a token is written to before it becomes `file`, or says
 /// why `file` cannot be written: something other than a file is there, or
 /// its directory cannot be made or written to.
@@ -795,6 +839,59 @@ impl TokenPlace {
         self.kept = true;
         Ok(())
     }
+
+    /// The same private, atomic write for a channel key file: the
+    /// device's private key, footplate's marker, the yard's pinned
+    /// public key and its address, each on its own line, as
+    /// [`channel_for`] reads them.
+    pub(crate) fn keep_channel(
+        mut self,
+        private: &[u8; 32],
+        yard_public: &[u8; 32],
+        address: &Address,
+    ) -> io::Result<()> {
+        let text = format!(
+            "{}\n{FOOTPLATE_CHANNEL}\n{}\n{address}\n",
+            e2e::channel_public(private),
+            e2e::channel_public(yard_public)
+        );
+        self.out.write_all(text.as_bytes())?;
+        self.out.sync_all()?;
+        fs::rename(&self.new, &self.file)?;
+        self.kept = true;
+        Ok(())
+    }
+}
+
+/// Reserves a channel key's file before a pairing code is sent. The
+/// prepared place is kept so a late write error cannot leave a new token
+/// with no key, which would make the next open look like a plain pairing.
+pub(crate) fn channel_place(
+    token_file: &Path,
+    private: &[u8; 32],
+    yard_public: &[u8; 32],
+) -> io::Result<ChannelPlace> {
+    Ok(ChannelPlace {
+        place: token_place(&key_path(token_file))?,
+        private: *private,
+        yard_public: *yard_public,
+    })
+}
+
+/// Keeps a sealed pairing's channel key before its token. If the first
+/// write fails, the reserved token place drops without becoming a file.
+pub(crate) fn keep_pair(
+    token: TokenPlace,
+    channel: Option<ChannelPlace>,
+    token_value: &str,
+    address: &Address,
+) -> std::result::Result<(), PairingKeepError> {
+    if let Some(channel) = channel {
+        channel.keep(address).map_err(PairingKeepError::Channel)?;
+    }
+    token
+        .keep(token_value, address)
+        .map_err(PairingKeepError::Token)
 }
 
 impl Drop for TokenPlace {
@@ -814,6 +911,125 @@ impl Drop for TokenPlace {
 /// beside itself and renamed.
 pub fn keep_session(file: &Path, token: &str, address: &Address) -> io::Result<()> {
     token_place(file)?.keep_as(token, Some(address), SESSION_KIND)
+}
+
+/// Where the channel key of the yard whose token is in `token_file`
+/// is kept: beside the token file itself, its name with `.key` after
+/// it (`yard-mac.token` keeps `yard-mac.token.key`). A yard's key pair
+/// stands and falls with its token file, so no setting names it.
+pub fn key_path(token_file: &Path) -> PathBuf {
+    let mut name = token_file.file_name().unwrap_or_default().to_os_string();
+    name.push(".key");
+    token_file.with_file_name(name)
+}
+
+/// What a sealed pairing kept for one yard: this device's channel
+/// private key, and the yard's channel public key pinned beside it.
+/// The private half authenticates every sealed call; the pinned half
+/// is what a handshake is opened to, and what a later answer is
+/// checked against.
+pub struct KeptChannel {
+    pub private: [u8; 32],
+    pub yard_public: [u8; 32],
+}
+
+impl std::fmt::Debug for KeptChannel {
+    /// Without the private key: a channel key is printed where a test
+    /// fails, as a token is not.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "KeptChannel(sealed to {})",
+            e2e::channel_public(&self.yard_public)
+        )
+    }
+}
+
+/// Keeps a device's channel key beside its token file, for its user
+/// alone, with the yard's pinned public key and the yard's address
+/// under footplate's marker: a key is never on disk without its yard.
+/// The file is whole or not there: it is written beside itself and
+/// renamed, as a token is ([`TokenPlace`]).
+#[cfg(test)]
+pub fn keep_channel(
+    token_file: &Path,
+    private: &[u8; 32],
+    yard_public: &[u8; 32],
+    address: &Address,
+) -> io::Result<()> {
+    token_place(&key_path(token_file))?.keep_channel(private, yard_public, address)
+}
+
+/// The channel key kept beside `token_file` for the yard at
+/// `address`: none where no sealed pairing ever kept one — the yard
+/// is then called plainly, as before there was a channel — and a
+/// refusal, with nothing sent, where a file stands but may not be
+/// read for this yard (open to others, no channel key in it, or of
+/// another yard's): a device that has pinned a yard's key never falls
+/// back to a plain call for it.
+pub fn channel_for(token_file: &Path, address: &Address) -> Result<Option<KeptChannel>, String> {
+    let file = key_path(token_file);
+    let at = file.display();
+    let meta = match fs::metadata(&file) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(format!("The channel key file {at} cannot be read: {err}"));
+        }
+    };
+    if !meta.file_type().is_file() {
+        return Err(format!(
+            "The channel key file {at} is not a regular file, and is refused."
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "The channel key file {at} is open to others (mode {mode:04o}), and is refused: whoever reads it calls the yard as you, sealed. Make it yours alone: chmod 600 {at}"
+            ));
+        }
+    }
+    let text = fs::read_to_string(&file)
+        .map_err(|err| format!("The channel key file {at} cannot be read: {err}"))?;
+    let lines: Vec<&str> = text.trim().lines().collect();
+    let none = || {
+        format!(
+            "The channel key file {at} holds no channel key: a private key, as a sealed pairing kept it, with footplate's marker, the yard's key and its address under it. Pair this device with the yard again."
+        )
+    };
+    if lines.len() != 4 || lines[1].trim() != FOOTPLATE_CHANNEL {
+        return Err(none());
+    }
+    let private = e2e::parse_channel_public(lines[0].trim()).map_err(|_| none())?;
+    let yard_public = e2e::parse_channel_public(lines[2].trim()).map_err(|_| none())?;
+    let given = Address::parse(lines[3].trim()).map_err(|_| none())?;
+    if !given.is(address) {
+        return Err(format!(
+            "The channel key in {at} is of this device at {given}, and is not used at {address}: whoever answers there would be taken for that yard. Pair this device with the yard at {address} in the settings, with a code its operator opens: yardr user device pair <user> <device>"
+        ));
+    }
+    Ok(Some(KeptChannel {
+        private,
+        yard_public,
+    }))
+}
+
+/// Whether the file beside `token_file` is a channel key file that a
+/// sealed pairing wrote: what removing a yard deletes with its
+/// token's file, and nothing else is deleted for it.
+pub(crate) fn is_managed_channel_file(token_file: &Path) -> bool {
+    let file = key_path(token_file);
+    if !fs::symlink_metadata(&file).is_ok_and(|meta| meta.file_type().is_file()) {
+        return false;
+    }
+    fs::read_to_string(&file).is_ok_and(|text| {
+        let lines: Vec<&str> = text.trim().lines().collect();
+        lines.len() == 4
+            && lines[1].trim() == FOOTPLATE_CHANNEL
+            && e2e::parse_channel_public(lines[0].trim()).is_ok()
+    })
 }
 
 /// Keeps the voice key typed in the settings in `file`, for its user
@@ -850,17 +1066,67 @@ pub fn keep_session_token(file: &Path, token: &str) -> io::Result<()> {
     token_place(file)?.keep_as(token, None, SESSION_KIND)
 }
 
+/// What a pairing's words name, as they were typed: the yard's
+/// address, its code, which of the account's yards it is for where
+/// the edge names one, and the yard's channel public key where the
+/// pairing is a sealed one. Any of the last three may be missing: a
+/// code typed by hand names none of them.
+pub struct PairingText {
+    pub address: String,
+    pub code: String,
+    /// The yard's channel public key as the QR's fourth field holds
+    /// it, still as text: [`e2e::parse_channel_public`] is what
+    /// refuses one that is none.
+    pub channel: Option<String>,
+}
+
+/// The fields of one QR string (or of words typed as one): split at
+/// each `#`, each trimmed, by their place — address, code, yard,
+/// channel. A fifth field and more are no QR's: they stay part of
+/// the channel's, which then parses as none.
+fn qr_fields(text: &str) -> Vec<String> {
+    text.trim()
+        .split('#')
+        .map(|field| field.trim().to_string())
+        .collect()
+}
+
+/// What a pairing's QR code holds, as it was typed: `<address>#<code>`
+/// at a yard reached direct, `<address>#<code>#<yard>` through the
+/// edge, and a fourth field, the yard's channel public key, where
+/// the yard has one. It may be pasted into the address or into the
+/// code field as it is; a code typed beside it, in the code field of
+/// its own, wins over the one it holds.
+pub fn pairing_text(address: &str, code: &str) -> PairingText {
+    let held = qr_fields(address);
+    let typed = qr_fields(code);
+    // A whole QR pasted for the code: its fields stand in the code's
+    // place. A bare code is one field and names nothing else.
+    let (typed_code, typed_channel) = match typed.as_slice() {
+        [_, code, rest @ ..] => (code.clone(), rest.get(1).cloned()),
+        [code] => (code.clone(), None),
+        [] => (String::new(), None),
+    };
+    let field = |fields: &[String], at: usize| fields.get(at).cloned().unwrap_or_default();
+    let code = match typed_code.is_empty() {
+        false => typed_code,
+        true => field(&held, 1),
+    };
+    let channel = typed_channel
+        .or_else(|| held.get(3).cloned())
+        .filter(|channel| !channel.is_empty());
+    PairingText {
+        address: field(&held, 0).trim_end_matches('/').to_string(),
+        code,
+        channel,
+    }
+}
+
 /// The address and the code as they were typed. What a pairing's QR code
-/// holds, `<address>#<code>`, may be given as the address: it is split at
-/// its last `#`, and a code typed beside it wins.
+/// holds may be given as the address, and a code typed beside it wins.
 pub fn typed(address: &str, code: &str) -> (String, String) {
-    let (address, code) = (address.trim(), code.trim());
-    let (address, held) = address.rsplit_once('#').unwrap_or((address, ""));
-    let code = if code.is_empty() { held.trim() } else { code };
-    (
-        address.trim().trim_end_matches('/').to_string(),
-        code.to_string(),
-    )
+    let text = pairing_text(address, code);
+    (text.address, text.code)
 }
 
 #[cfg(test)]
@@ -1999,6 +2265,81 @@ mod tests {
             both("https://mac.example.net", "abcd efgh")
         );
         assert_eq!(typed("", ""), both("", ""));
+    }
+
+    #[test]
+    fn a_qr_code_s_third_and_fourth_fields_name_the_yard_and_its_channel_key() {
+        let key = e2e::channel_public(&[9u8; 32]);
+        // Through the edge: address, code, yard, channel.
+        let text = pairing_text(
+            &format!("https://my.yardr.dev#K7QM-2XPD#mckean/airy#{key}"),
+            "",
+        );
+        assert_eq!(text.address, "https://my.yardr.dev");
+        assert_eq!(text.code, "K7QM-2XPD");
+        assert_eq!(text.channel.as_deref(), Some(key.as_str()));
+        // The same QR pasted for the code names the same four.
+        let text = pairing_text("", &format!("https://my.yardr.dev#K7QM-2XPD##{key}"));
+        assert_eq!(text.code, "K7QM-2XPD");
+        assert_eq!(text.channel.as_deref(), Some(key.as_str()));
+        // A code typed beside a QR wins, and the QR's channel stands.
+        let text = pairing_text(&format!("https://mac.example.net#OLD#{key}"), "K7QM-2XPD");
+        assert_eq!(text.code, "K7QM-2XPD");
+        // No fourth field: no channel, and a typed code names none.
+        let text = pairing_text("https://mac.example.net", "K7QM-2XPD");
+        assert_eq!(text.channel, None);
+    }
+
+    #[test]
+    fn a_channel_key_is_kept_beside_its_token_for_its_yard_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("yard-mac.token");
+        let mac = Address::parse("https://mac.example.net").unwrap();
+        let other = Address::parse("https://other.example.net").unwrap();
+        let key = e2e::ChannelKey::generate().unwrap();
+        let yard = e2e::ChannelKey::generate().unwrap();
+
+        // Nothing kept: no channel, and the yard is called plainly.
+        assert!(channel_for(&file, &mac).unwrap().is_none());
+        keep_channel(&file, &key.private, &yard.public, &mac).unwrap();
+        let kept = channel_for(&file, &mac).unwrap().unwrap();
+        assert_eq!(kept.private, key.private);
+        assert_eq!(kept.yard_public, yard.public);
+        assert!(is_managed_channel_file(&file));
+        // Of another yard: refused, and sent nowhere.
+        assert!(
+            channel_for(&file, &other)
+                .unwrap_err()
+                .contains("Pair this device with the yard at")
+        );
+        // A file holding no channel key is refused, not read plainly.
+        file_of_mode(dir.path(), "yard-mac.token.key", 0o600, "yardr-dev-fake\n");
+        assert!(
+            channel_for(&file, &mac)
+                .unwrap_err()
+                .contains("holds no channel key")
+        );
+        assert!(!is_managed_channel_file(&file));
+    }
+
+    #[test]
+    fn a_pairing_does_not_leave_a_token_when_its_channel_key_cannot_be_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("yard.token");
+        let address = Address::parse("https://yard.example.net").unwrap();
+        let device = e2e::ChannelKey::generate().unwrap();
+        let yard = e2e::ChannelKey::generate().unwrap();
+        let token = token_place(&file).unwrap();
+        let channel = channel_place(&file, &device.private, &yard.public).unwrap();
+
+        // A target taken after both private temporary files are ready
+        // stands in for a late rename failure while the disk changes.
+        fs::create_dir(key_path(&file)).unwrap();
+        assert!(matches!(
+            keep_pair(token, Some(channel), "yardr-dev-token", &address),
+            Err(PairingKeepError::Channel(_))
+        ));
+        assert!(!file.exists());
     }
 
     #[test]

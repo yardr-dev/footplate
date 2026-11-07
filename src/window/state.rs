@@ -20,18 +20,14 @@ use crate::setup;
 use crate::voice::{Caption, Queue, Speaking, State, Voice};
 
 /// A pairing's code as it was typed where the yard's address is known
-/// already: what a pairing's QR code holds, `<address>#<code>`, may be
-/// given for it, and is its code. Where the address is the edge's the QR
-/// code holds `<address>#<code>#<yard>`, and the code is its middle.
+/// already: what a pairing's QR code holds may be given for it, and is
+/// its code — the second of its fields, with a yard and a channel key
+/// after it where the QR holds them.
 pub(crate) fn code_of(typed: &str) -> String {
     let typed = typed.trim();
     match typed.split('#').collect::<Vec<_>>().as_slice() {
-        [_, code, _] => code.trim().to_string(),
-        _ => typed
-            .rsplit_once('#')
-            .map_or(typed, |(_, code)| code)
-            .trim()
-            .to_string(),
+        [_, code, ..] => code.trim().to_string(),
+        _ => typed.to_string(),
     }
 }
 
@@ -41,9 +37,23 @@ pub(crate) fn code_of(typed: &str) -> String {
 /// or a QR code of a yard reached direct.
 pub(crate) fn yard_of(typed: &str) -> Option<String> {
     match typed.trim().split('#').collect::<Vec<_>>().as_slice() {
-        [_, _, yard] => match yard.trim() {
+        [_, _, yard, ..] => match yard.trim() {
             "" => None,
             yard => Some(yard.to_string()),
+        },
+        _ => None,
+    }
+}
+
+/// The yard's channel public key a pairing is sealed by, where what
+/// was typed for its code holds the QR code's fourth field,
+/// `<address>#<code>#<yard>#<channel>`: still as text, as
+/// [`crate::yard::pairing_text`]'s is. None where no fourth stands.
+pub(crate) fn channel_of(typed: &str) -> Option<String> {
+    match typed.trim().split('#').collect::<Vec<_>>().as_slice() {
+        [_, _, _, channel, ..] => match channel.trim() {
+            "" => None,
+            channel => Some(channel.to_string()),
         },
         _ => None,
     }
@@ -56,6 +66,7 @@ pub(crate) fn yard_of(typed: &str) -> Option<String> {
 /// together to one, and the ends are trimmed. A machine that says nothing
 /// usable is `footplate`, the name the edge gives the device it pairs for an
 /// account's own yard.
+#[cfg(test)]
 pub(crate) fn device_name(machine: &str) -> String {
     let mut name = String::new();
     for c in machine.trim().chars() {

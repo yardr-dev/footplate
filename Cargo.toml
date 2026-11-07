@@ -61,6 +61,23 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # image crate above. Its image renderer alone: the svg and pic renderers
 # draw nothing here.
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
+# A paired device and its yard speak over a Noise channel (e2e.rs), run by
+# snow (Apache-2.0 OR MIT, pure Rust): Noise_IK with X25519, ChaChaPoly and
+# SHA-256 alone, and no Noise construction of footplate's own. Pinned
+# exactly, as the design names 0.10.0 (19 July 2025); risky-raw-split hands
+# the finished handshake's two transport keys out, which each record then
+# uses at its own nonce with its associated data, as the yard's flynn/noise
+# copies do. Its own resolver brings the three algorithms and getrandom.
+snow = { version = "=0.10.0", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-sha2", "use-getrandom", "std", "risky-raw-split"] }
+# The one AEAD a channel record is sealed with, at the nonce the record
+# itself names (e2e.rs): snow's handshake ends in raw keys, and this is the
+# primitive they are spent through, as the yard spends its flynn/noise
+# copies. In snow's tree already, at the version it builds against.
+chacha20poly1305 = "0.10"
+# The call ids and session tags a channel mints are random bytes with no
+# other source (e2e.rs); the system's is asked through this, on every
+# platform. In snow's tree already.
+getrandom = "0.3"
 
 # The microphone and the speaker of a voice session (audio.rs): cpal, the
 # crate that spikes/voice-harness ran live on a Linux desktop and measured on

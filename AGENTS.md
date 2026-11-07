@@ -100,6 +100,14 @@ The window, its state and the yard:
   client library.
 - `src/session.rs`: follows one yard on a thread: login, initial state,
   stream, retry.
+- `src/e2e.rs`: the channel between a paired device and its yard, as bytes
+  only: the Noise_IK handshake a sealed pairing and a yard's opening run
+  (by snow, no Noise construction of its own), and a session's sealed
+  records, each carrying its sequence and index with the session tag, a
+  direction, its call's id and, on a first record, the outer path and
+  stream marker as associated data, opened against their own call with a
+  sliding replay window. Which calls are sealed is `src/api.rs`'s; the
+  key a yard is pinned by is kept in `src/yard.rs`.
 - `src/voice.rs`: the voice session's rules, as plain functions and one small
   book, tested on any system: the request the spoken sentences stand for (every
   request since the last delegation, in order, noise tags and greetings cut),

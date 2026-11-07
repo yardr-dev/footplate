@@ -86,9 +86,7 @@
 # window for what the click asks), `switcher-member` (that list over an own
 # and a member hosted yard, the member marked with its operator's handle),
 # `member-pair` (the settings' yards, with a member yard's pair this device
-# pressed while the operator holds a pairing open: the edge names its yard
-# user), `member-paired` (the same with none open: the device paired as the
-# member's yard user),
+# form open, asking for the operator-opened QR from the yard's own screen),
 # `refs` (the conversation naming an ask and two bead ids, the ask's
 # chip with its preview under the mail), `decisions` (the decisions
 # list with one open ask and the 156-item history open: day groups
@@ -134,7 +132,7 @@ set -e
 caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair member-paired refs decisions decisions-filtered keys about about-missing feedback reactions reactions-hover reactions-zoom notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered keys about about-missing feedback reactions reactions-hover reactions-zoom notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;
@@ -369,7 +367,7 @@ docker exec -e "SHOT_LOOK=$look" -e "SHOT_TEXT=$text" "$name" sh -c 'export XDG_
     fi
     if [ -n "$shot_settings" ]; then shot_json=", $shot_settings"; else shot_json=""; fi
     if [ "'"$state"'" = far ] || [ "'"$state"'" = settings-yards-rename ]; then printf "%s\n" "{\"yards\": [{\"name\": \"far\", \"address\": \"https://yard.example.net\", \"token_file\": \"far.token\"}], \"open\": \"far\"$shot_json}" > "$scratch/config/footplate/settings.json"; fi
-    if [ -n "$shot_settings" ] && [ "'"$state"'" != far ] && [ "'"$state"'" != settings-yards-rename ] && [ "'"$state"'" != switcher ] && [ "'"$state"'" != switcher-shut ] && [ "'"$state"'" != switcher-member ] && [ "'"$state"'" != member-pair ] && [ "'"$state"'" != member-paired ] && [ "'"$state"'" != away ] && [ "'"$state"'" != signedout ] && [ "'"$state"'" != screen-hosted ]; then printf "%s\n" "{$shot_settings}" > "$scratch/config/footplate/settings.json"; fi
+    if [ -n "$shot_settings" ] && [ "'"$state"'" != far ] && [ "'"$state"'" != settings-yards-rename ] && [ "'"$state"'" != switcher ] && [ "'"$state"'" != switcher-shut ] && [ "'"$state"'" != switcher-member ] && [ "'"$state"'" != member-pair ] && [ "'"$state"'" != away ] && [ "'"$state"'" != signedout ] && [ "'"$state"'" != screen-hosted ]; then printf "%s\n" "{$shot_settings}" > "$scratch/config/footplate/settings.json"; fi
     chown -R shot:shot "$scratch"
     su shot -c "HOME=$scratch/home XDG_CONFIG_HOME=$scratch/config XDG_DATA_HOME=$scratch/data YARDR_HOME=$scratch/yard PATH=$scratch/home/.local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json SHOT_LOOK='$SHOT_LOOK' FOOTPLATE_SHOT='"$state"' dbus-run-session -- '"$target_dir"'/debug/footplate >$scratch/footplate.log 2>&1 & echo \$!" > /tmp/shots/footplate.pid' >&2
 

@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use gpui::{
-    AnyElement, App, Context, Div, Focusable, FontWeight, MouseButton, Rgba, SharedString, Window,
-    div, img, prelude::*, px, rems,
+    AnyElement, Context, Div, Focusable, FontWeight, MouseButton, Rgba, SharedString, Window, div,
+    img, prelude::*, px, rems,
 };
 
 use super::Footplate;
@@ -17,10 +17,11 @@ use super::number_key;
 use super::rail::RailTip;
 use super::state::{
     Adding, AgentsBusy, Away, Counts, LoginDid, SwitchBusy, SwitchFor, SwitchRead, YardIdentity,
-    code_of, device_name, pairing_failure, yard_of,
+    channel_of, code_of, pairing_failure, yard_of,
 };
 use super::ui::{keys_hint, quiet_button, segment, segmented, small_button};
 use crate::api::{self, Address, Client};
+use crate::e2e;
 use crate::fetch;
 use crate::model::{self, Entry, Model};
 use crate::session;
@@ -656,22 +657,9 @@ impl Footplate {
         window.focus(&self.code.focus_handle(cx));
         cx.notify();
     }
-    /// Whether pressing pair in the form of the yard called `name` asks the
-    /// edge to open a pairing, and does not try a code: the yard is another
-    /// account's, and the code field holds none.
-    pub(crate) fn pairs_by_opening(&self, name: &str, cx: &App) -> bool {
-        self.env.yard.is_none()
-            && self
-                .settings
-                .yard(name)
-                .is_some_and(|yard| yard.member().is_some())
-            && self.code.read(cx).text().trim().is_empty()
-    }
-    /// This device is to be paired with the member yard called `name`, from
-    /// where its card offers it: the settings, with the yard's form open,
-    /// and a pairing opened at once. See [`Footplate::open_pairing`]. The
-    /// away screen's pair again opens the same form, and its button opens
-    /// the pairing.
+    /// Opens the member yard's pairing form for a QR the operator opened on
+    /// the yard's own screen. A pairing opened by the edge cannot give the
+    /// device the pinned key this form requires.
     pub(crate) fn pair_this_device(
         &mut self,
         name: &str,
@@ -682,92 +670,6 @@ impl Footplate {
             return;
         }
         self.pair_again(Some(name.to_string()), window, cx);
-        self.open_pairing(name, cx);
-    }
-    /// Pairs this device with the member yard called `name` by its member
-    /// alone: the edge is asked, with the session this yard keeps, which is
-    /// the member's own, to open a pairing for a device of this machine's
-    /// name, and the same session redeems the code it answers, as a typed
-    /// one is ([`Footplate::pair`]). The yard is another account's, and its
-    /// operator never holds this device's code. The code is put in the code
-    /// field before it is used: it is seen there while the yard answers, and
-    /// one that was not used up (the yard did not answer) is tried again by
-    /// pressing pair. What the edge refuses is said in its words: no
-    /// membership, or a pairing open already, with its yard user where the
-    /// edge names it.
-    pub(crate) fn open_pairing(&mut self, name: &str, cx: &mut Context<Self>) {
-        if self.pairing || self.signing_in || self.env.yard.is_some() {
-            return;
-        }
-        cx.notify();
-        let Some(listed) = self
-            .settings
-            .yard(name)
-            .filter(|yard| yard.member().is_some())
-            .cloned()
-        else {
-            self.yard_said = Some(format!(
-                "The yard {name} is not a yard you are a member of."
-            ));
-            return;
-        };
-        let asked = Address::parse(&listed.address).and_then(|address| {
-            self.env
-                .session_of(&self.settings, name, self.kept.as_deref())
-                .and_then(|file| {
-                    file.map(|file| yard::session_for(&file, &address))
-                        .transpose()
-                })
-                .map(|session| (address, session))
-        });
-        let (address, session) = match asked {
-            Ok((address, Some(session))) => (address, session),
-            Ok((_, None)) => {
-                self.yard_said = Some(format!("The yard {name} is not a hosted yard."));
-                return;
-            }
-            Err(why) => {
-                self.yard_said = Some(why);
-                return;
-            }
-        };
-        self.pairing = true;
-        self.yard_said = Some("Asking the edge to open a pairing for this device…".to_string());
-        let (name, edge_yard) = (name.to_string(), listed.edge_yard);
-        cx.spawn(async move |this, cx| {
-            let opened = cx
-                .background_executor()
-                .spawn(async move {
-                    let device = device_name(&machine_name().unwrap_or_default());
-                    api::open_pairing_hosted(&address, &session, &edge_yard, &device)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.pairing = false;
-                cx.notify();
-                let opened = match opened {
-                    Ok(opened) => opened,
-                    Err(why) => {
-                        this.yard_said = Some(pairing_failure(why));
-                        return;
-                    }
-                };
-                this.pair_opened(&name, opened, cx);
-            })
-            .ok();
-        })
-        .detach();
-    }
-    /// Puts an opened member pairing in the form that redeems it. The code
-    /// stays in the code field even if another form stood open meanwhile;
-    /// it never becomes status or error text.
-    pub(super) fn pair_opened(&mut self, name: &str, opened: api::Opened, cx: &mut Context<Self>) {
-        if !matches!(&self.adding, Some(Adding::Again(at)) if at == name) {
-            self.adding = Some(Adding::Again(name.to_string()));
-        }
-        self.code
-            .update(cx, |line, cx| line.set_text(&opened.code, cx));
-        self.pair(cx);
     }
     /// The hosted yard called `name` is to be signed in again: the
     /// settings, with the Kratos account's email and password to type for
@@ -823,6 +725,14 @@ impl Footplate {
         cx.notify();
         let kept = self.kept.clone();
         let (address, code) = (self.address.read(cx).text(), self.code.read(cx).text());
+        if matches!(&adding, Adding::Again(name) if self.settings.yard(name).is_some_and(|yard| yard.member().is_some()))
+            && code_of(code).is_empty()
+        {
+            self.yard_said = Some(
+                "Pairing from this page cannot seal the app. Ask the yard's operator to open a pairing QR on the yard's own screen, then paste the full QR here.".to_string(),
+            );
+            return;
+        }
         // Which of the account's yards a pairing of a hosted yard is for,
         // where what was typed for its code holds the edge QR code's
         // third segment. A pairing that fails names nothing.
@@ -837,6 +747,42 @@ impl Footplate {
             }
             _ => None,
         };
+        // The yard's channel key, where the pairing's QR text holds it
+        // as its fourth field: in the address of a yard that is added,
+        // or in what was typed for the code of one of the list. A field
+        // that is no channel key is refused here, before anything is
+        // sent, and the code is still good.
+        let channel = match &adding {
+            Adding::Far => yard::pairing_text(address, code).channel,
+            _ => channel_of(code),
+        };
+        let channel = match channel {
+            Some(text) => match e2e::parse_channel_public(&text) {
+                Ok(key) => Some(key),
+                Err(_) => {
+                    self.yard_said = Some(
+                        "That is no channel key: a pairing's fourth field is the yard's key. Nothing was sent, and the code is still good: paste the full QR with all four fields."
+                            .to_string(),
+                    );
+                    return;
+                }
+            },
+            None => None,
+        };
+        // A hosted yard's code must arrive with the key its own QR
+        // carries. Without it, the edge would read the pairing code
+        // and token, and the new device would have no key to refuse a
+        // later plain call with. Direct yards keep their existing
+        // code-only pairing.
+        if matches!(&adding, Adding::Again(name) if self.settings.yard(name).is_some_and(|yard| yard.is_hosted()))
+            && channel.is_none()
+        {
+            self.yard_said = Some(
+                "This hosted yard's pairing QR has no channel key. Update yardr on the yard, then paste its full QR. Nothing was sent, and the code is still good."
+                    .to_string(),
+            );
+            return;
+        }
         // The yard's address, the code, the file its token goes in, and
         // the settings once it is paired.
         let asked = match (&self.env.yard, &adding) {
@@ -931,33 +877,93 @@ impl Footplate {
             let answer = cx
                 .background_executor()
                 .spawn(async move {
-                    // The file is made ready before the code is sent: a
-                    // code is used up by the yard it is sent to, and a
-                    // token with no file to go in is lost.
+                    // The files are made ready before the code is sent:
+                    // a code is used up by the yard it is sent to, and a
+                    // token (or its channel key) with no file to go in
+                    // is lost. A sealed pairing makes this device's key
+                    // pair for the yard here, and proves it in the
+                    // handshake the code rides in.
                     let place = yard::token_place(&file).map_err(|err| {
                         format!(
                             "The token file {} cannot be written ({err}). The code was not sent, and is still good: name another file for this yard's token.",
                             file.display()
                         )
                     })?;
-                    let paired = match &session {
-                        Some(session) => api::pair_hosted(&address, &code, session, &edge_yard)
-                            .map_err(pairing_failure),
-                        None => api::pair(&address, &code).map_err(|err| err.to_string()),
-                    }?;
-                    // The token goes from the yard's answer into its file
-                    // with the address the code went to, and nowhere else.
-                    place.keep(&paired.token, &address).map_err(|err| {
-                        format!(
-                            "The yard gave this device its token, and {} could not be written ({err}). The token is lost: its operator removes the device (yardr user device rm {} {}) and opens another pairing.",
-                            file.display(),
-                            paired.user,
-                            paired.device
+                    let device = match channel {
+                        Some(_) => Some(e2e::ChannelKey::generate().map_err(|why| {
+                            format!("This device's channel key could not be made ({why}). The code was not sent, and is still good.")
+                        })?),
+                        None => None,
+                    };
+                    // Keep the channel file's ready place through the
+                    // redeem, so it is written before the token after the
+                    // yard answers.
+                    let channel_place = match (&channel, &device) {
+                        (Some(yard_key), Some(device)) => {
+                            Some(yard::channel_place(&file, &device.private, yard_key).map_err(
+                                |err| {
+                                    format!(
+                                        "The channel key file {} cannot be written ({err}). The code was not sent, and is still good.",
+                                        yard::key_path(&file).display()
+                                    )
+                                },
+                            )?)
+                        }
+                        (None, None) => None,
+                        _ => unreachable!("a channel key and its device are made together"),
+                    };
+                    let paired = match (&session, &channel, &device) {
+                        (Some(session), Some(yard_key), Some(device)) => {
+                            api::pair_hosted_sealed(
+                                &address,
+                                &code,
+                                session,
+                                &edge_yard,
+                                &device.private,
+                                yard_key,
+                            )
+                            .map_err(pairing_failure)
+                        }
+                        (None, Some(yard_key), Some(device)) => {
+                            api::pair_sealed(&address, &code, &device.private, yard_key)
+                                .map_err(|err| err.to_string())
+                        }
+                        (Some(session), _, _) => api::pair_hosted(
+                            &address,
+                            &code,
+                            session,
+                            &edge_yard,
                         )
-                    })?;
+                        .map_err(pairing_failure),
+                        (None, _, _) => {
+                            api::pair(&address, &code).map_err(|err| err.to_string())
+                        }
+                    }?;
+                    yard::keep_pair(place, channel_place, &paired.token, &address).map_err(
+                        |err| match err {
+                            yard::PairingKeepError::Channel(err) => format!(
+                                "The yard gave this device its token, but its channel key could not be kept in {} ({err}). The new token was not written. Remove this device from the yard (yardr user device rm {} {}) and open another pairing.",
+                                yard::key_path(&file).display(),
+                                paired.user,
+                                paired.device
+                            ),
+                            yard::PairingKeepError::Token(err) => format!(
+                                "The yard gave this device its token, and {} could not be written ({err}). The token is lost: its operator removes the device (yardr user device rm {} {}) and opens another pairing.",
+                                file.display(),
+                                paired.user,
+                                paired.device
+                            ),
+                        },
+                    )?;
                     Ok::<_, String>(format!(
-                        "Paired: this is the device {} of {} in the yard {}.",
-                        paired.device, paired.user, paired.yard
+                        "Paired: this is the device {} of {} in the yard {}.{}",
+                        paired.device,
+                        paired.user,
+                        paired.yard,
+                        match channel {
+                            Some(_) => " Its calls are sealed to this yard.",
+                            None => "",
+                        }
                     ))
                 })
                 .await;
@@ -1047,8 +1053,8 @@ impl Footplate {
     /// signed in again. The session goes into that yard's own file and no
     /// other's, and the account stands with the yard. What keeps a yard
     /// out of the list is said before anything is sent. A yard that is
-    /// added is paired next: the code's fields stand open with what the
-    /// sign-in said. The password is sent and then stands nowhere: not in
+    /// added is paired next with the full QR from the yard's own screen.
+    /// The password is sent and then stands nowhere: not in
     /// a field, a file or a setting.
     pub(crate) fn sign_in(&mut self, cx: &mut Context<Self>) {
         if self.pairing || self.signing_in {
@@ -1192,23 +1198,12 @@ impl Footplate {
                             });
                         match next {
                             Some((settings, name)) => {
-                                // A yard of another account's has no code
-                                // on a ready page for this member: the edge
-                                // opens the pairing for them.
-                                let member = settings
-                                    .yard(&name)
-                                    .is_some_and(|yard| yard.member().is_some());
                                 this.set(settings, cx);
                                 this.reopen(cx);
                                 this.adding = Some(Adding::Again(name));
-                                this.yard_said = Some(match member {
-                                    true => format!(
-                                        "Signed in as {account}: now pair this device, with a pairing the edge opens for you."
-                                    ),
-                                    false => format!(
-                                        "Signed in as {account}: now pair this device with the code from the ready page."
-                                    ),
-                                });
+                                this.yard_said = Some(format!(
+                                    "Signed in as {account}: now pair this device with the full QR from the yard's own screen."
+                                ));
                                 let focus = this.code.focus_handle(cx);
                                 let handle = this.handle;
                                 // Afterwards: the window is not to be had
@@ -1499,7 +1494,10 @@ impl Footplate {
                                             .flex_none()
                                             .text_sm()
                                             .text_color(palette.faint)
-                                            .child(listed.kind()),
+                                            .child(match listed.sealed(self.kept.as_deref()) {
+                                                true => "sealed to this yard",
+                                                false => listed.kind(),
+                                            }),
                                     )
                                     .child(
                                         div()
@@ -2141,7 +2139,10 @@ impl Footplate {
                                     .border_color(palette.line)
                                     .text_xs()
                                     .text_color(palette.faint)
-                                    .child(yard.kind()),
+                                    .child(match yard.sealed(self.kept.as_deref()) {
+                                        true => "sealed to this yard",
+                                        false => yard.kind(),
+                                    }),
                             )
                             .child(count)
                             .child(
@@ -2710,29 +2711,4 @@ impl Footplate {
                     .child(keys_hint("keys hint yard", palette, cx)),
             )
     }
-}
-
-/// This machine's name as it says it, which a device that pairs from here
-/// is named after ([`device_name`]). None where it says nothing. A test and
-/// a shot name no one's machine.
-fn machine_name() -> Option<String> {
-    if cfg!(test) {
-        return Some("test-mac".to_string());
-    }
-    #[cfg(debug_assertions)]
-    if std::env::var_os("FOOTPLATE_SHOT").is_some() {
-        return Some("studio-mac".to_string());
-    }
-    // Windows says it in the environment, where a program run from a window
-    // would open a console for a moment.
-    if cfg!(windows) {
-        return std::env::var("COMPUTERNAME")
-            .ok()
-            .filter(|name| !name.is_empty());
-    }
-    let said = std::process::Command::new("hostname").output().ok()?;
-    said.status
-        .success()
-        .then(|| String::from_utf8_lossy(&said.stdout).trim().to_string())
-        .filter(|name| !name.is_empty())
 }

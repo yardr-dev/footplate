@@ -190,7 +190,6 @@ pub const STATES: &[&str] = &[
     "switcher-shut",
     "switcher-member",
     "member-pair",
-    "member-paired",
     "refs",
     "decisions",
     "decisions-filtered",
@@ -530,14 +529,12 @@ fn start_for_state(env: Env, state: &str) -> (Env, Option<ShotYard>) {
         write_member_settings(edge.address());
         shot.edge = Some((far, edge));
     }
-    if state == "member-pair" || state == "member-paired" {
+    if state == "member-pair" {
         // A member's yard of another account's behind an edge that knows
-        // their session, as the member pairing test has it: the session
-        // stands in its file and no token does, and the yard maps the
-        // member to eve. The window opens the settings' yards and presses
-        // the member yard's pair this device (chrome.rs). In the first the
-        // operator holds a pairing open at the yard, which the edge names;
-        // in the second none is, and the device is paired as eve.
+        // their session. The shot opens the settings' yards and its pair
+        // this device action; the form asks for a QR the operator opened on
+        // the yard's own screen. It sends no pairing request through the
+        // edge, whose pairing page can read or rewrite the code and key.
         let far = Yard::start_tcp();
         populate(&far, state);
         far.answer(
@@ -553,9 +550,6 @@ fn start_for_state(env: Env, state: &str) -> (Env, Option<ShotYard>) {
         );
         let edge = Router::start(&far, crate::fake::SESSION);
         edge.member(crate::fake::SESSION, "eve");
-        if state == "member-pair" {
-            far.pair("ABCD-EFGH");
-        }
         write_member_pair_settings(edge.address());
         shot.edge = Some((far, edge));
     }
@@ -1210,7 +1204,6 @@ fn populate(yard: &Yard, state: &str) {
         | "switcher-shut"
         | "switcher-member"
         | "member-pair"
-        | "member-paired"
         | "about"
         | "about-missing"
         | "feedback"
@@ -2790,7 +2783,6 @@ mod tests {
                 | "switcher-shut"
                 | "switcher-member"
                 | "member-pair"
-                | "member-paired"
                 | "about"
                 | "about-missing"
                 | "feedback" => {

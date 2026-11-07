@@ -31,6 +31,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::e2e;
 use crate::log;
 
 /// What footplate says it is to the yard. Nothing is decided by it today.
@@ -67,6 +68,15 @@ const REPLACING_PATIENCE: Duration = Duration::from_secs(30);
 /// is asked once: a write may have run, and a read called by POST is no GET.
 const SLOW_PAUSE: Duration = Duration::from_millis(100);
 const SLOW_RETRIES: u32 = 1;
+
+/// Pairing answers hold a device token, and sealed pairing answers
+/// wrap one Noise message. The yard's answer is small; do not let a
+/// relay turn either response into an unbounded read.
+const PAIR_ANSWER_LIMIT: usize = 64 << 10;
+const SEALED_HANDSHAKE_ANSWER_LIMIT: usize = 65535;
+/// The edge carries sealed answers in a 16 MiB body, ciphertext and
+/// framing included.
+const SEALED_ANSWER_LIMIT: usize = 16 << 20;
 
 /// The error code of a server that is replacing itself, and of a name the
 /// yard does not have.
@@ -2185,6 +2195,67 @@ pub fn is_token(token: &str) -> bool {
     !token.is_empty() && token.bytes().all(|b| b.is_ascii_graphic())
 }
 
+/// The refusal a broken sealed handshake ends in, and an answer that
+/// does not open: the words the design names for a yard whose key the
+/// app has pinned. `why` is for the log's reader, never the sentence:
+/// nothing of it names a next step but these.
+fn sealed_refusal(why: &str) -> Error {
+    say(&format!("sealed call refused: {why}"));
+    refused(
+        "sealed",
+        "The yard could not be reached sealed; update or pair again.",
+    )
+}
+
+/// An inner answer's head as it travels sealed: its status and its
+/// headers, told to the device alone. The request's head is written
+/// the same way, as JSON beside its body.
+#[derive(Deserialize)]
+struct SealedHead {
+    status: u16,
+}
+
+/// A sealed plaintext whole: the head as a length-prefixed JSON
+/// block, then the body as it stands, as the yard joins and splits
+/// it.
+fn join_head(head: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut plain = Vec::with_capacity(4 + head.len() + body.len());
+    plain.extend_from_slice(&(head.len() as u32).to_be_bytes());
+    plain.extend_from_slice(head);
+    plain.extend_from_slice(body);
+    plain
+}
+
+/// [`join_head`] read back.
+fn split_head(plain: &[u8]) -> std::result::Result<(&[u8], &[u8]), String> {
+    if plain.len() < 4 {
+        return Err("a sealed call with no head".to_string());
+    }
+    let n = u32::from_be_bytes(plain[..4].try_into().expect("a length's length")) as usize;
+    if n > plain.len() - 4 {
+        return Err(format!("a sealed head of {n} bytes in {}", plain.len()));
+    }
+    Ok((&plain[4..4 + n], &plain[4 + n..]))
+}
+
+enum BodyReadError {
+    Read(io::Error),
+    TooLong,
+}
+
+/// Reads at most `limit + 1` bytes, enough to tell whether an answer
+/// exceeded its protocol bound without buffering the rest of it.
+fn read_bounded(read: &mut impl Read, limit: usize) -> std::result::Result<Vec<u8>, BodyReadError> {
+    let mut bytes = Vec::new();
+    read.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(BodyReadError::Read)?;
+    if bytes.len() > limit {
+        return Err(BodyReadError::TooLong);
+    }
+    Ok(bytes)
+}
+
 /// The call reached the server, and the server said no: `message` is a
 /// sentence for a person, shown, never read.
 fn refused(code: &str, message: &str) -> Error {
@@ -2252,7 +2323,44 @@ fn edge_call_refusal(status: u16, refusal: Option<&str>, bytes: &[u8]) -> Option
 /// answered with the device's. The code is sent as it was typed; the yard
 /// reads it without its dash and in either case.
 pub fn pair(address: &Address, code: &str) -> Result<Paired> {
-    pair_with(address, code, None, "", CALL_TIMEOUT)
+    pair_with(address, code, None, "", CALL_TIMEOUT, None)
+}
+
+/// As [`pair`], sealed: the code is redeemed inside a Noise
+/// handshake to the yard's pinned channel public key (the pairing
+/// QR's fourth field), under a device channel key made for that
+/// yard, so neither the code nor the token it buys crosses readable.
+/// The caller keeps the key pair: `device` is the private half it
+/// made, and the public half the handshake proved is the yard's to
+/// pin beside the token.
+pub fn pair_sealed(
+    address: &Address,
+    code: &str,
+    device: &[u8; 32],
+    yard: &[u8; 32],
+) -> Result<Paired> {
+    pair_with(address, code, None, "", CALL_TIMEOUT, Some((device, yard)))
+}
+
+/// As [`pair_sealed`], at a hosted yard: the session token rides
+/// beside the sealed code, naming which of the account's yards
+/// where `edge_yard` names one.
+pub fn pair_hosted_sealed(
+    address: &Address,
+    code: &str,
+    session: &str,
+    edge_yard: &str,
+    device: &[u8; 32],
+    yard: &[u8; 32],
+) -> Result<Paired> {
+    pair_with(
+        address,
+        code,
+        Some(session),
+        edge_yard,
+        CALL_TIMEOUT,
+        Some((device, yard)),
+    )
 }
 
 /// As [`pair`], at a hosted yard: the session token rides beside the code,
@@ -2265,7 +2373,7 @@ pub fn pair_hosted(
     session: &str,
     edge_yard: &str,
 ) -> Result<Paired> {
-    pair_with(address, code, Some(session), edge_yard, CALL_TIMEOUT)
+    pair_with(address, code, Some(session), edge_yard, CALL_TIMEOUT, None)
 }
 
 fn pair_with(
@@ -2274,8 +2382,23 @@ fn pair_with(
     session: Option<&str>,
     edge_yard: &str,
     timeout: Duration,
+    sealed: Option<(&[u8; 32], &[u8; 32])>,
 ) -> Result<Paired> {
-    let body = json!({ "code": code }).to_string();
+    // A sealed redemption carries the code inside its handshake, and
+    // is opened by it on the way back; a plain one carries the code
+    // as it was typed. The opening lives until the answer is opened.
+    let (body, opening) = match sealed {
+        Some((device, yard)) => {
+            let (first, opening) = e2e::start_pairing(device, yard, code)
+                .map_err(|why| Error::Protocol(format!("the pairing: {why}")))?;
+            (
+                json!({ "sealed": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(first) })
+                    .to_string(),
+                Some(opening),
+            )
+        }
+        None => (json!({ "code": code }).to_string(), None),
+    };
     // A pairing is no read: a timed out one may already have made the
     // device, unless the connect gave up, which sent nothing.
     let mut conn = address
@@ -2301,6 +2424,7 @@ fn pair_with(
     )
     .map_err(|err| slow_or_down(err, false))?;
     conn.flush().map_err(|err| slow_or_down(err, false))?;
+    let sealed_pair = opening.is_some();
     let (status, refuser, mut reply) = respond_call(conn).map_err(|err| slow_error(err, false))?;
     if status == 401 && refuser == Refuser::Edge {
         return Err(refused(
@@ -2310,10 +2434,33 @@ fn pair_with(
     }
     match status {
         200 => {
-            let mut bytes = Vec::new();
-            reply
-                .read_to_end(&mut bytes)
-                .map_err(|err| slow_or_down(err, false))?;
+            let bytes = read_bounded(&mut reply, PAIR_ANSWER_LIMIT).map_err(|err| match err {
+                BodyReadError::Read(err) => slow_or_down(err, false),
+                BodyReadError::TooLong => {
+                    Error::Protocol("the pairing answer is longer than the yard carries".into())
+                }
+            })?;
+            // A sealed answer is opened with the device key that
+            // asked: its Paired JSON, readable by this device alone.
+            let bytes = match opening {
+                Some(opening) => {
+                    #[derive(Deserialize)]
+                    struct Sealed {
+                        sealed: String,
+                    }
+                    let sealed: Sealed = serde_json::from_slice(&bytes)
+                        .map_err(|err| Error::Protocol(format!("the pairing: {err}")))?;
+                    let reply = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(sealed.sealed)
+                        .map_err(|_| {
+                            Error::Protocol("the pairing: a sealed answer of no shape".into())
+                        })?;
+                    opening
+                        .open_answer(&reply)
+                        .map_err(|why| Error::Protocol(format!("the pairing: {why}")))?
+                }
+                None => bytes,
+            };
             let paired: Paired = serde_json::from_slice(&bytes)
                 .map_err(|err| Error::Protocol(format!("the pairing: {err}")))?;
             if !is_token(&paired.token) {
@@ -2331,10 +2478,11 @@ fn pair_with(
             // session has that shape too, and reads through here in its
             // own sentence, which says the code is spent.
             if session.is_some() {
-                let mut bytes = Vec::new();
-                reply
-                    .read_to_end(&mut bytes)
-                    .map_err(|err| slow_or_down(err, false))?;
+                let bytes = match read_bounded(&mut reply, PAIR_ANSWER_LIMIT) {
+                    Ok(bytes) => bytes,
+                    Err(BodyReadError::Read(err)) => return Err(slow_or_down(err, false)),
+                    Err(BodyReadError::TooLong) => Vec::new(),
+                };
                 if let Some(edge) = no_yard(status, &bytes) {
                     return Err(edge);
                 }
@@ -2348,6 +2496,9 @@ fn pair_with(
             "not_added",
             "The code was right and is used up, but the yard could not add the device. Its operator opens another pairing.",
         )),
+        // A sealed redemption the yard would not open: the key it
+        // was sealed to is not this yard's, and no code was read.
+        400 if sealed_pair => Err(sealed_refusal("the yard refused the pairing handshake")),
         400 => Err(refused(
             "no_code",
             "That is no code: a code is eight letters and digits, as the yard printed them.",
@@ -2363,6 +2514,7 @@ fn pair_with(
 /// What the edge answers a member's request for a pairing with: the code
 /// the yard gave, which the same session redeems with [`pair_hosted`], and
 /// whom it is for. The yard names the user, never the request.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Opened {
     pub code: String,
@@ -2378,6 +2530,7 @@ pub struct Opened {
 /// What a request for a pairing is told where nothing answers it as the
 /// edge's own: the edge passed it on and the yard has no such path, as an
 /// edge from before the call does.
+#[cfg(test)]
 const NO_DOOR: &str = "This edge does not open a pairing for a member from the app yet.";
 
 /// Asks the edge to open a pairing for a new device of the member's own,
@@ -2390,6 +2543,7 @@ const NO_DOOR: &str = "This edge does not open a pairing for a member from the a
 /// session that presents it is refused, and spends it. `edge_yard` is
 /// `owner/yard`, as every call to a member yard names it, and `device` the
 /// name the new device is given.
+#[cfg(test)]
 pub fn open_pairing_hosted(
     address: &Address,
     session: &str,
@@ -2399,6 +2553,7 @@ pub fn open_pairing_hosted(
     open_pairing_with(address, session, edge_yard, device, CALL_TIMEOUT)
 }
 
+#[cfg(test)]
 fn open_pairing_with(
     address: &Address,
     session: &str,
@@ -2898,6 +3053,19 @@ fn split_url(url: &str) -> Result<(Address, String)> {
     Ok((address, target))
 }
 
+/// A hosted yard's channel, where the device paired with it sealed:
+/// this device's channel private key for the yard and the yard's
+/// channel public key pinned beside it, with the one session a
+/// handshake has founded. Every clone of the client shares it, so a
+/// yard is opened once however many of its calls are in flight; a
+/// fresh handshake replaces it, as the yard replaces a device's one
+/// session with its next.
+struct Channel {
+    device: [u8; 32],
+    yard: [u8; 32],
+    session: std::sync::Mutex<Option<Arc<e2e::Session>>>,
+}
+
 /// How a yard is reached: by the socket of this machine's, or by the
 /// address of another's listener with a device's token, and at a hosted
 /// yard the session token beside it, naming which of the account's yards
@@ -2911,6 +3079,7 @@ enum Way {
         token: String,
         session: Option<String>,
         edge_yard: String,
+        channel: Option<Arc<Channel>>,
     },
 }
 
@@ -2944,6 +3113,7 @@ impl Client {
                 token: token.into(),
                 session: None,
                 edge_yard: String::new(),
+                channel: None,
             },
         }
     }
@@ -2966,7 +3136,61 @@ impl Client {
                 token: token.into(),
                 session: Some(session.into()),
                 edge_yard: edge_yard.into(),
+                channel: None,
             },
+        }
+    }
+
+    /// A hosted yard the device paired with sealed, as
+    /// [`Client::remote_hosted`], with its channel key pair beside
+    /// its token: `device` is this device's channel private key for
+    /// the yard and `yard` the yard's channel public key it pinned.
+    /// Every call is then sealed in a channel session founded at the
+    /// yard's opening, and the token never crosses; a yard paired
+    /// plainly is opened with [`Client::remote_hosted`] instead, and
+    /// the two are never mixed for one yard.
+    pub fn remote_sealed(
+        address: Address,
+        token: impl Into<String>,
+        session: impl Into<String>,
+        edge_yard: impl Into<String>,
+        device: [u8; 32],
+        yard: [u8; 32],
+    ) -> Self {
+        Client {
+            way: Way::Listener {
+                address,
+                token: token.into(),
+                session: Some(session.into()),
+                edge_yard: edge_yard.into(),
+                channel: Some(Arc::new(Channel {
+                    device,
+                    yard,
+                    session: std::sync::Mutex::new(None),
+                })),
+            },
+        }
+    }
+
+    /// Whether every call to the yard is sealed in its channel: a
+    /// hosted yard the device paired with sealed. The yards list
+    /// says a yard so held is sealed to this yard.
+    pub fn sealed(&self) -> bool {
+        matches!(
+            &self.way,
+            Way::Listener {
+                channel: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// The yard's channel, where the device paired with it sealed.
+    fn channel(&self) -> Option<&Arc<Channel>> {
+        match &self.way {
+            Way::Listener { channel, .. } => channel.as_ref(),
+            #[cfg(unix)]
+            Way::Socket(_) => None,
         }
     }
 
@@ -3089,6 +3313,43 @@ impl Client {
         timeout: Option<Duration>,
         read_body: impl Fn(u16) -> bool,
     ) -> Result<(u16, Vec<u8>, Option<String>)> {
+        if self.sealed() {
+            // A sealed GET, whole like a sealed call: the same tries,
+            // on the timeouts a plain GET is tried again for.
+            let timeout = timeout.unwrap_or(CALL_TIMEOUT);
+            let mut tries = SLOW_RETRIES + 1;
+            loop {
+                let result = self.sealed_exchange(
+                    "GET",
+                    &format!("/user{path}"),
+                    &[("Accept", "application/json")],
+                    &[],
+                    false,
+                    timeout,
+                );
+                match result {
+                    Ok((status, bytes, request)) => {
+                        let bytes = match read_body(status) {
+                            true => bytes,
+                            false => Vec::new(),
+                        };
+                        return Ok((status, bytes, request));
+                    }
+                    Err(Error::Slow { sent: false, .. }) if tries > 1 => {
+                        tries -= 1;
+                        thread::sleep(SLOW_PAUSE);
+                    }
+                    Err(Error::Down(err)) if timed_out(&err) && tries > 1 => {
+                        tries -= 1;
+                        thread::sleep(SLOW_PAUSE);
+                    }
+                    Err(Error::Down(err)) if timed_out(&err) => {
+                        return Err(slow_or_down(err, true));
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
         let mut tries = SLOW_RETRIES + 1;
         loop {
             let result = (|| {
@@ -3206,6 +3467,7 @@ impl Client {
                 token,
                 session,
                 edge_yard,
+                channel: _,
             } => {
                 let edge = session
                     .as_deref()
@@ -3226,6 +3488,254 @@ impl Client {
                 )
             }
         })
+    }
+
+    /// The yard's channel session, founded where there is none: a
+    /// Noise handshake to the yard's pinned channel key, sent as one
+    /// outer call that names no call, whose sealed answer names the
+    /// session every later call rides. It is the yard's opening, made
+    /// beside the first sealed call or stream that wants it. A
+    /// handshake that does not open — the key the app has pinned is
+    /// not the yard's, or the yard speaks no channel — is a refusal
+    /// in words, and no plain call is sent after it, ever: what is
+    /// sealed stays sealed. A yard that pins no device of this key
+    /// has let the device go: its session is discarded with it.
+    fn sealed_session(&self) -> Result<Arc<e2e::Session>> {
+        let channel = self
+            .channel()
+            .ok_or_else(|| Error::Protocol("a sealed call of a yard with no channel".into()))?;
+        let mut held = channel.session.lock().expect("the channel's session");
+        if let Some(session) = &*held {
+            return Ok(session.clone());
+        }
+        let (first, opening) = e2e::start_channel(&channel.device, &channel.yard)
+            .map_err(|why| sealed_refusal(&why))?;
+        let (status, refuser, mut body) =
+            self.outer_post(&first, None, false, Some(CALL_TIMEOUT))?;
+        if status != 200 {
+            let bytes = read_bounded(&mut body, PAIR_ANSWER_LIMIT).unwrap_or_default();
+            let refusal = body.refusal.clone();
+            // A gone session is discarded under this same lock.
+            drop(held);
+            return Err(self.sealed_outer_error(status, refuser, &bytes, refusal.as_deref()));
+        }
+        let bytes = match read_bounded(&mut body, SEALED_HANDSHAKE_ANSWER_LIMIT) {
+            Ok(bytes) => bytes,
+            Err(BodyReadError::Read(err)) => return Err(slow_or_down(err, true)),
+            Err(BodyReadError::TooLong) => {
+                return Err(sealed_refusal(
+                    "the handshake answer exceeds the channel bound",
+                ));
+            }
+        };
+        let session = opening
+            .open_answer(&bytes)
+            .map_err(|why| sealed_refusal(&why))?;
+        *held = Some(session.clone());
+        Ok(session)
+    }
+
+    /// What an outer answer that is no sealed answer says, told by
+    /// whose refusal it is: the edge's own session (sign in again),
+    /// a yard that answers as a plain listener does (it speaks no
+    /// channel yet), the yard's bare refusal of a sealed call (the
+    /// session it names is gone: discard it, and the device is no
+    /// longer let in), the edge's word for no ready yard or a link
+    /// that could not carry the call, and a handshake the yard would
+    /// not open (the refusal a broken handshake ends in). Nothing
+    /// here falls back to a plain call.
+    fn sealed_outer_error(
+        &self,
+        status: u16,
+        refuser: Refuser,
+        bytes: &[u8],
+        refusal: Option<&str>,
+    ) -> Error {
+        match status {
+            401 => match refuser {
+                Refuser::Edge => Error::NotSignedIn,
+                Refuser::Yard => refused(
+                    "sealed",
+                    "This yard does not speak sealed calls yet: update yardr on the yard, and pair this device again.",
+                ),
+                Refuser::Other => {
+                    // The yard reports the session gone: no device
+                    // record pins this key, or the session it founded
+                    // is dropped. Discard it for a fresh pairing.
+                    if let Some(channel) = self.channel() {
+                        *channel.session.lock().expect("the channel's session") = None;
+                    }
+                    Error::NotLetIn
+                }
+            },
+            400 => sealed_refusal("the yard refused the handshake"),
+            _ => match no_yard(status, bytes).or_else(|| edge_call_refusal(status, refusal, bytes))
+            {
+                Some(edge) => edge,
+                None => Error::Protocol(format!("the sealed call: status {status}")),
+            },
+        }
+    }
+
+    /// One outer call to the yard's channel path: `body` is a
+    /// handshake's first message (which names no call) or a sealed
+    /// call's record run under the call id `call` names, marked
+    /// long-lived where `marked`. The edge's session and the yard it
+    /// names ride outside, as every hosted call's do; the device
+    /// token never does. The answer's head is read, as a call's is.
+    fn outer_post(
+        &self,
+        body: &[u8],
+        call: Option<&str>,
+        marked: bool,
+        timeout: Option<Duration>,
+    ) -> Result<(u16, Refuser, Body)> {
+        let Way::Listener {
+            address,
+            session,
+            edge_yard,
+            ..
+        } = &self.way
+        else {
+            return Err(Error::Protocol(
+                "a sealed call of a yard with no address".into(),
+            ));
+        };
+        let sent = Sent {
+            verb: "POST",
+            path: e2e::OUTER_PATH,
+            limit: timeout,
+            request: None,
+            status: None,
+        };
+        let connecting = Sent {
+            limit: Some(CONNECT_TIMEOUT),
+            ..sent
+        };
+        let mut conn = address
+            .connect(timeout)
+            .map_err(|err| connecting.failed(connect_error(err.into(), true)))?;
+        let edge = session
+            .as_deref()
+            .filter(|session| is_token(session))
+            .map(|session| format!("X-Edge-Token: {session}\r\n"))
+            .unwrap_or_default();
+        let named = if is_token(edge_yard) {
+            format!("X-Edge-Yard: {edge_yard}\r\n")
+        } else {
+            String::new()
+        };
+        let call = call
+            .map(|call| format!("X-Edge-E2E-Call: {call}\r\n"))
+            .unwrap_or_default();
+        let marker = match marked {
+            true => "X-Edge-E2E-Stream: long-lived\r\n",
+            false => "",
+        };
+        conn.write_all(
+            format!(
+                "POST {}{} HTTP/1.1\r\nHost: {}\r\nX-Yardr-Client: {CLIENT}\r\n{edge}{named}{call}{marker}Content-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                address.path,
+                e2e::OUTER_PATH,
+                address.authority,
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .and_then(|()| conn.write_all(body))
+        .and_then(|()| conn.flush())
+        .map_err(|err| sent.failed(err.into()))?;
+        let (status, refuser, body) = respond_call(conn).map_err(|err| sent.failed(err))?;
+        let sent = Sent {
+            request: body.request.as_deref(),
+            status: Some(status),
+            ..sent
+        };
+        // A 401 of the edge's session is the caller's to tell apart
+        // where it reads it, as a plain call's is; the yard's own
+        // shapes are told there too. Everything else is an answer.
+        match status {
+            401 if refuser == Refuser::Edge => Err(sent.failed(Error::NotSignedIn)),
+            _ => Ok((status, refuser, body)),
+        }
+    }
+
+    /// One enveloped call, whole: the inner call `verb inner_path`
+    /// with its body, sealed under a call id minted for it, and its
+    /// answer opened against that call — its inner status and body,
+    /// with the edge's id for the outer request. `marked` marks the
+    /// events stream alone. A failed try leaves its line ([`Sent`])
+    /// under the inner call's name, as a plain call's does.
+    fn sealed_exchange(
+        &self,
+        verb: &str,
+        inner_path: &str,
+        inner_headers: &[(&str, &str)],
+        inner_body: &[u8],
+        marked: bool,
+        timeout: Duration,
+    ) -> Result<(u16, Vec<u8>, Option<String>)> {
+        // The line's path is the inner call's, as a plain call's line
+        // names it: the outer one is every sealed call's.
+        let sent = Sent {
+            verb,
+            path: inner_path.strip_prefix("/user").unwrap_or(inner_path),
+            limit: Some(timeout),
+            request: None,
+            status: None,
+        };
+        let session = self.sealed_session().map_err(|err| sent.failed(err))?;
+        let call = e2e::random16().map_err(|why| sent.failed(sealed_refusal(&why)))?;
+        let binding = match marked {
+            true => e2e::FirstBinding::marked("long-lived"),
+            false => e2e::FirstBinding::plain(),
+        };
+        let mut header = serde_json::Map::new();
+        for (name, value) in inner_headers {
+            header.insert(
+                name.to_string(),
+                Value::Array(vec![Value::String(value.to_string())]),
+            );
+        }
+        let head = json!({ "method": verb, "path": inner_path, "header": header }).to_string();
+        let run = session
+            .seal_whole(&call, &binding, &join_head(head.as_bytes(), inner_body))
+            .map_err(|why| sent.failed(Error::Protocol(format!("the sealed call: {why}"))))?;
+        let (status, refuser, mut body) = self.outer_post(
+            &run,
+            Some(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(call)),
+            marked,
+            Some(timeout),
+        )?;
+        let request = body.request.clone();
+        let sent = Sent {
+            request: request.as_deref(),
+            status: Some(status),
+            ..sent
+        };
+        if status != 200 {
+            let bytes = read_bounded(&mut body, PAIR_ANSWER_LIMIT).unwrap_or_default();
+            return Err(sent.failed(self.sealed_outer_error(
+                status,
+                refuser,
+                &bytes,
+                body.refusal.as_deref(),
+            )));
+        }
+        let bytes = read_bounded(&mut body, SEALED_ANSWER_LIMIT).map_err(|err| match err {
+            BodyReadError::Read(err) => sent.failed(slow_or_down(err, true)),
+            BodyReadError::TooLong => sent.failed(Error::Protocol(
+                "the sealed answer is longer than the edge carries".into(),
+            )),
+        })?;
+        let plain = session
+            .open_whole(&bytes, &call, &binding)
+            .map_err(|why| sent.failed(Error::Protocol(format!("the sealed answer: {why}"))))?;
+        let (head, inner) = split_head(&plain)
+            .map_err(|why| sent.failed(Error::Protocol(format!("the sealed answer: {why}"))))?;
+        let answer: SealedHead = serde_json::from_slice(head)
+            .map_err(|err| sent.failed(Error::Protocol(format!("the sealed answer: {err}"))))?;
+        Ok((answer.status, inner.to_vec(), request))
     }
 
     /// The seq of the newest event.
@@ -3787,6 +4297,9 @@ impl Client {
     /// [`Error::Silent`] and may be read on, and one that stops in the
     /// middle of an event has ended.
     pub fn events(&self, after: u64, quiet: Duration) -> Result<Events> {
+        if self.sealed() {
+            return self.sealed_events(after, quiet);
+        }
         let path = format!("/events?after={after}");
         let (status, body) = self.send(
             "GET",
@@ -3805,6 +4318,47 @@ impl Client {
             status: Some(status),
         };
         self.events_of(status, body).map_err(|err| sent.failed(err))
+    }
+
+    /// The events stream of a sealed yard: one marked outer call,
+    /// whose answer's records are opened against its call as they
+    /// cross, each event a line of the joined plaintext after its
+    /// sealed head. The stream is waited for as a plain one is, and
+    /// a silence, a gap and a truncation are told as a plain one's
+    /// are.
+    fn sealed_events(&self, after: u64, quiet: Duration) -> Result<Events> {
+        let path = format!("/events?after={after}");
+        let session = self.sealed_session()?;
+        let call = e2e::random16().map_err(|why| sealed_refusal(&why))?;
+        let binding = e2e::FirstBinding::marked("long-lived");
+        let head = json!({
+            "method": "GET",
+            "path": format!("/user{path}"),
+            "header": { "Accept": ["application/x-ndjson"] },
+        })
+        .to_string();
+        let run = session
+            .seal_whole(&call, &binding, &join_head(head.as_bytes(), &[]))
+            .map_err(|why| Error::Protocol(format!("the sealed stream: {why}")))?;
+        let (status, refuser, body) = self.outer_post(
+            &run,
+            Some(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(call)),
+            true,
+            Some(quiet),
+        )?;
+        if status != 200 {
+            let refusal = body.refusal.clone();
+            let mut body = body;
+            let bytes = read_bounded(&mut body, PAIR_ANSWER_LIMIT).unwrap_or_default();
+            return Err(self.sealed_outer_error(status, refuser, &bytes, refusal.as_deref()));
+        }
+        let stop = body.conn.get_ref().event_stop()?;
+        let lines = SealedRead::open(body, session, &call, &binding)?;
+        Ok(Events {
+            lines: BufReader::new(Box::new(lines)),
+            line: String::new(),
+            stop,
+        })
     }
 
     /// The stream, from the answer that opens it: its head read, or why it
@@ -3828,7 +4382,7 @@ impl Client {
         }
         let stop = body.conn.get_ref().event_stop()?;
         Ok(Events {
-            lines: BufReader::new(body),
+            lines: BufReader::new(Box::new(body)),
             line: String::new(),
             stop,
         })
@@ -3910,10 +4464,50 @@ impl Client {
         }
     }
 
+    /// One try of a call at a sealed yard: the call sealed as one
+    /// inner call, and its sealed answer read as a plain one's is,
+    /// but for the edge's own shapes, which the outer answer already
+    /// told. An inner 404 is no device's absence — the call was
+    /// served, sealed — and reads as what it is.
+    fn sealed_call_once(&self, method: &str, args: &Value, timeout: Duration) -> Result<Reply> {
+        let body = args.to_string();
+        let path = format!("/call/{method}");
+        let (status, bytes, request) = self.sealed_exchange(
+            "POST",
+            &format!("/user/call/{method}"),
+            &[("Content-Type", "application/json")],
+            body.as_bytes(),
+            false,
+            timeout,
+        )?;
+        let sent = Sent {
+            verb: "POST",
+            path: &path,
+            limit: Some(timeout),
+            request: request.as_deref(),
+            status: Some(status),
+        };
+        let reply: Reply = serde_json::from_slice(&bytes).map_err(|err| {
+            sent.failed(Error::Protocol(format!(
+                "{method}: status {status}, and no JSON object ({err})"
+            )))
+        })?;
+        if let Some(Refusal { code, message }) = reply.error {
+            return Err(sent.failed(Error::Refused { code, message }));
+        }
+        if status != 200 {
+            return Err(sent.failed(Error::Protocol(format!("{method}: status {status}"))));
+        }
+        Ok(reply)
+    }
+
     /// One try of a call, its answer waited for `timeout`. A try that fails
     /// leaves its line ([`Sent`]), with the edge's id where the answer's head
     /// carried one.
     fn call_once(&self, method: &str, args: &Value, timeout: Duration) -> Result<Reply> {
+        if self.sealed() {
+            return self.sealed_call_once(method, args, timeout);
+        }
         let body = args.to_string();
         let path = format!("/call/{method}");
         let (status, mut reply) = self.send(
@@ -3984,9 +4578,110 @@ impl Client {
     }
 }
 
+/// A sealed stream's plaintext as it is opened record by record:
+/// the records of one outer answer, each opened against its call,
+/// joined after the answer's sealed head. It reads as the outer
+/// body does, so a silence of the outer stream is a silence here,
+/// and a record that will not open, a gap, or an outer ending with
+/// no final record ends the stream as a cut.
+struct SealedRead {
+    records: e2e::RecordReader<Body>,
+    opener: e2e::CallOpener,
+    plain: std::collections::VecDeque<u8>,
+    ended: bool,
+}
+
+impl SealedRead {
+    /// Opens a sealed stream on its outer body: its first records
+    /// are read until the answer's sealed head stands whole, and
+    /// what it says is checked as a plain stream's head is. The
+    /// body after the head is what reads from here.
+    fn open(
+        body: Body,
+        session: Arc<e2e::Session>,
+        call: &[u8; e2e::CALL_SIZE],
+        binding: &e2e::FirstBinding,
+    ) -> Result<SealedRead> {
+        let mut read = SealedRead {
+            records: e2e::RecordReader::new(body),
+            opener: e2e::CallOpener::new(session, call, binding),
+            plain: std::collections::VecDeque::new(),
+            ended: false,
+        };
+        // The head stands at the front of the joined plaintext: read
+        // records until it and the length that names it stand whole.
+        let mut head = Vec::new();
+        let status = loop {
+            if head.len() >= 4 {
+                let n =
+                    u32::from_be_bytes(head[..4].try_into().expect("a length's length")) as usize;
+                if head.len() >= 4 + n {
+                    let answer: SealedHead = serde_json::from_slice(&head[4..4 + n])
+                        .map_err(|err| Error::Protocol(format!("the sealed stream: {err}")))?;
+                    read.plain.extend(&head[4 + n..]);
+                    break answer.status;
+                }
+            }
+            match read.records.next_message() {
+                Ok(Some(msg)) => {
+                    let (plain, _) = read
+                        .opener
+                        .open(&msg)
+                        .map_err(|why| Error::Protocol(format!("the sealed stream: {why}")))?;
+                    head.extend_from_slice(&plain);
+                }
+                Ok(None) => {
+                    return Err(Error::Protocol(
+                        "the sealed stream ended before its head".into(),
+                    ));
+                }
+                Err(err) => return Err(Error::Down(err)),
+            }
+        };
+        if status != 200 {
+            return Err(Error::Protocol(format!(
+                "the stream answered status {status}"
+            )));
+        }
+        Ok(read)
+    }
+}
+
+impl Read for SealedRead {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if !self.plain.is_empty() {
+                let n = self.plain.len().min(buf.len());
+                for slot in &mut buf[..n] {
+                    *slot = self.plain.pop_front().expect("a byte counted");
+                }
+                return Ok(n);
+            }
+            if self.ended {
+                return Ok(0);
+            }
+            match self.records.next_message()? {
+                Some(msg) => {
+                    let (plain, _) = self
+                        .opener
+                        .open(&msg)
+                        .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, why))?;
+                    self.plain.extend(plain);
+                }
+                None => {
+                    self.opener
+                        .close()
+                        .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, why))?;
+                    self.ended = true;
+                }
+            }
+        }
+    }
+}
+
 /// The events of a stream, one a line, until it ends.
 pub struct Events {
-    lines: BufReader<Body>,
+    lines: BufReader<Box<dyn Read + Send>>,
     /// What is read of the next event: kept over a silence, so that one
     /// that stopped mid-line is told from one between two lines.
     line: String,
@@ -6466,6 +7161,152 @@ mod tests {
         assert_eq!(code, "no_door");
     }
 
+    /// A device pairs sealed through the edge and calls sealed: the
+    /// code and the token it buys cross readable nowhere, no call the
+    /// edge carries can be opened by it, and the stream's events
+    /// arrive past the edge's beats. The yard stands in its own
+    /// listener here, with the stand-in edge in front of it.
+    #[test]
+    fn a_sealed_pairing_and_call_cross_the_edge_unread() {
+        let yard = Yard::start_tcp();
+        let yard_key = crate::e2e::parse_channel_public(&yard.channel_public()).unwrap();
+        yard.pair("K7QM-2XPD");
+        let edge = Router::start(&yard, SESSION);
+        let address = Address::parse(edge.address()).unwrap();
+        let device = crate::e2e::ChannelKey::generate().unwrap();
+
+        let paired = pair_hosted_sealed(
+            &address,
+            "K7QM-2XPD",
+            SESSION,
+            "",
+            &device.private,
+            &yard_key,
+        )
+        .unwrap();
+        assert_eq!(
+            yard.pinned_key(&paired.token).as_deref(),
+            Some(crate::e2e::channel_public(&device.public).as_str())
+        );
+        // Neither the code nor the token crossed at the edge: no head
+        // that came to it holds either, nor a call's name.
+        for head in edge
+            .seen("POST /user/pair ")
+            .into_iter()
+            .chain(edge.seen("POST /user/e2e "))
+        {
+            assert!(!head.contains(&paired.token), "{head}");
+            assert!(!head.contains("K7QM"), "{head}");
+        }
+
+        let client = edge.client_sealed(&paired.token, SESSION, device.private, yard_key);
+        assert!(client.sealed());
+        yard.answer("Head", r#"{"result": 12}"#);
+        assert_eq!(client.head().unwrap(), 12);
+        assert_eq!(client.me().unwrap().user, "jo");
+        // The call was served at the yard, and the edge saw none of
+        // it: no token on the wire, no method in a head.
+        assert!(!yard.asked("Head").is_empty());
+        for head in edge.seen("POST /user/e2e ") {
+            assert!(!head.contains(&paired.token), "{head}");
+            assert!(!head.contains("Head"), "{head}");
+            assert!(!head.contains("Authorization"), "{head}");
+        }
+
+        // The stream, past a beat the edge writes on it.
+        yard.emit(r#"{"seq": 1, "kind": "bead_claimed", "bead": "b-1"}"#);
+        let mut events = client.events(0, QUIET).unwrap();
+        let event = events.next().unwrap().unwrap();
+        assert_eq!(event.seq, 1);
+        assert!(edge.beated() >= 1);
+    }
+
+    #[test]
+    fn a_bounded_answer_read_stops_one_byte_past_its_limit() {
+        let mut body = io::Cursor::new(b"0123456789".to_vec());
+        assert!(matches!(
+            read_bounded(&mut body, 4),
+            Err(BodyReadError::TooLong)
+        ));
+        assert_eq!(body.position(), 5);
+
+        let mut body = io::Cursor::new(b"small".to_vec());
+        assert!(matches!(
+            read_bounded(&mut body, 5),
+            Ok(bytes) if bytes == b"small"
+        ));
+    }
+
+    /// A handshake to a yard whose key the app has pinned, broken —
+    /// the pinned key is another yard's — ends in the refusal words,
+    /// and no plain call is sent after it: the yard hears no call at
+    /// all, sealed or plain.
+    #[test]
+    fn a_broken_handshake_refuses_and_no_plain_call_is_sent() {
+        let yard = Yard::start_tcp();
+        let yard_key = crate::e2e::parse_channel_public(&yard.channel_public()).unwrap();
+        yard.pair("K7QM-2XPD");
+        let edge = Router::start(&yard, SESSION);
+        let address = Address::parse(edge.address()).unwrap();
+        let device = crate::e2e::ChannelKey::generate().unwrap();
+        let paired = pair_hosted_sealed(
+            &address,
+            "K7QM-2XPD",
+            SESSION,
+            "",
+            &device.private,
+            &yard_key,
+        )
+        .unwrap();
+
+        // The same device and token, pinned to another yard's key.
+        let other = crate::e2e::ChannelKey::generate().unwrap();
+        let wrong = edge.client_sealed(&paired.token, SESSION, device.private, other.public);
+        yard.answer("Head", r#"{"result": 12}"#);
+        let asked = yard.asked("Head").len();
+        let Err(Error::Refused { code, message }) = wrong.head() else {
+            panic!("a handshake to the wrong key was answered");
+        };
+        assert_eq!(code, "sealed");
+        assert_eq!(
+            message,
+            "The yard could not be reached sealed; update or pair again."
+        );
+        assert_eq!(yard.asked("Head").len(), asked, "a call reached the yard");
+    }
+
+    /// A device the yard removes is let go sealed too: its next call
+    /// is refused as one no longer let in, its session discarded, and
+    /// the pairing's fresh code is wanted — the same end as a plain
+    /// device's, by the yard's bare refusal.
+    #[test]
+    fn a_removed_sealed_device_is_no_longer_let_in() {
+        let yard = Yard::start_tcp();
+        let yard_key = crate::e2e::parse_channel_public(&yard.channel_public()).unwrap();
+        yard.pair("K7QM-2XPD");
+        let edge = Router::start(&yard, SESSION);
+        let address = Address::parse(edge.address()).unwrap();
+        let device = crate::e2e::ChannelKey::generate().unwrap();
+        let paired = pair_hosted_sealed(
+            &address,
+            "K7QM-2XPD",
+            SESSION,
+            "",
+            &device.private,
+            &yard_key,
+        )
+        .unwrap();
+        let client = edge.client_sealed(&paired.token, SESSION, device.private, yard_key);
+        yard.answer("Head", r#"{"result": 12}"#);
+        assert_eq!(client.head().unwrap(), 12);
+
+        yard.remove_device(&paired.token);
+        assert!(matches!(client.head(), Err(Error::NotLetIn)));
+        // And again: the session was discarded, so the handshake
+        // itself is refused the same way, not a stale session's call.
+        assert!(matches!(client.head(), Err(Error::NotLetIn)));
+    }
+
     /// Calls through the edge read no ready yard as the yard not ready:
     /// a call, who this device is, an image and the stream alike, and
     /// the yard hears none of them. Past a ready yard a 403 of any other
@@ -6975,7 +7816,14 @@ mod tests {
         yard.pair("WXYZ-2345");
         yard.stall("/user/pair");
         let request_before = yard.requests();
-        let err = match pair_with(&address, "WXYZ-2345", None, "", Duration::from_millis(100)) {
+        let err = match pair_with(
+            &address,
+            "WXYZ-2345",
+            None,
+            "",
+            Duration::from_millis(100),
+            None,
+        ) {
             Err(err) => err,
             Ok(_) => panic!("the stalled pairing answered"),
         };

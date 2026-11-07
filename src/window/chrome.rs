@@ -173,16 +173,11 @@ impl Footplate {
                 .update(cx, |line, cx| line.set_text("K7QM-2XPD", cx));
             this.pair(cx);
         }
-        // The member pairing shots press the member yard's pair this
-        // device in the settings' yards: the edge is asked to open a
-        // pairing, as the click asks (shot.rs). The first finds the
-        // operator's pairing open at the yard, and the second pairs the
-        // device. A debug build's alone, as above.
+        // The member pairing shot opens its QR form: it tells the member
+        // to use an operator-opened QR from the yard's own screen. A debug
+        // build's alone, as above.
         #[cfg(debug_assertions)]
-        if matches!(
-            std::env::var("FOOTPLATE_SHOT").as_deref(),
-            Ok("member-pair") | Ok("member-paired")
-        ) {
+        if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("member-pair") {
             this.pair_this_device("south", window, cx);
         }
         // The answered and away shots stand with a way's fields open:
@@ -4122,17 +4117,10 @@ impl Footplate {
 
     /// Enter in a field of a yard, and the button under them: the yard of
     /// this machine is added, the code goes to the yard at the address, or
-    /// the Kratos account is signed in at the edge's origin. At a yard of
-    /// another account's with no code typed, the edge is asked to open one
-    /// for the member.
+    /// the Kratos account is signed in at the edge's origin.
     pub(crate) fn submit_yard(&mut self, cx: &mut Context<Self>) {
         match self.adding.clone() {
             Some(Adding::Near) => self.add_near(cx),
-            // A yard of another account's with no code to try: its member
-            // has the edge open a pairing for them.
-            Some(Adding::Again(name)) if self.pairs_by_opening(&name, cx) => {
-                self.open_pairing(&name, cx)
-            }
             Some(Adding::Far) | Some(Adding::Again(_)) => self.pair(cx),
             Some(Adding::Hosted) | Some(Adding::SignInAgain(_)) => self.sign_in(cx),
             Some(Adding::Rename(_)) => self.rename_yard(cx),
@@ -6675,7 +6663,7 @@ fn shot_section() -> Option<Section> {
         Ok("settings-appearance") => Some(Section::Appearance),
         Ok("settings-yards") => Some(Section::Yards),
         Ok("settings-yards-rename") => Some(Section::Yards),
-        Ok("member-pair") | Ok("member-paired") => Some(Section::Yards),
+        Ok("member-pair") => Some(Section::Yards),
         Ok("settings-agents") => Some(Section::Agents),
         Ok("settings-notifications") => Some(Section::Notifications),
         Ok("settings-connection") => Some(Section::Connection),

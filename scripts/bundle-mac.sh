@@ -1,7 +1,8 @@
 #!/bin/sh
 # Builds target/Footplate.app from the release binary, for macOS only: the
-# icon's sizes are rendered with sips and packed with iconutil, which no
-# other system has. Run it after `cargo build --release`. There is no
+# icon's sizes are scaled with sips (all but the 16 and 32 pixel ones, which
+# are renders of their own) and packed with iconutil, which no other system
+# has. Run it after `cargo build --release`. There is no
 # installer: the bundle is for the machine that built it, signed ad hoc and
 # not notarized. With two arguments another binary is bundled elsewhere,
 # which the release script uses for each darwin target:
@@ -51,12 +52,22 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' 0
 trap 'exit 1' HUP INT TERM
 # iconutil goes by the directory's ending and by these names: each size in
-# points, and again at twice the pixels.
+# points, and again at twice the pixels. The rule for which picture a size
+# takes is by the pixels drawn: at 16 and 32 the line of the mark is
+# thicker, so that it does not go faint, and those are the small mark's own
+# renders (assets/footplate-small.svg), not a scaling of the master, which
+# would soften them. 64 pixels and up are the macOS frame, scaled from it.
 iconset=$scratch/footplate.iconset
 mkdir "$iconset"
+member() {
+    case "$2" in
+        16 | 32) cp "assets/icon-small-$2.png" "$iconset/$1.png" ;;
+        *) sips -z "$2" "$2" "$icon" --out "$iconset/$1.png" >/dev/null ;;
+    esac
+}
 for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$icon" --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    sips -z "$((size * 2))" "$((size * 2))" "$icon" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+    member "icon_${size}x${size}" "$size"
+    member "icon_${size}x${size}@2x" "$((size * 2))"
 done
 iconutil --convert icns --output "$app/Contents/Resources/footplate.icns" "$iconset"
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)

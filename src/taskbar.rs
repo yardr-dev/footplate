@@ -24,7 +24,8 @@ use std::path::{Path, PathBuf};
 const ICON_SIZE: u32 = 512;
 
 /// Linux desktop themes expect the installed icon in the conventional
-/// 512px hicolor directory; keep using the downscaled master there.
+/// 512px hicolor directory: the full tile (assets/footplate.svg), rendered
+/// at that size.
 pub const ICON: &[u8] = include_bytes!("../assets/icon-512.png");
 
 /// Where a person's own desktop entries and icons are: `$XDG_DATA_HOME`

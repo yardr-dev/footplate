@@ -1,4 +1,4 @@
-//! footplate's item in the Mac's menu bar: the track glyph, always
+//! footplate's item in the Mac's menu bar: the Y of its icon, always
 //! there, with the number of things that wait beside it while any do, the
 //! number the dock's icon says (dock.rs). A click opens a menu of the yards
 //! that are followed, each with what waits in it, and under them "Show
@@ -20,12 +20,12 @@
 
 use crate::theme::Look;
 
-/// The tray's mark: the track glyph, `tray-icon.svg` from yardr-design's
-/// assets rendered at 128 pixels a side, single black on transparent. On
-/// macOS it is a template image, drawn in the menu bar's foreground; on
-/// Linux it is scaled to the sizes a tray draws. White, where that is
-/// chosen, is this mark turned ([`invert`]): yardr-design draws the one
-/// mark, in black.
+/// The tray's mark: the Y of the icon with no tile,
+/// `assets/footplate-tray-symbolic.svg` rendered at 128 pixels a side,
+/// single black on transparent. On macOS it is a template image, drawn in
+/// the menu bar's foreground; on Linux it is scaled to the sizes a tray
+/// draws. White, where that is chosen, is this mark turned ([`invert`]):
+/// the style guide draws the one mark, in black.
 pub const ICON: &[u8] = include_bytes!("../assets/tray-icon.png");
 
 /// The mark decoded from its PNG: 128 pixels a side, four bytes a pixel
@@ -460,9 +460,9 @@ mod mac {
     }
 
     impl Item {
-        /// Puts the item in the menu bar, with the track glyph for the
-        /// choice `mark` and no title yet. What is chosen in its menu
-        /// goes to `chosen`.
+        /// Puts the item in the menu bar, with the Y for the choice
+        /// `mark` and no title yet. What is chosen in its menu goes to
+        /// `chosen`.
         pub fn new(chosen: async_channel::Sender<Chosen>, mark: Look) -> Option<Item> {
             let main_thread = MainThreadMarker::new()?;
             let item =
@@ -678,9 +678,9 @@ mod linux {
     }
 
     impl Item {
-        /// Offers the item to the desktop's tray, with the track glyph
-        /// for the choice `mark` and nothing said yet. What is chosen in
-        /// its menu goes to `chosen`. A desktop without a tray shows none,
+        /// Offers the item to the desktop's tray, with the Y for the
+        /// choice `mark` and nothing said yet. What is chosen in its menu
+        /// goes to `chosen`. A desktop without a tray shows none,
         /// until it has one: a bar that starts later, or again, gets the
         /// item then. Without a session bus there is none to offer it on,
         /// and no item.
@@ -763,11 +763,29 @@ mod tests {
     }
 
     #[test]
-    fn the_tray_icon_is_the_rendered_track_glyph() {
+    fn the_tray_icon_is_the_rendered_y_in_single_black() {
         // The PNG's header: its width and height after the IHDR chunk's name.
         let number = |at: usize| u32::from_be_bytes(ICON[at..at + 4].try_into().unwrap());
         assert_eq!(&ICON[12..16], b"IHDR");
         assert_eq!((number(16), number(20)), (128, 128));
+
+        // Single black: wherever a pixel is drawn at all it is black, and
+        // only its alpha says how much of it.
+        let mark = decoded().unwrap();
+        assert!(mark.pixels().all(|pixel| pixel.0[..3] == [0, 0, 0]));
+        // A Y, by where it is and is not. The SVG draws it on 1024 points a
+        // side: a stem down the middle (x 512) from y 600 to 880, which
+        // forks into two arms that run up and apart to y 160, the left one
+        // through (318, 280), the right one through (706, 280). Each point
+        // is asked of the pixel that holds it.
+        let alpha = |x: u32, y: u32| mark.get_pixel(x * 128 / 1024, y * 128 / 1024)[3];
+        for (x, y) in [(512, 740), (318, 280), (706, 280)] {
+            assert_eq!(alpha(x, y), 255, "the mark is not drawn at ({x}, {y})");
+        }
+        // Between the arms, below either side of the stem, and past its foot.
+        for (x, y) in [(512, 200), (200, 880), (824, 880), (512, 960)] {
+            assert_eq!(alpha(x, y), 0, "the mark is drawn at ({x}, {y})");
+        }
     }
 
     #[test]

@@ -60,6 +60,10 @@ make_checkout() {
     mkdir -p "$1/assets/linux"
     cp "$desktop" "$1/assets/linux/footplate.desktop"
     echo icon-512 > "$1/assets/icon-512.png"
+    # The bundle's 16 and 32 pixel sizes are files of their own, which stand
+    # in the same way.
+    echo icon-small-16 > "$1/assets/icon-small-16.png"
+    echo icon-small-32 > "$1/assets/icon-small-32.png"
     (cd "$1" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init)
 }
 
@@ -189,11 +193,17 @@ case "$1" in
         ;;
 esac
 EOF
+# sips leaves a line saying which file it scaled to how many pixels, where
+# the real one leaves the scaled picture, and iconutil logs what each member
+# of the iconset it packs holds: which picture a size was made from is what
+# a case asks of them.
 cat >"$bin/sips" <<'EOF'
 #!/bin/sh
 prev=""
 for a in "$@"; do
-    if [ "$prev" = --out ]; then echo icon >"$a"; fi
+    if [ "$prev" = -z ]; then pixels=$a; fi
+    if [ "$prev" = --out ]; then echo "${source##*/} at $pixels" >"$a"; fi
+    if [ "$a" = --out ]; then source=$prev; fi
     prev=$a
 done
 EOF
@@ -206,6 +216,10 @@ for a in "$@"; do
         [ -z "${STANDIN_STRAY:-}" ] || echo stray >"$(dirname "$a")/$STANDIN_STRAY"
     fi
     prev=$a
+done
+# The iconset is the last argument.
+for member in "$prev"/*; do
+    echo "iconset ${member##*/}: $(cat "$member")" >>"$CALLS"
 done
 EOF
 # The real tar, and with STANDIN_TAR_STRAY the Linux archive (the one made
@@ -1130,11 +1144,33 @@ bundle_asks_for_the_microphone() {
     [ -z "$(find "$tmp/$name/Footplate.app" -name '*.entitlements')" ] ||
         fail "$name: the entitlements are in the bundle"
 }
+# The icon of the bundle takes the small mark's own picture at 16 and 32
+# pixels, which is for 16 points, for 16 points at twice the pixels and for
+# 32 points, and the master scaled to every size from 64 pixels up: the ten
+# sizes iconutil goes by, and no other.
+bundle_icon_sizes() {
+    for member in 'icon_16x16.png: icon-small-16' \
+        'icon_16x16@2x.png: icon-small-32' \
+        'icon_32x32.png: icon-small-32' \
+        'icon_32x32@2x.png: icon.png at 64' \
+        'icon_128x128.png: icon.png at 128' \
+        'icon_128x128@2x.png: icon.png at 256' \
+        'icon_256x256.png: icon.png at 256' \
+        'icon_256x256@2x.png: icon.png at 512' \
+        'icon_512x512.png: icon.png at 512' \
+        'icon_512x512@2x.png: icon.png at 1024'; do
+        grep -q -x -F -- "iconset $member" "$calls" ||
+            fail "$name: the iconset lacks [$member]: $(grep '^iconset ' "$calls")"
+    done
+    [ "$(grep -c '^iconset ' "$calls")" = 10 ] ||
+        fail "$name: the iconset is not the ten sizes: $(grep '^iconset ' "$calls")"
+}
 bundle_run adhoc ""
 [ "$(steps)" = codesign\ sign ] || fail "$name: the calls were: $(cat "$calls")"
 want_line "^codesign --force $entitled --sign - /.*/Footplate\\.app\$"
 entitled_apps 1
 bundle_asks_for_the_microphone
+bundle_icon_sizes
 lack "--options"
 bundle_run signed "$signer"
 [ "$(steps)" = "$(printf 'codesign sign\ncodesign verify')" ] || fail "$name: the calls were: $(cat "$calls")"
@@ -1142,6 +1178,7 @@ want_line "^codesign --force --options runtime --timestamp $entitled --sign $sig
 want "codesign --verify --strict /"
 entitled_apps 1
 bundle_asks_for_the_microphone
+bundle_icon_sizes
 lack "xcrun"
 
 echo "test-release.sh: pass"

@@ -436,14 +436,42 @@ note's file is the record.
 
 ## The icon
 
-The icon is a painting by mckean: a navy tank engine with brass fittings,
-head-on, a speech bubble on its buffer beam, a yard at dusk behind.
-`assets/icon.png` is its master, 1024 pixels square: the rounded square is
-824 wide in the middle of it, with the 100 pixels of margin Apple's template
-has, and the corners are transparent. The window and macOS dock load this
-PNG directly. Linux uses a 512px copy for its conventional hicolor icon path:
+The icon is a capital Y drawn as a wye, the junction where a track forks in
+two: yard rust (`#D3602F`) on a dusk (`#161718`) tile. It comes from yardr's
+style guide, and it is never redrawn: its cuts are square. The SVGs in
+`assets/` are the source and the PNGs are rendered from them, so a size wanted
+later is rendered from the SVG and not scaled from a PNG. Which file goes
+where:
 
-    sips -z 512 512 assets/icon.png --out assets/icon-512.png
+- `icon.png`, 1024 pixels, from `footplate-macos.svg`: the macOS frame, the
+  tile 824 wide in the middle with the 100 pixels of margin Apple's grid
+  has, and the corners transparent. It is the dock's icon when the program
+  starts, the bundle's icns from 64 pixels up, and the picture the window
+  shows of itself (the About card and the away screen) on every system.
+- `icon-512.png`, 512 pixels, from `footplate.svg`: the full tile, edge to
+  edge and rounded at 228 of 1024. It is Linux's: `footplate.png` of the
+  archive, and the icon `src/taskbar.rs` installs.
+- `icon-small-16.png` and `icon-small-32.png`, from `footplate-small.svg`:
+  the full tile with the line 112 thick where the others have 80, so that it
+  does not go faint. The bundle's icns takes them at 16 and 32 pixels.
+- `tray-icon.png`, 128 pixels, from `footplate-tray-symbolic.svg`: the Y
+  alone in one colour, black on transparent. The menu bar item and the tray
+  item draw it, and the system recolours it, or the program turns it white
+  where the settings choose that (`src/tray.rs`).
+
+The small tile is for the pixels drawn, 16 and 32, whatever the size in
+points: the icns takes it for 16 points, for 16 points at twice the pixels
+and for 32 points, and the macOS frame for 32 points at twice the pixels
+(64) and every size above it (`scripts/bundle-mac.sh`). The style guide's
+light tile is for light surfaces and footplate draws none, so it is not here.
+`rsvg-convert` (librsvg) renders the PNGs, and what it renders is the style
+guide's own PNGs, pixel for pixel (`icon-512.png` is that file):
+
+    rsvg-convert -w 1024 -h 1024 assets/footplate-macos.svg -o assets/icon.png
+    rsvg-convert -w 512 -h 512 assets/footplate.svg -o assets/icon-512.png
+    rsvg-convert -w 16 -h 16 assets/footplate-small.svg -o assets/icon-small-16.png
+    rsvg-convert -w 32 -h 32 assets/footplate-small.svg -o assets/icon-small-32.png
+    rsvg-convert -w 128 -h 128 assets/footplate-tray-symbolic.svg -o assets/tray-icon.png
 
 It stands in the window, and in the dock or the taskbar. gpui's window
 options have no icon, so the program sees to it when it starts

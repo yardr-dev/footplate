@@ -320,7 +320,8 @@ Setup, release and tests:
 
 - Build output ignored by `.gitignore`: generated files, not source to edit.
 - `Cargo.lock`: committed; cargo owns it, never hand-edit.
-- `assets/*.png`: rendered masters (see `docs/building.md` "The icon",
-  `scripts/bundle-mac.sh`); new marks come from yardr-design.
+- `assets/*.png` and the `assets/footplate*.svg` they are rendered from:
+  masters (see `docs/building.md` "The icon", `scripts/bundle-mac.sh`); new
+  marks come from yardr's style guide, yardr-design.
 - The `eyes` rule in `.yardr/depot.md` still applies: a change that
   shows reads the yardr design system first.

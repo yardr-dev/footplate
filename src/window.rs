@@ -59,7 +59,9 @@ use state::{
 use ui::small_button;
 use words::count_words;
 
-/// The application's icon, from the 1024px master in assets/icon.png.
+/// The application's icon: the macOS frame (assets/footplate-macos.svg)
+/// rendered at 1024 pixels, in assets/icon.png. It is the dock's on macOS,
+/// and the picture the window shows of itself on every system.
 pub const ICON: &[u8] = include_bytes!("../assets/icon.png");
 
 actions!(

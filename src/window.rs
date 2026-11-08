@@ -23939,6 +23939,42 @@ yardr.dev
         assert!(edge.proxied() > 0);
     }
 
+    /// The pairing code of the typed-code test in each join it could cross
+    /// the edge in: as it is typed, as the yard writes it, and whole (what
+    /// the PAKE is run on), in small letters and in capitals. Each is eight
+    /// characters or more because what the edge reads of a pairing is
+    /// base64 of random bytes: a PAKE message of 87 characters holds one of
+    /// the code's four-letter halves about twice in 100,000 and one of
+    /// these fewer than once in 10^12, so half of the code in a body is
+    /// chance and the whole of it is not.
+    const CODE_JOINS: [&str; 6] = [
+        "abcd efgh",
+        "abcd-efgh",
+        "abcdefgh",
+        "ABCD EFGH",
+        "ABCD-EFGH",
+        "ABCDEFGH",
+    ];
+
+    /// The first of `secrets` that a body of `pairs` holds, with the body.
+    /// The pairs are the bodies the edge read of the pairings that crossed
+    /// it (`Router::pairs`): each request, and the yard's answer to it.
+    fn first_held<'a>(
+        pairs: &'a [(String, String)],
+        secrets: &[&'a str],
+    ) -> Option<(&'a str, &'a str)> {
+        for (asked, answered) in pairs {
+            for body in [asked, answered] {
+                for secret in secrets {
+                    if body.contains(secret) {
+                        return Some((secret, body));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Pairing a hosted yard of the list again by a typed code, with no key
     /// of the yard's in what was typed: a yard that holds no channel key
     /// takes no run of it, and that is said, with nothing plain sent and
@@ -24021,7 +24057,7 @@ yardr.dev
         });
         // The run's first message alone went, and no body of it holds the code.
         assert_eq!(edge.seen("POST /user/pair ").len(), 1);
-        assert!(!edge.pairs()[0].0.contains("abcd"));
+        assert_eq!(first_held(&edge.pairs()[..1], &CODE_JOINS), None);
         assert!(far.pairing_open());
 
         // The yard holds its key now. A third segment naming another
@@ -24067,12 +24103,9 @@ yardr.dev
             v.settings.yard("south").unwrap().sealed(v.kept.as_deref())
         }));
         // The edge read neither the code nor the token in any body of it.
-        for (asked, answered) in edge.pairs() {
-            for secret in [kept.as_str(), "abcd", "ABCD", "efgh", "EFGH"] {
-                assert!(!asked.contains(secret), "{secret} in {asked}");
-                assert!(!answered.contains(secret), "{secret} in {answered}");
-            }
-        }
+        let mut secrets = CODE_JOINS.to_vec();
+        secrets.push(kept.as_str());
+        assert_eq!(first_held(&edge.pairs(), &secrets), None);
         // The yard names it from here on, and every call says it.
         assert_eq!(
             view.read_with(cx, |v, _| v
@@ -24088,6 +24121,37 @@ yardr.dev
             "{}",
             edge.last_request()
         );
+    }
+
+    /// What the typed-code test finds in the bodies the edge kept: half of
+    /// the code now and then in base64 of random bytes (an `EFGH` in a PAKE
+    /// message failed that test once) is chance and passes, and the code
+    /// planted whole, in any of its joins, in a request or in an answer, is
+    /// found.
+    #[test]
+    fn half_of_the_code_in_random_base64_is_chance_and_the_whole_is_found() {
+        const HEAD: &str = "Fi21sLbVyp7EmQgVOp_KQpN9fUDYTwNM5bMFUtis";
+        const TAIL: &str = "EGWlNj20_rMUscusxOZWIq3sHEqasQHy96q0FRJBiuI";
+        // The first message of a run as the device posts it: 87 characters
+        // of base64url when `at` is a half of the code.
+        let body = |at: &str| format!(r#"{{"pake":{{"msg":"{HEAD}{at}{TAIL}","step":"start"}}}}"#);
+
+        for half in ["abcd", "ABCD", "efgh", "EFGH"] {
+            let held = [(body(half), body(half))];
+            assert_eq!(first_held(&held, &CODE_JOINS), None, "{half}");
+        }
+        for join in CODE_JOINS {
+            let (planted, bare) = (body(join), body(""));
+            let asked = [(planted.clone(), bare.clone())];
+            let answered = [(bare, planted.clone())];
+            for held in [&asked, &answered] {
+                assert_eq!(
+                    first_held(held, &CODE_JOINS),
+                    Some((join, planted.as_str()))
+                );
+            }
+        }
+        assert!(CODE_JOINS.iter().all(|join| join.len() >= 8));
     }
 
     /// Pairing a hosted yard again by its sealed QR text: the fourth

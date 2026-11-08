@@ -7380,6 +7380,56 @@ mod tests {
         assert_eq!(code, "no_door");
     }
 
+    /// The pairing code of the tests below in every join it can take on a
+    /// wire: as the yard writes it, as a person types it (a space) and whole,
+    /// as the PAKE runs on it, each in capitals and in small letters. What
+    /// crossed the edge is looked through for these and not for the code's
+    /// halves: given four characters, a few hundred random ones of base64
+    /// hold them about once in 10^4 runs of the suite, where given eight or
+    /// more a message holds them about once in 10^12. No half of the code
+    /// crosses a wire alone: it goes whole or not at all.
+    const CODE_JOINS: [&str; 6] = [
+        "K7QM-2XPD",
+        "K7QM 2XPD",
+        "K7QM2XPD",
+        "k7qm-2xpd",
+        "k7qm 2xpd",
+        "k7qm2xpd",
+    ];
+
+    /// Whether `text` (a head, or the body of a pairing's request or answer
+    /// as the edge read it) holds the code in any of its joins.
+    fn holds_code(text: &str) -> bool {
+        CODE_JOINS.into_iter().any(|join| text.contains(join))
+    }
+
+    /// The look for the code finds it in every join, and takes four letters
+    /// of it for nothing: a message of random base64 holds those by chance,
+    /// about once in 10^4 runs of the two tests below.
+    #[test]
+    fn the_code_is_found_whole_in_what_crossed_and_four_letters_of_it_are_not() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+        // As long as a PAKE message (87 characters of base64url), holding
+        // none of the code.
+        let message = B64.encode(
+            (0..65u8)
+                .map(|i| i.wrapping_mul(37).wrapping_add(11))
+                .collect::<Vec<_>>(),
+        );
+        let with = |piece: &str| {
+            let (head, tail) = message.split_at(40);
+            format!(r#"{{"msg":"{head}{piece}{tail}"}}"#)
+        };
+        assert!(!holds_code(&message), "{message}");
+        for join in CODE_JOINS {
+            assert!(join.len() >= 8, "{join:?}");
+            assert!(holds_code(&with(join)), "{join:?}");
+        }
+        for half in ["K7QM", "2XPD", "k7qm", "2xpd"] {
+            assert!(!holds_code(&with(half)), "{half:?}");
+        }
+    }
+
     /// A device pairs sealed through the edge and calls sealed, whether
     /// the pairing had the yard's key from its QR or a typed code ran the
     /// PAKE: the code and the token it buys cross readable nowhere, no call
@@ -7434,15 +7484,15 @@ mod tests {
                 .chain(edge.seen("POST /user/e2e "))
             {
                 assert!(!head.contains(&paired.token), "{head}");
-                assert!(!head.contains("K7QM"), "{head}");
+                assert!(!holds_code(&head), "{head}");
             }
             let kept = edge.pairs();
             assert_eq!(kept.len(), if typed { 3 } else { 1 }, "typed: {typed}");
             for (asked, answered) in &kept {
+                assert!(!holds_code(asked), "{asked}");
+                assert!(!holds_code(answered), "{answered}");
                 for secret in [
                     paired.token.as_str(),
-                    "K7QM",
-                    "2XPD",
                     &crate::e2e::channel_public(&device.public),
                     &crate::e2e::channel_public(&device.private),
                     &crate::e2e::channel_public(&yard_key),
@@ -7526,7 +7576,13 @@ mod tests {
             assert!(message.contains("the code is still good"), "{message}");
             let kept = edge.pairs();
             assert_eq!(kept.len(), 1);
-            assert!(!kept[0].0.contains("K7QM") && !kept[0].0.contains("code"));
+            // `"code"` with its quotes is a plain redemption's field: four
+            // letters stand in random base64, a quote does not.
+            assert!(
+                !holds_code(&kept[0].0) && !kept[0].0.contains("\"code\""),
+                "{}",
+                kept[0].0
+            );
             assert_eq!(edge.seen("POST /user/pair ").len(), 1);
             assert!(yard.pairing_open());
             assert_eq!(yard.devices(), vec![TOKEN.to_string()]);

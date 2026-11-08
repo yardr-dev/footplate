@@ -21298,6 +21298,29 @@ yardr.dev
         view.read_with(cx, |v, _| v.yard_said.clone().unwrap_or_default())
     }
 
+    /// The message of a pairing that ended and the yards list's row of the
+    /// yard `name` agree on `sealed`: both say its calls are sealed to this
+    /// yard, or neither does. The row is drawn from `Yard::sealed`; the
+    /// message has its sentence where the pairing's calls are sealed.
+    fn assert_sealed_alike(
+        view: &Entity<Footplate>,
+        cx: &mut VisualTestContext,
+        name: &str,
+        sealed: bool,
+    ) {
+        let said = yard_said(view, cx);
+        assert!(said.starts_with("Paired:"), "{said}");
+        assert_eq!(
+            said.contains("Its calls are sealed to this yard."),
+            sealed,
+            "{said}"
+        );
+        let row = view.read_with(cx, |v, _| {
+            v.settings.yard(name).unwrap().sealed(v.kept.as_deref())
+        });
+        assert_eq!(row, sealed, "{said}");
+    }
+
     fn which_yard(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> String {
         view.read_with(cx, |v, _| v.which_yard())
     }
@@ -23923,11 +23946,7 @@ yardr.dev
         wait(cx, "the pairing", |cx| {
             yard_said(&view, cx).starts_with("Paired:")
         });
-        assert!(
-            yard_said(&view, cx).contains("Its calls are sealed to this yard."),
-            "{}",
-            yard_said(&view, cx)
-        );
+        assert_sealed_alike(&view, cx, "south", true);
         wait(cx, "the yard again", |cx| {
             texts(&view, cx) == ["From afar."] && view.read_with(cx, |v, _| v.down.is_none())
         });
@@ -24031,11 +24050,7 @@ yardr.dev
         wait(cx, "the sealed pairing", |cx| {
             yard_said(&view, cx).starts_with("Paired:")
         });
-        assert!(
-            yard_said(&view, cx).contains("Its calls are sealed to this yard."),
-            "{}",
-            yard_said(&view, cx)
-        );
+        assert_sealed_alike(&view, cx, "south", true);
         // The token and its channel key stand beside each other, and
         // the yard pinned the key the pairing proved.
         let kept = yard::read_token(&token).unwrap();
@@ -24171,7 +24186,7 @@ yardr.dev
         wait(cx, "the sealed member pairing", |cx| {
             yard_said(&view, cx).starts_with("Paired:")
         });
-        assert!(yard_said(&view, cx).contains("Its calls are sealed to this yard."));
+        assert_sealed_alike(&view, cx, "south", true);
         wait(cx, "the member yard's conversations", |cx| {
             texts(&view, cx) == ["From afar."]
         });
@@ -27438,6 +27453,9 @@ yardr.dev
         assert_eq!(view.read_with(cx, |v, _| v.down.clone()), None);
         assert!(!settings_open(&view, cx));
         assert_eq!(open_yard(&view, cx), "far");
+        // Its calls are plain, and neither the message nor the list's row
+        // says otherwise.
+        assert_sealed_alike(&view, cx, "far", false);
         let kept = Settings::read(&file);
         assert_eq!(
             kept.yards[1],
@@ -27454,6 +27472,55 @@ yardr.dev
         // is kept here beside the token.
         assert_eq!(far.pinned_key("yardr-dev-paired-1"), None);
         assert!(!yard::key_path(&dir.path().join("footplate/yard-far.token")).exists());
+    }
+
+    /// A yard at an address paired by the QR's four fields, key and all: the
+    /// code is redeemed sealed and the key kept beside the token, but a yard
+    /// reached direct is called plain, so the message says nothing of sealed
+    /// calls, as the list's row says nothing of them. The pairings of a
+    /// hosted yard, which is called sealed, say both.
+    #[gpui::test]
+    fn no_yard_pairing_a_yard_at_an_address_by_its_key_says_nothing_of_sealed_calls(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let token = dir.path().join("footplate/yard-far.token");
+        let far = Yard::start_tcp();
+        a_far_yard_of_jo(&far);
+        let (view, cx) = no_yard(dir.path(), cx);
+        click_on(cx, "way far");
+        far.pair("K7QM-2XPD");
+        // The QR's text whole, with its third field empty: a yard reached
+        // direct has no edge to name one of an account's yards.
+        let qr = format!("{}#K7QM-2XPD##{}", far.address(), far.channel_public());
+        type_in(&view, cx, "far", &qr, "");
+        click_on(cx, "yard pair");
+        wait(cx, "the pairing", |cx| {
+            yard_said(&view, cx).starts_with("Paired:")
+        });
+        assert_sealed_alike(&view, cx, "far", false);
+        // The pairing was sealed all the same: the yard pinned this device's
+        // key, and the yard's is kept beside the token.
+        let kept = yard::read_token(&token).unwrap();
+        assert!(far.pinned_key(&kept).is_some());
+        let channel = yard::channel_for(&token, &api::Address::parse(far.address()).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            channel.yard_public,
+            crate::e2e::parse_channel_public(&far.channel_public()).unwrap()
+        );
+        // The yard is opened with the device's token in the clear, as a
+        // yard reached direct is.
+        wait(cx, "the yard that was paired", |cx| {
+            texts(&view, cx) == ["From afar."]
+        });
+        assert!(
+            far.last_request()
+                .contains(&format!("Authorization: Bearer {kept}\r\n")),
+            "{}",
+            far.last_request()
+        );
     }
 
     /// From where there is no yard, a pairing's http address off this

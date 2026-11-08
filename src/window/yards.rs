@@ -981,9 +981,13 @@ impl Footplate {
                         paired.device,
                         paired.user,
                         paired.yard,
-                        match pinned {
-                            Some(_) => " Its calls are sealed to this yard.",
-                            None => "",
+                        // A yard reached direct pins a key as well (a QR's
+                        // fourth field) and is called plain: calls are
+                        // sealed to a hosted yard that pinned one alone,
+                        // which is `Yard::sealed`, and the yards list's row.
+                        match (&session, &pinned) {
+                            (Some(_), Some(_)) => " Its calls are sealed to this yard.",
+                            _ => "",
                         }
                     ))
                 })

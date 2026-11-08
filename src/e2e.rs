@@ -20,7 +20,10 @@
 //! keeps one sliding window of the sequences it opened in a direction,
 //! and holds a call whole only once its final record has opened. This
 //! module speaks bytes only: which calls are sealed, and what a refusal
-//! is said as, are `api.rs`'s.
+//! is said as, are `api.rs`'s. The yard's half of the two handshakes
+//! stands beside the device's for the stand-in yard of the tests' alone:
+//! it is built where `fake.rs` is (tests and debug builds), and a
+//! release build carries none of it.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -142,6 +145,7 @@ fn initiator(device_private: &[u8; 32], yard_public: &[u8; 32]) -> Result<Handsh
         .map_err(|err| snow_err("a handshake could not be begun", err))
 }
 
+#[cfg(any(test, debug_assertions))]
 fn responder(yard_private: &[u8; 32]) -> Result<HandshakeState> {
     let params: snow::params::NoiseParams = PATTERN
         .parse()
@@ -195,6 +199,7 @@ impl PairingOpening {
 /// A device pairing's first message as the yard opened it: the code it
 /// carried and the device key it proved, as [`channel_public`] writes
 /// it. The yard's half, and the stand-in yard of the tests'.
+#[cfg(any(test, debug_assertions))]
 pub struct PairingHandshake {
     hs: HandshakeState,
     pub code: String,
@@ -205,6 +210,7 @@ pub struct PairingHandshake {
 /// channel key. A message that does not open — made to another yard's
 /// key, or no handshake at all — is refused here, before any code is
 /// read, so it is no try against the pairing.
+#[cfg(any(test, debug_assertions))]
 pub fn open_pairing(yard_private: &[u8; 32], first: &[u8]) -> Result<PairingHandshake> {
     let mut hs = responder(yard_private)?;
     let mut payload = vec![0u8; 65535];
@@ -225,6 +231,7 @@ pub fn open_pairing(yard_private: &[u8; 32], first: &[u8]) -> Result<PairingHand
     })
 }
 
+#[cfg(any(test, debug_assertions))]
 impl PairingHandshake {
     /// Seals `payload` as the handshake's second message: the one
     /// answer that holds the device's token.
@@ -292,6 +299,7 @@ impl ChannelOpening {
 /// device key it proved, as [`channel_public`] writes it, and the
 /// state its answer is sealed with. The yard's half, and the stand-in
 /// yard of the tests'.
+#[cfg(any(test, debug_assertions))]
 pub struct ChannelHandshake {
     hs: HandshakeState,
     pub device_key: String,
@@ -300,6 +308,7 @@ pub struct ChannelHandshake {
 /// Opens the first message of a channel handshake to the yard's
 /// channel key. A message made to another yard's key, or no handshake
 /// at all, is refused here, before any device is looked for.
+#[cfg(any(test, debug_assertions))]
 pub fn open_channel(yard_private: &[u8; 32], first: &[u8]) -> Result<ChannelHandshake> {
     let mut hs = responder(yard_private)?;
     let mut payload = vec![0u8; 65535];
@@ -318,6 +327,7 @@ pub fn open_channel(yard_private: &[u8; 32], first: &[u8]) -> Result<ChannelHand
     })
 }
 
+#[cfg(any(test, debug_assertions))]
 impl ChannelHandshake {
     /// Seals the session tag as the handshake's second message and
     /// answers the session it founds: the yard opens under the

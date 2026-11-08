@@ -108,11 +108,13 @@
 # yard row open on a hook delivery whose photo the yard holds, with a
 # document it did not take under the photo), `screen` (the
 # yardmaster's screen open over the window, as its Screen control
-# opens it), `screen-hosted` (that card on a hosted yard, saying
-# the screen is read on the yard's machine, with no Screen offered),
-# `screen-refused` (that card on a yard that refuses the read in
-# many words, which wrap inside it) and `screen-wide` (that card on a
-# pane wider than the window, scrolled to the end of its lines).
+# opens it), `screen-hosted` (that card on a hosted yard from before
+# it served the screen down the link from its edge, which refuses the
+# read as such, saying the screen is read on the yard's machine, with
+# no Screen offered), `screen-refused` (that card on a yard that
+# refuses the read in many words, which wrap inside it) and
+# `screen-wide` (that card on a pane wider than the window, scrolled to
+# the end of its lines).
 # With no state the first
 # screen is shot, as ever.
 # The switch's yardr answers canned JSON, so the status row draws the

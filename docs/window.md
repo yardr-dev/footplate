@@ -101,12 +101,14 @@ there. A pane wider than the card (the card is the window's width at most)
 opens at its left edge and scrolls sideways, with the wheel or a swipe, to
 the end of its longest line; Refresh leaves you where you are sideways. A
 screen can show what an agent printed, a secret among it, so the
-yard reads it to no request that comes down the link from its edge: a hosted
-yard is not asked and offers no Screen, since the screen is read on the
-yard's machine. A yard reached any other way that refuses the read as such
-has the card say the same, in no red, and is asked no more; its other
-refusals are shown as they come, in red, wrapped to the card's width and
-scrolled where the window is too short for them.
+yard reads it over https or on its own machine, and down the link from its
+edge to the operator's paired device alone: a hosted yard is asked for it
+like any other. A yard that refuses the read as a request come down the
+link, as one from before it served the screen there does, has the card say
+the screen is read on the yard's machine, in no red, and is asked no more;
+the Screen goes from the window. The yard's other refusals are shown as they
+come, in red, wrapped to the card's width and scrolled where the window is
+too short for them.
 
 A conversation opens on its newest fifty mails. Towards its top the fifty
 before are read and put in above, and the mail in view stays where it is;

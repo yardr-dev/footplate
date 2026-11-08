@@ -38,8 +38,10 @@ pub(crate) enum Shown {
     /// The yard is asked for it.
     Asked,
     Here(ansi::Screen),
-    /// The yard reads no screen down the link from its edge: it is not
-    /// asked, or it refused as much. Nothing is wrong, so nothing is red.
+    /// The yard refused a screen as a request come down the link from its
+    /// edge, as one from before it served the screen there does: it is read
+    /// on the yard's machine, and the yard is asked no more. Nothing is
+    /// wrong, so nothing is red.
     OnTheYard,
     /// Why there is none to show, in a line.
     Not(String),
@@ -212,9 +214,8 @@ impl Footplate {
     /// Reads the open screen again: the refresh, and the open. An answer
     /// for a read that no longer stands current is dropped: a shut
     /// screen stays shut, and a refresh keeps its own answer. A yard that
-    /// reads no screen down the link from its edge is not asked, and one
-    /// that refuses as much is not asked again: the card says where the
-    /// screen is read.
+    /// refused a screen as a request come down the link from its edge is not
+    /// asked again: the card says where the screen is read.
     pub(crate) fn read_screen(&mut self, cx: &mut Context<Self>) {
         let Some(open) = self.screen_open.as_mut() else {
             return;
@@ -253,10 +254,11 @@ impl Footplate {
                         this.screen_scroll.scroll_to_bottom();
                         Shown::Here(ansi::parse(&screen.screen))
                     }
-                    // However the client came by the yard, it came down
-                    // the link from the edge: no Screen is offered from
-                    // here, and the refusal's advice is not shown, since
-                    // the device did nothing wrong.
+                    // A yard from before it served the screen down the
+                    // link from its edge, however the client came by it:
+                    // no Screen is offered from here, and the refusal's
+                    // advice is not shown, since the device did nothing
+                    // wrong.
                     Err(err) if model::screen_over_the_link(&err) => {
                         if let Some(model) = this.model.as_mut() {
                             model.screen_refused_down_the_link();

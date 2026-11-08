@@ -1279,18 +1279,18 @@ impl Footplate {
                 // the window, as its Screen control does: the yard
                 // holds the shot's bytes, and they show when they
                 // come. The screen-hosted shot opens it the same
-                // way: its yard is a hosted one, so the card says
-                // the screen is read on the yard's machine, and the
-                // yard is asked nothing. After the model stands, so
-                // the read sees it: posed earlier, the hosted card
-                // would ask the yard. The screen-refused shot opens
-                // it too, and its yard refuses the read in many
-                // words, which the card shows in red. So does the
-                // screen-wide shot, whose pane is wider than the window,
-                // and which stands it scrolled to the end of its lines,
-                // as a swipe to the right would: past the end, where the
-                // layout stops, as the page shot above. A debug
-                // build's alone, as above, and a unix one's.
+                // way: its yard is a hosted one from before the
+                // yard served the screen down the link, so it
+                // refuses the read as such, and the card says the
+                // screen is read on the yard's machine. The
+                // screen-refused shot opens it too, and its yard
+                // refuses the read in many words, which the card
+                // shows in red. So does the screen-wide shot, whose
+                // pane is wider than the window, and which stands it
+                // scrolled to the end of its lines, as a swipe to the
+                // right would: past the end, where the layout stops,
+                // as the page shot above. A debug build's alone, as
+                // above, and a unix one's.
                 #[cfg(all(debug_assertions, unix))]
                 if matches!(
                     std::env::var("FOOTPLATE_SHOT").as_deref(),

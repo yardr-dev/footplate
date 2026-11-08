@@ -96,10 +96,11 @@ use crate::yard::Env;
 /// open on a hook delivery whose photo the yard holds, with a document it
 /// did not take under the photo, the yardmaster's screen open over
 /// the window, as its Screen control opens it, that card on a
-/// hosted yard, saying the screen is read on the yard's machine, with
-/// no Screen offered, that card on a yard that refuses the read in
-/// many words, which wrap inside it, and that card on a pane wider than the
-/// window, scrolled to the end of its lines.
+/// hosted yard from before the yard served the screen down the link from
+/// its edge, which refuses the read as such, saying the screen is read on
+/// the yard's machine, with no Screen offered, that card on a yard that
+/// refuses the read in many words, which wrap inside it, and that card on a
+/// pane wider than the window, scrolled to the end of its lines.
 /// The stopped yard answers nothing, as the refused one answers nowhere:
 /// both open on a yard that is down, as the posed setup does. The yard at
 /// an address is opened from the settings the shot script writes; the
@@ -231,6 +232,12 @@ const SCREEN_WIDE_SHOT: &str = include_str!("fixtures/screen-wide.ansi");
 /// The overlay the `screen` state opens with: the session it reads, one
 /// of the shot yard's crew.
 pub(crate) const SCREEN_OPEN: &str = "yardmaster";
+
+/// What a yard from before it served a screen down the link from its edge
+/// says to one asked of it there, as it worded it: the `screen-hosted`
+/// state's answer, which the card answers with where the screen is read, in
+/// no red.
+const SCREEN_OVER_THE_LINK: &str = "a session's screen is not read over the link: this request came down the link from the edge. Read it on the yard's machine. The edge saw the device's token with it: remove the device and add it again (yardr user device rm).";
 
 /// What the yard says to a screen asked of it in plain HTTP from another
 /// machine, as it words it: the `screen-refused` state's answer, a refusal
@@ -449,7 +456,9 @@ fn stand_voice() -> Talking {
 /// shot opens the hosted yard south through an edge that no longer knows its
 /// session, so the window opens on the away screen of a yard that is signed
 /// out; the screen-hosted shot opens that same yard through an edge that
-/// still knows it, so the window opens on the yard, with no Screen offered.
+/// still knows it, so the window opens on the yard, and the yard's refusal of
+/// the screen (it is one from before the screen came down the link) leaves
+/// the window with no Screen offered.
 /// The away shot opens the yard far at its address with a device the yard no
 /// longer knows, so the window opens on the away screen that offers to pair
 /// again, with a way's fields open.
@@ -1168,7 +1177,8 @@ fn populate(yard: &Yard, state: &str) {
         // outside and the member one, the notice's, whose flows view
         // does not answer, the
         // screen's, whose session's screen opens over it, the
-        // hosted screen's, whose card opens over it with no call, the
+        // hosted screen's, whose card opens over it and learns from the
+        // yard's refusal that the screen is read on its machine, the
         // refused screen's, whose card opens over it with the
         // yard's long refusal in red, the wide screen's, whose card
         // opens over it on a pane wider than the window, and the voice
@@ -1267,6 +1277,16 @@ fn populate(yard: &Yard, state: &str) {
                 yard.answer(
                     "SessionScreen",
                     &json!({"result": {"screen": SCREEN_WIDE_SHOT}}).to_string(),
+                );
+            }
+            // The refusal of a hosted yard from before the screen came
+            // down the link, which the card answers with where the
+            // screen is read.
+            if state == "screen-hosted" {
+                yard.answer(
+                    "SessionScreen",
+                    &json!({"error": {"code": "error", "message": SCREEN_OVER_THE_LINK}})
+                        .to_string(),
                 );
             }
             // The yard's refusal of a screen asked in plain HTTP, which
@@ -3477,9 +3497,11 @@ mod tests {
                 }
                 "screen-hosted" => {
                     // The yardmaster's six mails, as the window opens
-                    // them past the edge: through it the state says the
-                    // screen is read on the yard's machine, so the card
-                    // the shot opens asks nothing.
+                    // them past the edge: through it the state offers the
+                    // screen, and the yard, one from before the screen
+                    // came down the link, refuses the card the shot
+                    // opens in the words that say it is read on its
+                    // machine.
                     assert!(loaded.asks.open.is_empty(), "{state}");
                     let letters = yard.client().conversation("jo", "yardmaster", 0).unwrap();
                     assert_eq!(letters.len(), 6, "{state}");
@@ -3493,7 +3515,18 @@ mod tests {
                     )
                     .unwrap();
                     assert_eq!(hosted.me, "jo", "{state}");
-                    assert!(hosted.screen_on_the_yard, "{state}");
+                    assert!(!hosted.screen_on_the_yard, "{state}");
+                    let Err(err) = edge
+                        .client_with(crate::fake::TOKEN, crate::fake::SESSION)
+                        .session_screen(SCREEN_OPEN)
+                    else {
+                        panic!("{state}: the screen was read");
+                    };
+                    assert!(
+                        matches!(&err, crate::api::Error::Refused { message, .. } if message == SCREEN_OVER_THE_LINK),
+                        "{state}: {err:?}"
+                    );
+                    assert!(crate::model::screen_over_the_link(&err), "{state}");
                 }
                 "screen-wide" => {
                     // The pane the overlay opens with is 200 columns wide,

@@ -13515,17 +13515,24 @@ yardr.dev
     /// A hosted yard is not asked for its grants, which it serves down no
     /// link from its edge: not at the start, and not by opening the row.
     /// No notice is raised, and the row and the pane say the grants are
-    /// read on the yard's machine. It reads no session's screen down that
-    /// link either: the conversation's header carries no Screen, and one
-    /// opened regardless asks nothing and says where the screen is read.
+    /// read on the yard's machine. It serves a session's screen down that
+    /// link to the operator's paired device, so the conversation's header
+    /// carries the Screen and the yard is asked for it through the edge. One
+    /// from before that refuses the read so: the card then says where the
+    /// screen is read, the refresh asks no more, and the Screen goes from
+    /// the header.
     #[gpui::test]
-    fn a_hosted_yard_is_asked_for_neither_its_grants_nor_a_screen_and_says_where_they_are_read(
+    fn a_hosted_yard_is_asked_for_a_screen_and_not_its_grants_and_a_refusal_says_where_the_screen_is_read(
         cx: &mut TestAppContext,
     ) {
         use crate::fake::{Router, SESSION, TOKEN};
 
         let far = Yard::start_tcp();
         a_yard_of_jo(&far);
+        far.answer(
+            "SessionScreen",
+            &json!({"result": {"screen": "\u{1b}[1myardmaster\u{1b}[0m\n❯ "}}).to_string(),
+        );
         let edge = Router::start(&far, SESSION);
         cx.update(|cx| {
             input::bind_keys(cx);
@@ -13544,8 +13551,57 @@ yardr.dev
             assert!(model.is_operator());
             assert!(model.grants_on_the_yard());
             assert!(model.grant_records().is_empty());
+            assert!(!model.screen_on_the_yard());
+            assert_eq!(
+                model.screen_for_crew("yardmaster"),
+                Some("yardmaster".to_string())
+            );
         });
         assert_eq!(notice(&view, cx), "");
+
+        // The operator's conversation with the yardmaster is drawn with
+        // its state beside the name and the Screen at the header's edge, as
+        // on the yard's own machine, and the Screen asks the yard through
+        // the edge.
+        assert!(drawn(cx, "conversation state"));
+        assert!(drawn(cx, "talk screen yardmaster"));
+        click_on(cx, "talk screen yardmaster");
+        wait(cx, "the hosted yard's screen", |cx| {
+            screen_of(&view, cx) == "2 lines"
+        });
+        assert_eq!(
+            far.asked("SessionScreen"),
+            [json!({"session": "yardmaster"})]
+        );
+        // A hosted yard from before the screen came down the link refuses
+        // the read so: the card says where the screen is read, in no red,
+        // and the refresh asks no more.
+        far.answer(
+            "SessionScreen",
+            &json!({"error": {"code": "error", "message": "a session's screen is not read over the link: this request came down the link from the edge. Read it on the yard's machine. The edge saw the device's token with it: remove the device and add it again (yardr user device rm)."}}).to_string(),
+        );
+        click_on(cx, "screen refresh");
+        wait(cx, "the screen read on the yard's machine", |cx| {
+            screen_of(&view, cx) == model::SCREEN_ON_THE_YARD
+        });
+        assert!(drawn(cx, "screen on the yard"));
+        assert_eq!(notice(&view, cx), "");
+        assert_eq!(far.asked("SessionScreen").len(), 2);
+        click_on(cx, "screen refresh");
+        cx.run_until_parked();
+        assert_eq!(screen_of(&view, cx), model::SCREEN_ON_THE_YARD);
+        assert_eq!(far.asked("SessionScreen").len(), 2);
+        // The Screen goes from the window. (What was drawn stays drawn to
+        // the tests, so the model says it, not the frame.)
+        click_on(cx, "screen close");
+        cx.run_until_parked();
+        assert_eq!(overlay_screen(&view, cx), None);
+        view.read_with(cx, |v, _| {
+            let model = v.model.as_ref().unwrap();
+            assert!(model.screen_on_the_yard());
+            assert_eq!(model.screen_for_crew("yardmaster"), None);
+        });
+
         to_decisions(&view, cx);
         cx.run_until_parked();
         assert!(drawn(cx, "row grants"));
@@ -13557,24 +13613,6 @@ yardr.dev
         assert!(!drawn(cx, "grants empty"));
         assert_eq!(notice(&view, cx), "");
         assert!(far.asked("SourceGrants").is_empty());
-
-        // The operator's conversation with the yardmaster was drawn with
-        // its state beside the name and no Screen at the header's edge.
-        assert!(drawn(cx, "conversation state"));
-        assert!(!drawn(cx, "talk screen yardmaster"));
-        // A screen opened regardless is not asked for: the card says where
-        // it is read, and the refresh asks nothing either.
-        view.update_in(cx, |v, window, cx| {
-            v.open_screen("yardmaster".into(), window, cx)
-        });
-        cx.run_until_parked();
-        assert_eq!(screen_of(&view, cx), model::SCREEN_ON_THE_YARD);
-        assert!(drawn(cx, "screen on the yard"));
-        click_on(cx, "screen refresh");
-        cx.run_until_parked();
-        assert_eq!(screen_of(&view, cx), model::SCREEN_ON_THE_YARD);
-        assert_eq!(notice(&view, cx), "");
-        assert!(far.asked("SessionScreen").is_empty());
     }
 
     /// The teammates view lists every teammate with their yard name,

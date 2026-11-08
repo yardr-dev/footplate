@@ -482,11 +482,11 @@ pub fn load(client: &Client, name: &str) -> Result<State, Trouble> {
         pairing_notice,
         pairing_too_old,
         grants_on_the_yard,
-        // The yard reads a session's screen to no device that comes down
-        // the link from its edge either. Nothing is asked for it here: the
-        // way the client reaches the yard is all there is to go by, and a
-        // refusal later teaches the window the rest.
-        screen_on_the_yard: client.hosted(),
+        // The yard serves a session's screen down the link from its edge to
+        // a paired device of the operator's, so no client starts without
+        // it. Nothing is asked for it here: a yard from before that
+        // refuses the read so, and the window learns it then.
+        screen_on_the_yard: false,
         telemetry,
         telemetry_notice,
         telemetry_unserved,
@@ -1237,9 +1237,11 @@ mod tests {
     /// its settings could not be read. Nor does the operator's window of a
     /// hosted yard: the yard serves the list to no request that comes down
     /// the link from its edge, so it is not asked, where the same yard
-    /// asked at its address with no edge before it is. That yard reads no
-    /// session's screen down that link either, which the state says too. The
-    /// window still opens.
+    /// asked at its address with no edge before it is. That yard does serve
+    /// a session's screen down that link to the operator's paired device, so
+    /// the state offers it there as anywhere, and a yard from before that,
+    /// which refuses the read in the words of `screen_over_the_link`, is the
+    /// refusal's to teach. The window still opens.
     #[test]
     fn load_reads_no_grants_where_the_window_is_not_given_them() {
         let yard = Yard::start();
@@ -1296,8 +1298,26 @@ mod tests {
         assert_eq!(hosted.grants_notice, None);
         assert!(!hosted.grants_too_old);
         assert!(hosted.grants_on_the_yard);
-        assert!(hosted.screen_on_the_yard);
+        assert!(!hosted.screen_on_the_yard);
         assert_eq!(yard.asked("SourceGrants"), vec![json!({})]);
+        // The state asks for no screen: the Screen is offered, and the yard
+        // is asked when one opens. One from before it served the screen down
+        // the link refuses in words the window takes for where the screen is
+        // read, and no fault of the device's.
+        assert!(yard.asked("SessionScreen").is_empty());
+        yard.answer(
+            "SessionScreen",
+            &json!({"error": {"code": "error", "message": "a session's screen is not read over the link: this request came down the link from the edge. Read it on the yard's machine. The edge saw the device's token with it: remove the device and add it again (yardr user device rm)."}}).to_string(),
+        );
+        let err = edge
+            .client_with(TOKEN, SESSION)
+            .session_screen("yardmaster")
+            .unwrap_err();
+        assert!(model::screen_over_the_link(&err), "{err:?}");
+        assert_eq!(
+            yard.asked("SessionScreen"),
+            vec![json!({"session": "yardmaster"})]
+        );
 
         // Another user's window of it says the same, and asks no more: the
         // yard is reached by the edge whoever is at the window, and an
@@ -1310,7 +1330,7 @@ mod tests {
         assert_eq!(hosted.me, "ada");
         assert_eq!(hosted.operator, "jo");
         assert!(hosted.grants_on_the_yard);
-        assert!(hosted.screen_on_the_yard);
+        assert!(!hosted.screen_on_the_yard);
         assert_eq!(yard.asked("SourceGrants"), vec![json!({})]);
     }
 

@@ -3,6 +3,8 @@
 # the cache compiles footplate from its own sources, whatever their times,
 # in every build directory the seed holds (the debug one the gate builds, a
 # release, a target's), and takes nothing but its dependencies from the seed.
+# The gate also checks the release profile, where code that only a debug build
+# uses is dead and no debug step sees it: it does, in a seeded worktree too.
 # The gate is run for real in worktrees of a throwaway crate named footplate
 # (the package the gate cleans) with a dependency of its own to stand for
 # gpui's tree, and in a home of its own: nothing here compiles gpui, and the
@@ -93,6 +95,19 @@ mod more {
 EOF
 }
 
+# What a branch adds to the crate: a call that only a debug build makes, which
+# leaves the function it calls dead in a release build and nowhere else.
+debug_only_call() {
+    cat > "$1/src/main.rs" <<'EOF'
+fn main() {
+    #[cfg(debug_assertions)]
+    only_a_debug_build_calls_this();
+}
+
+fn only_a_debug_build_calls_this() {}
+EOF
+}
+
 # A worktree held for days, or a branch behind main: none of its files is
 # newer than the build the cache holds.
 age() {
@@ -161,6 +176,9 @@ gate_in b b
 said b "test more::second ... ok" || fail "a seeded worktree ran the cache's tests, not its own"
 said b "Compiling footplate " || fail "a seeded worktree did not compile footplate"
 ! said b "Compiling dep " || fail "a seeded worktree compiled the dependency of the seed again"
+# The checks of the debug and of the release profile are in the cache too: a
+# fresh worktree checks footplate in the release profile, not the whole tree.
+! said b "Checking dep " || fail "a seeded worktree checked the dependency of the seed again"
 ok "a seeded worktree compiles footplate and keeps the seed's dependency"
 
 # What is not seeded is not cleaned: the next run in it is incremental.
@@ -214,5 +232,19 @@ age "$tmp/f"
 (PATH=$tmp/bin:$PATH && gate_in f f)
 said f "Compiling dep " || fail "a clean that failed after the first kept the seed"
 ok "a clean that fails after the first drops the seed"
+
+# What only a debug build calls is dead in a release build, and the steps that
+# build debug do not see it, so the gate checks the release profile as well.
+# The cache holds a release check of footplate, and this worktree is older than
+# it: a seed that was trusted would pass the gate with the check of the other
+# tree.
+make_tree "$tmp/g"
+debug_only_call "$tmp/g"
+age "$tmp/g"
+if (cd "$tmp/g" && sh "$gate") > "$tmp/g.log" 2>&1; then
+    fail "the gate passed code that only a debug build calls"
+fi
+said g "only_a_debug_build_calls_this" || fail "the gate failed, but not on what only a debug build calls"
+ok "a gate fails on code that only a debug build calls"
 
 echo "test-gate.sh: pass ($n cases)"

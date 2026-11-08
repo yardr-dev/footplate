@@ -334,11 +334,12 @@ Setup, release and tests:
   what only the socket does (its request text, `is_remote()`), or checks
   what the window offers on one system alone, is `#[cfg(unix)]`, with the
   reason in a comment above the gate.
-- Gate: `.yardr/test` (`cargo fmt --check`, `clippy -D warnings`,
-  `cargo test`, `cargo build`). Landing runs the base copy of that
-  script, not yours. It runs on a Mac; `.github/workflows/windows.yml`
-  runs `cargo build` and `cargo test` on Windows, and builds the release's
-  Windows zip there.
+- Gate: `.yardr/test` (`cargo fmt --check`, `clippy -D warnings` on all
+  targets of the debug profile and on the lib and bins of the release one,
+  where what only debug builds and tests use is dead, `cargo test`,
+  `cargo build`). Landing runs the base copy of that script, not yours. It
+  runs on a Mac; `.github/workflows/windows.yml` runs `cargo build` and
+  `cargo test` on Windows, and builds the release's Windows zip there.
 
 ## Do not touch
 

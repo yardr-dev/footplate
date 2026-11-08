@@ -732,22 +732,19 @@ pub struct TokenPlace {
     kept: bool,
 }
 
-/// A channel key's already-open place and the two halves it must keep:
-/// prepared before a pairing code is sent, then written before its token.
+/// A channel key's already-open place and the device's half it must keep:
+/// prepared before a pairing code is sent, then written before its token
+/// with the yard's half, which a pairing by QR has from the QR and a typed
+/// code's has only from the yard's answer.
 pub(crate) struct ChannelPlace {
     place: TokenPlace,
     private: [u8; 32],
-    yard_public: [u8; 32],
 }
 
 impl ChannelPlace {
-    fn keep(self, address: &Address) -> io::Result<()> {
-        let Self {
-            place,
-            private,
-            yard_public,
-        } = self;
-        place.keep_channel(&private, &yard_public, address)
+    fn keep(self, yard_public: &[u8; 32], address: &Address) -> io::Result<()> {
+        let Self { place, private } = self;
+        place.keep_channel(&private, yard_public, address)
     }
 }
 
@@ -866,28 +863,27 @@ impl TokenPlace {
 /// Reserves a channel key's file before a pairing code is sent. The
 /// prepared place is kept so a late write error cannot leave a new token
 /// with no key, which would make the next open look like a plain pairing.
-pub(crate) fn channel_place(
-    token_file: &Path,
-    private: &[u8; 32],
-    yard_public: &[u8; 32],
-) -> io::Result<ChannelPlace> {
+pub(crate) fn channel_place(token_file: &Path, private: &[u8; 32]) -> io::Result<ChannelPlace> {
     Ok(ChannelPlace {
         place: token_place(&key_path(token_file))?,
         private: *private,
-        yard_public: *yard_public,
     })
 }
 
-/// Keeps a sealed pairing's channel key before its token. If the first
-/// write fails, the reserved token place drops without becoming a file.
+/// Keeps a sealed pairing's channel key before its token, with the yard's
+/// public key it pins (the QR's, or the one a typed code's run answered).
+/// If the first write fails, the reserved token place drops without
+/// becoming a file.
 pub(crate) fn keep_pair(
     token: TokenPlace,
-    channel: Option<ChannelPlace>,
+    channel: Option<(ChannelPlace, [u8; 32])>,
     token_value: &str,
     address: &Address,
 ) -> std::result::Result<(), PairingKeepError> {
-    if let Some(channel) = channel {
-        channel.keep(address).map_err(PairingKeepError::Channel)?;
+    if let Some((channel, yard_public)) = channel {
+        channel
+            .keep(&yard_public, address)
+            .map_err(PairingKeepError::Channel)?;
     }
     token
         .keep(token_value, address)
@@ -2329,14 +2325,40 @@ mod tests {
         let address = Address::parse("https://yard.example.net").unwrap();
         let device = e2e::ChannelKey::generate().unwrap();
         let yard = e2e::ChannelKey::generate().unwrap();
+
+        // The control: with its places made before the code is sent and the
+        // yard's key learned after (as a typed code's run answers it), the
+        // pairing keeps the key, and then the token.
+        let kept = dir.path().join("yard-kept.token");
+        let token = token_place(&kept).unwrap();
+        let channel = channel_place(&kept, &device.private).unwrap();
+        assert!(
+            keep_pair(
+                token,
+                Some((channel, yard.public)),
+                "yardr-dev-token",
+                &address
+            )
+            .is_ok()
+        );
+        let pinned = channel_for(&kept, &address).unwrap().unwrap();
+        assert_eq!(pinned.private, device.private);
+        assert_eq!(pinned.yard_public, yard.public);
+        assert_eq!(read_token(&kept).unwrap(), "yardr-dev-token");
+
         let token = token_place(&file).unwrap();
-        let channel = channel_place(&file, &device.private, &yard.public).unwrap();
+        let channel = channel_place(&file, &device.private).unwrap();
 
         // A target taken after both private temporary files are ready
         // stands in for a late rename failure while the disk changes.
         fs::create_dir(key_path(&file)).unwrap();
         assert!(matches!(
-            keep_pair(token, Some(channel), "yardr-dev-token", &address),
+            keep_pair(
+                token,
+                Some((channel, yard.public)),
+                "yardr-dev-token",
+                &address
+            ),
             Err(PairingKeepError::Channel(_))
         ));
         assert!(!file.exists());

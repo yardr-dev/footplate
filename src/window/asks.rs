@@ -1831,7 +1831,7 @@ impl Footplate {
             true => "signing in…",
             false => "sign in (enter)",
         };
-        const OPERATOR: &str = "The yard's operator opens a pairing on the yard's own screen. Paste the full QR, including its fourth field, to seal this device; a code alone is not enough for a hosted yard.";
+        const OPERATOR: &str = "The yard's operator opens a pairing on the yard's own screen. Paste the full QR, including its fourth field, to seal this device. At a hosted yard, its own-screen code, typed or read aloud, seals it through a PAKE the edge cannot read. A code from the edge's own page is known to it, and does not seal this device.";
         // What came of the last change stands directly under the button,
         // where a person looks the moment it is pressed: the help stands
         // under that. Below the help, a refusal falls off a short window
@@ -1862,9 +1862,11 @@ impl Footplate {
                     yard_submit(pair, "yard pair", busy, palette, cx).into_any_element(),
                 ]);
                 help = Some(
-                    yard_help(format!(
-                        "{OPERATOR} With no name it is called by its address's host. The device's token is kept in a file of this yard's own beside the settings, for you alone, and never with the settings."
-                    ), palette)
+                    yard_help(
+                        "This form pairs directly with an address. A typed code goes to that address; a QR with a fourth field seals it and pins the yard's key. For a hosted yard, use its sign-in flow instead: a code from the yard's own screen can be typed or read aloud through a PAKE. A member code from the edge's page is known to it and does not seal this device. With no name it is called by its address's host. The device's token is kept in a file of this yard's own beside the settings, for you alone, and never with the settings."
+                            .to_string(),
+                        palette,
+                    )
                     .into_any_element(),
                 );
             }
@@ -1899,7 +1901,7 @@ impl Footplate {
                     Some(yard) => (
                         format!("pair this device with {}, at {address}", yard.title()),
                         format!(
-                            "Pairing from this page cannot seal the app. Ask the yard's operator to open a pairing QR on the yard's own screen, then paste the full QR here. {token}"
+                            "Pairing from this page cannot seal the app: the edge reads the code it gives a member, so a typed code does not seal this device. Ask the yard's operator to open a pairing QR on the yard's own screen, then paste the full QR here. {token}"
                         ),
                     ),
                     None => (

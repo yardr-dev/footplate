@@ -33,6 +33,7 @@ use serde_json::{Map, Value, json};
 
 use crate::e2e;
 use crate::log;
+use crate::pake;
 
 /// What footplate says it is to the yard. Nothing is decided by it today.
 const CLIENT: &str = concat!("footplate/", env!("CARGO_PKG_VERSION"));
@@ -2366,7 +2367,11 @@ pub fn pair_hosted_sealed(
 /// As [`pair`], at a hosted yard: the session token rides beside the code,
 /// which the edge checks before the code reaches the yard, naming which
 /// of the account's yards where `edge_yard` names one; empty is the
-/// account's own yard, and no header rides then.
+/// account's own yard, and no header rides then. The window redeems no code
+/// plain at an edge any more, since the edge would read the code and the
+/// token (a QR's key seals it, or the PAKE, [`pair_hosted_pake`]): this
+/// stays for the tests of what the edge itself refuses.
+#[cfg(test)]
 pub fn pair_hosted(
     address: &Address,
     code: &str,
@@ -2374,6 +2379,186 @@ pub fn pair_hosted(
     edge_yard: &str,
 ) -> Result<Paired> {
     pair_with(address, code, Some(session), edge_yard, CALL_TIMEOUT, None)
+}
+
+/// A pairing code that was typed or read aloud, redeemed at a hosted yard
+/// through a PAKE (`pake.rs`), where no QR gave this device the yard's
+/// key: the device and the yard run SPAKE2 on the code in three posts of
+/// the pairing path, and the device's channel key and the yard's cross
+/// under the key the run derives. The session token rides beside each
+/// step as it does beside any hosted pairing, and the edge that relays them
+/// reads no code, no token, no key and no answer, and gets one guess at
+/// the code a run and no test of a recorded one. That holds only where
+/// the code itself never crossed the edge: a code the edge handed out, as
+/// it does a member's, is known to it, and a member is sealed by the
+/// operator's QR alone. The yard's key is the one its sealed answer
+/// carries, which the device pins as a QR's is pinned, so `device` is the
+/// key pair made for this yard, whose public half the yard records. The
+/// device sends nothing that holds its key until the yard has shown it
+/// holds the code, and no plain redemption follows a refusal: a yard that
+/// takes no run, because it holds no channel key or is older than the
+/// PAKE, is said so with the code unspent.
+pub fn pair_hosted_pake(
+    address: &Address,
+    code: &str,
+    session: &str,
+    edge_yard: &str,
+    device: &e2e::ChannelKey,
+) -> Result<(Paired, [u8; 32])> {
+    pair_pake_with(address, code, session, edge_yard, device, CALL_TIMEOUT)
+}
+
+/// A step of a PAKE redemption as the yard answers it: the fields each
+/// step names, base64url without padding, and nothing else.
+#[derive(Deserialize)]
+struct PakeSaid {
+    pake: PakeStep,
+}
+
+#[derive(Deserialize)]
+struct PakeStep {
+    step: String,
+    #[serde(default)]
+    session: String,
+    #[serde(default)]
+    msg: String,
+    #[serde(default)]
+    confirm: String,
+    #[serde(default)]
+    answer: String,
+}
+
+/// What a PAKE run's sealed answer holds: the pairing's answer, with the
+/// yard's channel public key beside it for the device to pin.
+#[derive(Deserialize)]
+struct PakeAnswer {
+    #[serde(flatten)]
+    paired: Paired,
+    channel_key: String,
+}
+
+fn pair_pake_with(
+    address: &Address,
+    code: &str,
+    session: &str,
+    edge_yard: &str,
+    device: &e2e::ChannelKey,
+    timeout: Duration,
+) -> Result<(Paired, [u8; 32])> {
+    let b64 = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let unread = || Error::Protocol("the pairing: a message of no shape".into());
+    let step = |ask: Value, expected: &'static str| {
+        pake_step(address, session, edge_yard, timeout, ask, expected)
+    };
+    // A code that is no code is refused before anything is sent, and it
+    // is still good: the run starts from the cleaned code.
+    let (first, opening) = pake::start(code).map_err(pake_failure)?;
+    let exchange = step(
+        json!({"pake": {"step": "start", "msg": b64.encode(first)}}),
+        "exchange",
+    )?;
+    let second = b64.decode(&exchange.msg).map_err(|_| unread())?;
+    let confirming = opening.finish(&second).map_err(pake_failure)?;
+    let confirmed = step(
+        json!({"pake": {
+            "step": "confirm",
+            "session": exchange.session,
+            "confirm": b64.encode(confirming.confirmation()),
+        }}),
+        "confirmed",
+    )?;
+    // From here the yard has shown it holds the code, or nothing is sent.
+    let verified = confirming
+        .verify(&b64.decode(&confirmed.confirm).map_err(|_| unread())?)
+        .map_err(pake_failure)?;
+    let key = verified.seal_key(&device.public).map_err(pake_failure)?;
+    let done = step(
+        json!({"pake": {
+            "step": "finish",
+            "session": exchange.session,
+            "key": b64.encode(key),
+        }}),
+        "done",
+    )?;
+    let sealed = b64.decode(&done.answer).map_err(|_| unread())?;
+    let answer = verified.open_answer(&sealed).map_err(pake_failure)?;
+    let answer: PakeAnswer = serde_json::from_slice(&answer)
+        .map_err(|err| Error::Protocol(format!("the pairing: {err}")))?;
+    if !is_token(&answer.paired.token) {
+        return Err(Error::Protocol(
+            "the pairing: no token in the answer".into(),
+        ));
+    }
+    let yard = e2e::parse_channel_public(&answer.channel_key)
+        .map_err(|why| Error::Protocol(format!("the pairing: the yard's channel key: {why}")))?;
+    Ok((answer.paired, yard))
+}
+
+/// One step of a PAKE run: its post, and the yard's answer read as the
+/// step `expected`. A refusal reads in the words of any redemption's, but
+/// for a 400, which this form gives its own: at the start it is a yard that
+/// takes no run (no channel key to exchange, or older than the PAKE), and
+/// after it a run that is no longer live (ran out, or another began), and
+/// neither spends the code or counts a try.
+fn pake_step(
+    address: &Address,
+    session: &str,
+    edge_yard: &str,
+    timeout: Duration,
+    ask: Value,
+    expected: &'static str,
+) -> Result<PakeStep> {
+    let (status, mut reply) =
+        pair_post(address, &ask.to_string(), Some(session), edge_yard, timeout)?;
+    match status {
+        200 => {
+            let bytes = read_bounded(&mut reply, PAIR_ANSWER_LIMIT).map_err(|err| match err {
+                BodyReadError::Read(err) => slow_or_down(err, false),
+                BodyReadError::TooLong => {
+                    Error::Protocol("the pairing answer is longer than the yard carries".into())
+                }
+            })?;
+            let said: PakeSaid = serde_json::from_slice(&bytes)
+                .map_err(|err| Error::Protocol(format!("the pairing: {err}")))?;
+            match said.pake.step == expected {
+                true => Ok(said.pake),
+                false => Err(Error::Protocol(format!(
+                    "the pairing: a step {:?} where {expected:?} was due",
+                    said.pake.step
+                ))),
+            }
+        }
+        400 if expected == "exchange" => Err(refused(
+            "no_pake",
+            "This yard takes no typed code sealed: it holds no channel key, or is older than that. Update yardr on the yard, or paste the full pairing QR its operator opens on the yard's own screen. Nothing was spent, and the code is still good.",
+        )),
+        400 => Err(refused(
+            "pake_over",
+            "The run to pair this device ran out, or another began, before it finished. Nothing was spent: try the code again.",
+        )),
+        _ => Err(pair_refusal(status, &mut reply, true)
+            .unwrap_or_else(|| Error::Protocol(format!("the pairing: status {status}")))),
+    }
+}
+
+/// What a failed step of the device's half of a run is said as: no code,
+/// a yard that did not show it holds the code, or a message of no shape.
+/// `why` of the last is for the log's reader, never the sentence.
+fn pake_failure(err: pake::Error) -> Error {
+    match err {
+        pake::Error::NoCode => refused("no_code", &err.to_string()),
+        pake::Error::Unconfirmed => {
+            say("typed code refused: the yard's confirmation does not hold");
+            refused(
+                "unconfirmed",
+                "The answer did not show it came from the yard that holds the code. Nothing was sent on, and the code is not spent. Check the address, then try the code again.",
+            )
+        }
+        pake::Error::Broken(why) => {
+            say(&format!("typed code refused: {why}"));
+            Error::Protocol(format!("the pairing: {why}"))
+        }
+    }
 }
 
 fn pair_with(
@@ -2399,39 +2584,8 @@ fn pair_with(
         }
         None => (json!({ "code": code }).to_string(), None),
     };
-    // A pairing is no read: a timed out one may already have made the
-    // device, unless the connect gave up, which sent nothing.
-    let mut conn = address
-        .connect(Some(timeout))
-        .map_err(|err| connect_error(err.into(), false))?;
-    let edge = session
-        .filter(|session| is_token(session))
-        .map(|session| format!("X-Edge-Token: {session}\r\n"))
-        .unwrap_or_default();
-    let named = if is_token(edge_yard) {
-        format!("X-Edge-Yard: {edge_yard}\r\n")
-    } else {
-        String::new()
-    };
-    conn.write_all(
-        format!(
-            "POST {}/user/pair HTTP/1.1\r\nHost: {}\r\nX-Yardr-Client: {CLIENT}\r\n{edge}{named}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            address.path,
-            address.authority,
-            body.len()
-        )
-        .as_bytes(),
-    )
-    .map_err(|err| slow_or_down(err, false))?;
-    conn.flush().map_err(|err| slow_or_down(err, false))?;
     let sealed_pair = opening.is_some();
-    let (status, refuser, mut reply) = respond_call(conn).map_err(|err| slow_error(err, false))?;
-    if status == 401 && refuser == Refuser::Edge {
-        return Err(refused(
-            "no_session",
-            "Sign in first: the edge does not know this session, and the code never reached the yard. Then pair this device with the code.",
-        ));
-    }
+    let (status, mut reply) = pair_post(address, &body, session, edge_yard, timeout)?;
     match status {
         200 => {
             let bytes = read_bounded(&mut reply, PAIR_ANSWER_LIMIT).map_err(|err| match err {
@@ -2470,32 +2624,6 @@ fn pair_with(
             }
             Ok(paired)
         }
-        403 => {
-            // Through the edge, a 403 is the router's noYard where no
-            // yard is ready, told from the yard's wrong code by the
-            // body's shape; of any other shape today's arm runs. The
-            // router's refusal of a code opened for another account's
-            // session has that shape too, and reads through here in its
-            // own sentence, which says the code is spent.
-            if session.is_some() {
-                let bytes = match read_bounded(&mut reply, PAIR_ANSWER_LIMIT) {
-                    Ok(bytes) => bytes,
-                    Err(BodyReadError::Read(err)) => return Err(slow_or_down(err, false)),
-                    Err(BodyReadError::TooLong) => Vec::new(),
-                };
-                if let Some(edge) = no_yard(status, &bytes) {
-                    return Err(edge);
-                }
-            }
-            Err(refused(
-                "wrong_code",
-                "That is not the code. The yard counts a wrong one, and the fifth ends the pairing.",
-            ))
-        }
-        409 => Err(refused(
-            "not_added",
-            "The code was right and is used up, but the yard could not add the device. Its operator opens another pairing.",
-        )),
         // A sealed redemption the yard would not open: the key it
         // was sealed to is not this yard's, and no code was read.
         400 if sealed_pair => Err(sealed_refusal("the yard refused the pairing handshake")),
@@ -2503,11 +2631,97 @@ fn pair_with(
             "no_code",
             "That is no code: a code is eight letters and digits, as the yard printed them.",
         )),
-        401 | 404 => Err(refused(
+        _ => Err(pair_refusal(status, &mut reply, session.is_some())
+            .unwrap_or_else(|| Error::Protocol(format!("the pairing: status {status}")))),
+    }
+}
+
+/// One POST of the pairing path, as every form of a redemption sends it: no
+/// credential of the device's, the session token beside the body where the
+/// yard is a hosted one, naming which of the account's yards where
+/// `edge_yard` names one. The edge's own refusal of a session it does not
+/// know is read here, since the code never reached the yard; any other
+/// status is the caller's, with its body unread.
+fn pair_post(
+    address: &Address,
+    body: &str,
+    session: Option<&str>,
+    edge_yard: &str,
+    timeout: Duration,
+) -> Result<(u16, Body)> {
+    // A pairing is no read: a timed out one may already have made the
+    // device, unless the connect gave up, which sent nothing.
+    let mut conn = address
+        .connect(Some(timeout))
+        .map_err(|err| connect_error(err.into(), false))?;
+    let edge = session
+        .filter(|session| is_token(session))
+        .map(|session| format!("X-Edge-Token: {session}\r\n"))
+        .unwrap_or_default();
+    let named = if is_token(edge_yard) {
+        format!("X-Edge-Yard: {edge_yard}\r\n")
+    } else {
+        String::new()
+    };
+    conn.write_all(
+        format!(
+            "POST {}/user/pair HTTP/1.1\r\nHost: {}\r\nX-Yardr-Client: {CLIENT}\r\n{edge}{named}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            address.path,
+            address.authority,
+            body.len()
+        )
+        .as_bytes(),
+    )
+    .map_err(|err| slow_or_down(err, false))?;
+    conn.flush().map_err(|err| slow_or_down(err, false))?;
+    let (status, refuser, reply) = respond_call(conn).map_err(|err| slow_error(err, false))?;
+    if status == 401 && refuser == Refuser::Edge {
+        return Err(refused(
+            "no_session",
+            "Sign in first: the edge does not know this session, and the code never reached the yard. Then pair this device with the code.",
+        ));
+    }
+    Ok((status, reply))
+}
+
+/// What the yard says to a pairing's code in any form of it, in the words
+/// of the plain redemption: not the code (counted), the code right and
+/// used, no pairing open. None for any other status, which each form reads
+/// as its own. Through the edge a 403 is the router's noYard where no yard
+/// is ready, told from the yard's wrong code by the body's shape.
+fn pair_refusal(status: u16, reply: &mut Body, through_edge: bool) -> Option<Error> {
+    match status {
+        403 => {
+            // Through the edge, a 403 is the router's noYard where no
+            // yard is ready, told from the yard's wrong code by the
+            // body's shape; of any other shape today's arm runs. The
+            // router's refusal of a code opened for another account's
+            // session has that shape too, and reads through here in its
+            // own sentence, which says the code is spent.
+            if through_edge {
+                let bytes = match read_bounded(reply, PAIR_ANSWER_LIMIT) {
+                    Ok(bytes) => bytes,
+                    Err(BodyReadError::Read(err)) => return Some(slow_or_down(err, false)),
+                    Err(BodyReadError::TooLong) => Vec::new(),
+                };
+                if let Some(edge) = no_yard(status, &bytes) {
+                    return Some(edge);
+                }
+            }
+            Some(refused(
+                "wrong_code",
+                "That is not the code. The yard counts a wrong one, and the fifth ends the pairing.",
+            ))
+        }
+        409 => Some(refused(
+            "not_added",
+            "The code was right and is used up, but the yard could not add the device. Its operator opens another pairing.",
+        )),
+        401 | 404 => Some(refused(
             "no_pairing",
             "No pairing is open at this yard: none was opened, or the code was used, ran out or was ended. Its operator opens one: yardr user device pair <user> <device>",
         )),
-        _ => Err(Error::Protocol(format!("the pairing: status {status}"))),
+        _ => None,
     }
 }
 
@@ -7161,64 +7375,251 @@ mod tests {
         assert_eq!(code, "no_door");
     }
 
-    /// A device pairs sealed through the edge and calls sealed: the
-    /// code and the token it buys cross readable nowhere, no call the
-    /// edge carries can be opened by it, and the stream's events
-    /// arrive past the edge's beats. The yard stands in its own
-    /// listener here, with the stand-in edge in front of it.
+    /// A device pairs sealed through the edge and calls sealed, whether
+    /// the pairing had the yard's key from its QR or a typed code ran the
+    /// PAKE: the code and the token it buys cross readable nowhere, no call
+    /// the edge carries can be opened by it, and the stream's events arrive
+    /// past the edge's beats. The yard stands in its own listener here, with
+    /// the stand-in edge in front of it.
     #[test]
     fn a_sealed_pairing_and_call_cross_the_edge_unread() {
+        for typed in [false, true] {
+            let yard = Yard::start_tcp();
+            let yard_key = crate::e2e::parse_channel_public(&yard.channel_public()).unwrap();
+            yard.pair("K7QM-2XPD");
+            let edge = Router::start(&yard, SESSION);
+            let address = Address::parse(edge.address()).unwrap();
+            let device = crate::e2e::ChannelKey::generate().unwrap();
+
+            // Either way the device ends with the token and the key it
+            // pins the yard by: the QR's, or the one the run's sealed
+            // answer carried, which must be the yard's own.
+            let (paired, pinned) = match typed {
+                false => (
+                    pair_hosted_sealed(
+                        &address,
+                        "K7QM-2XPD",
+                        SESSION,
+                        "",
+                        &device.private,
+                        &yard_key,
+                    )
+                    .unwrap(),
+                    yard_key,
+                ),
+                // As it is typed: small letters and a space.
+                true => pair_hosted_pake(&address, "k7qm 2xpd", SESSION, "", &device).unwrap(),
+            };
+            assert_eq!(pinned, yard_key, "typed: {typed}");
+            assert_eq!(
+                yard.pinned_key(&paired.token).as_deref(),
+                Some(crate::e2e::channel_public(&device.public).as_str())
+            );
+            assert_eq!(
+                (paired.user.as_str(), paired.device.as_str()),
+                ("jo", "laptop")
+            );
+            // Neither the code nor the token crossed at the edge: no head
+            // that came to it holds either, nor a call's name, and no body
+            // of a pairing it read holds either, nor a key of the device's
+            // or the yard's.
+            for head in edge
+                .seen("POST /user/pair ")
+                .into_iter()
+                .chain(edge.seen("POST /user/e2e "))
+            {
+                assert!(!head.contains(&paired.token), "{head}");
+                assert!(!head.contains("K7QM"), "{head}");
+            }
+            let kept = edge.pairs();
+            assert_eq!(kept.len(), if typed { 3 } else { 1 }, "typed: {typed}");
+            for (asked, answered) in &kept {
+                for secret in [
+                    paired.token.as_str(),
+                    "K7QM",
+                    "2XPD",
+                    &crate::e2e::channel_public(&device.public),
+                    &crate::e2e::channel_public(&device.private),
+                    &crate::e2e::channel_public(&yard_key),
+                    "laptop",
+                ] {
+                    assert!(!asked.contains(secret), "{secret} in {asked}");
+                    assert!(!answered.contains(secret), "{secret} in {answered}");
+                }
+            }
+
+            let client = edge.client_sealed(&paired.token, SESSION, device.private, pinned);
+            assert!(client.sealed());
+            yard.answer("Head", r#"{"result": 12}"#);
+            assert_eq!(client.head().unwrap(), 12);
+            assert_eq!(client.me().unwrap().user, "jo");
+            // The call was served at the yard, and the edge saw none of
+            // it: no token on the wire, no method in a head.
+            assert!(!yard.asked("Head").is_empty());
+            for head in edge.seen("POST /user/e2e ") {
+                assert!(!head.contains(&paired.token), "{head}");
+                assert!(!head.contains("Head"), "{head}");
+                assert!(!head.contains("Authorization"), "{head}");
+            }
+
+            // The stream, past a beat the edge writes on it.
+            yard.emit(r#"{"seq": 1, "kind": "bead_claimed", "bead": "b-1"}"#);
+            let mut events = client.events(0, QUIET).unwrap();
+            let event = events.next().unwrap().unwrap();
+            assert_eq!(event.seq, 1);
+            assert!(edge.beated() >= 1);
+        }
+    }
+
+    /// A typed code's run, held at every step. A code that is no code sends
+    /// nothing; a wrong one is a counted try, the fifth ending the pairing,
+    /// and the device sends nothing that holds its key; and an edge that
+    /// rewrites any field of the run, in either direction, ends it in a
+    /// refusal at the first message that does not hold, with nothing sent
+    /// past it.
+    #[test]
+    fn a_typed_codes_run_is_held_at_every_step() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+        let code = "K7QM-2XPD";
+        let refused_as = |result: Result<(Paired, [u8; 32])>| match result {
+            Err(Error::Refused { code, .. }) => code,
+            Err(Error::Protocol(why)) => format!("protocol: {why}"),
+            Err(other) => panic!("{other:?}"),
+            Ok(_) => "paired".to_string(),
+        };
+
+        // A code that is no code is refused before anything is sent.
         let yard = Yard::start_tcp();
-        let yard_key = crate::e2e::parse_channel_public(&yard.channel_public()).unwrap();
-        yard.pair("K7QM-2XPD");
+        yard.channel_public();
+        yard.pair(code);
         let edge = Router::start(&yard, SESSION);
         let address = Address::parse(edge.address()).unwrap();
         let device = crate::e2e::ChannelKey::generate().unwrap();
-
-        let paired = pair_hosted_sealed(
-            &address,
-            "K7QM-2XPD",
-            SESSION,
-            "",
-            &device.private,
-            &yard_key,
-        )
-        .unwrap();
         assert_eq!(
-            yard.pinned_key(&paired.token).as_deref(),
-            Some(crate::e2e::channel_public(&device.public).as_str())
+            refused_as(pair_hosted_pake(&address, "nope", SESSION, "", &device)),
+            "no_code"
         );
-        // Neither the code nor the token crossed at the edge: no head
-        // that came to it holds either, nor a call's name.
-        for head in edge
-            .seen("POST /user/pair ")
-            .into_iter()
-            .chain(edge.seen("POST /user/e2e "))
+        assert_eq!(edge.proxied(), 0, "something was sent for no code");
+
         {
-            assert!(!head.contains(&paired.token), "{head}");
-            assert!(!head.contains("K7QM"), "{head}");
+            // A yard without a channel key refuses the first step. It sends
+            // nothing plain after it, and the code remains available for an
+            // updated yard or its QR.
+            let yard = Yard::start_tcp();
+            yard.pair(code);
+            let edge = Router::start(&yard, SESSION);
+            let address = Address::parse(edge.address()).unwrap();
+            let device = crate::e2e::ChannelKey::generate().unwrap();
+            let Err(Error::Refused {
+                code: refusal,
+                message,
+            }) = pair_hosted_pake(&address, code, SESSION, "", &device)
+            else {
+                panic!("a yard with no channel key took a typed code");
+            };
+            assert_eq!(refusal, "no_pake");
+            assert!(message.contains("the code is still good"), "{message}");
+            let kept = edge.pairs();
+            assert_eq!(kept.len(), 1);
+            assert!(!kept[0].0.contains("K7QM") && !kept[0].0.contains("code"));
+            assert_eq!(edge.seen("POST /user/pair ").len(), 1);
+            assert!(yard.pairing_open());
+            assert_eq!(yard.devices(), vec![TOKEN.to_string()]);
         }
 
-        let client = edge.client_sealed(&paired.token, SESSION, device.private, yard_key);
-        assert!(client.sealed());
-        yard.answer("Head", r#"{"result": 12}"#);
-        assert_eq!(client.head().unwrap(), 12);
-        assert_eq!(client.me().unwrap().user, "jo");
-        // The call was served at the yard, and the edge saw none of
-        // it: no token on the wire, no method in a head.
-        assert!(!yard.asked("Head").is_empty());
-        for head in edge.seen("POST /user/e2e ") {
-            assert!(!head.contains(&paired.token), "{head}");
-            assert!(!head.contains("Head"), "{head}");
-            assert!(!head.contains("Authorization"), "{head}");
+        // A wrong code is one try each, and the fifth ends the pairing. The
+        // device's key is sent in no run of them: the yard's confirmation
+        // is never given, so the run goes no further than the confirm.
+        for tries in 1..=5 {
+            assert_eq!(
+                refused_as(pair_hosted_pake(
+                    &address,
+                    "K7QM-2XPE",
+                    SESSION,
+                    "",
+                    &device
+                )),
+                "wrong_code"
+            );
+            assert_eq!(yard.pairing_open(), tries < 5, "after {tries} wrong codes");
         }
+        assert_eq!(edge.pairs().len(), 5 * 2);
+        assert_eq!(yard.devices(), vec![TOKEN.to_string()]);
 
-        // The stream, past a beat the edge writes on it.
-        yard.emit(r#"{"seq": 1, "kind": "bead_claimed", "bead": "b-1"}"#);
-        let mut events = client.events(0, QUIET).unwrap();
-        let event = events.next().unwrap().unwrap();
-        assert_eq!(event.seq, 1);
-        assert!(edge.beated() >= 1);
+        // An edge that turns one field of the run. `other` is a point of
+        // the suite that is no message of this run; `zeros` a confirmation
+        // of no run.
+        let other = B64.encode(pake::start(code).unwrap().0);
+        let zeros = B64.encode([0u8; 32]);
+        let flipped = B64.encode([1u8; 65]);
+        let off_curve = B64.encode([&[4u8][..], &[1u8; 64][..]].concat());
+        // Each row: whether the edge turns an answer, the step it turns,
+        // the field and what it is made, how the run ends (a part of its
+        // words), how many requests reached the yard, and how many devices
+        // stand there after it (the one it started with, and one for a run
+        // that was redeemed).
+        for (answer, step, field, to, ends, pairs, devices) in [
+            // The yard's second message is another run's, or no point:
+            // the device's confirmation is of a transcript the yard never
+            // held, and counted; or the device refuses what it was sent.
+            (true, "exchange", "msg", &other, "wrong_code", 2, 1),
+            (
+                true,
+                "exchange",
+                "msg",
+                &flipped,
+                "no uncompressed point",
+                1,
+                1,
+            ),
+            (
+                true,
+                "exchange",
+                "msg",
+                &off_curve,
+                "invalid point encoding",
+                1,
+                1,
+            ),
+            // The device's first message is another's: the yard answers
+            // a transcript the device was never in.
+            (false, "start", "msg", &other, "wrong_code", 2, 1),
+            // The device's confirmation is of no run.
+            (false, "confirm", "confirm", &zeros, "wrong_code", 2, 1),
+            // The yard's confirmation is of no run: the device refuses it,
+            // and sends nothing that holds its key.
+            (true, "confirmed", "confirm", &zeros, "unconfirmed", 2, 1),
+            // A run that is no run of the yard's.
+            (false, "confirm", "session", &zeros, "pake_over", 2, 1),
+            (false, "finish", "session", &zeros, "pake_over", 3, 1),
+            // The sealed key turned: the yard cannot open it, and the
+            // pairing is not spent.
+            (false, "finish", "key", &zeros, "pake_over", 3, 1),
+            // The sealed answer turned: the yard did redeem, so a device
+            // stands there whose token this app never had.
+            (true, "done", "answer", &zeros, "does not open", 3, 2),
+        ] {
+            let yard = Yard::start_tcp();
+            yard.channel_public();
+            yard.pair(code);
+            let edge = Router::start(&yard, SESSION);
+            let (name, to) = (field.to_string(), to.clone());
+            edge.rewrite_pairing(move |is_answer, json| {
+                if is_answer == answer && json["pake"]["step"] == step {
+                    json["pake"][name.as_str()] = to.clone().into();
+                }
+            });
+            let address = Address::parse(edge.address()).unwrap();
+            let device = crate::e2e::ChannelKey::generate().unwrap();
+            let got = refused_as(pair_hosted_pake(&address, code, SESSION, "", &device));
+            assert!(
+                got.contains(ends),
+                "{field} of the {} {step}: {got}",
+                if answer { "answer to" } else { "request for" }
+            );
+            assert_eq!(edge.pairs().len(), pairs, "{field} of {step}");
+            assert_eq!(yard.devices().len(), devices, "{field} of {step}");
+        }
     }
 
     #[test]

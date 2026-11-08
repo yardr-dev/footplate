@@ -78,6 +78,27 @@ chacha20poly1305 = "0.10"
 # other source (e2e.rs); the system's is asked through this, on every
 # platform. In snow's tree already.
 getrandom = "0.3"
+# A pairing code that is typed or read aloud is redeemed through SPAKE2
+# (pake.rs), as RFC 9382 has it and as the yard's own library runs it: the
+# P-256 suite with SHA-256, HKDF and HMAC, which pakery-crypto's Spake2P256
+# is. pakery is the one Rust implementation of that suite crates.io offered
+# (RustCrypto's spake2 and its Conflux fork are Ed25519 and ristretto255
+# alone, other variants that could not speak the yard's), and footplate has
+# no PAKE arithmetic of its own. It is young (0.1.0 in March 2026, one
+# maintainer) and states no audit, and nothing of footplate claims one for
+# it. Pinned exactly, as the three are released
+# together and the key schedule must not shift under the yard's pin. The
+# ristretto255 and CPace halves of pakery-crypto are left off: its defaults
+# would bring a second curve25519-dalek for nothing.
+pakery-spake2 = { version = "=0.6.2", default-features = false, features = ["std"] }
+pakery-crypto = { version = "=0.6.2", default-features = false, features = ["std", "p256", "spake2"] }
+pakery-core = { version = "=0.6.2", default-features = false, features = ["std"] }
+# pakery draws its ephemeral scalar from the rand_core 0.10 trait, which the
+# system's randomness meets through getrandom 0.4's SysRng (feature sys_rng).
+# Both are in gpui's tree already; the 0.3 above stays snow's and the call
+# ids'.
+rand_core = "0.10"
+getrandom04 = { package = "getrandom", version = "0.4", features = ["sys_rng"] }
 
 # The microphone and the speaker of a voice session (audio.rs): cpal, the
 # crate that spikes/voice-harness ran live on a Linux desktop and measured on
@@ -160,6 +181,10 @@ windows-sys = { version = "0.61", default-features = false, features = ["Win32_F
 # The window's own test opens it on gpui's test platform, without a screen.
 gpui = { version = "=0.2.2", features = ["test-support"] }
 tempfile = "3"
+# A test replays a run of the PAKE from the device scalar it fixes, which
+# pakery lets only a test-utils build do, as the library's own RFC vectors
+# do. Nothing of it is in the built footplate.
+pakery-spake2 = { version = "=0.6.2", default-features = false, features = ["std", "test-utils"] }
 # The keepalive the client sets is read back from its socket, which only
 # socket2's "all" calls do. Nothing of it is in the built footplate.
 socket2 = { version = "0.6", features = ["all"] }

@@ -725,14 +725,6 @@ impl Footplate {
         cx.notify();
         let kept = self.kept.clone();
         let (address, code) = (self.address.read(cx).text(), self.code.read(cx).text());
-        if matches!(&adding, Adding::Again(name) if self.settings.yard(name).is_some_and(|yard| yard.member().is_some()))
-            && code_of(code).is_empty()
-        {
-            self.yard_said = Some(
-                "Pairing from this page cannot seal the app. Ask the yard's operator to open a pairing QR on the yard's own screen, then paste the full QR here.".to_string(),
-            );
-            return;
-        }
         // Which of the account's yards a pairing of a hosted yard is for,
         // where what was typed for its code holds the edge QR code's
         // third segment. A pairing that fails names nothing.
@@ -769,17 +761,27 @@ impl Footplate {
             },
             None => None,
         };
-        // A hosted yard's code must arrive with the key its own QR
-        // carries. Without it, the edge would read the pairing code
-        // and token, and the new device would have no key to refuse a
-        // later plain call with. Direct yards keep their existing
-        // code-only pairing.
-        if matches!(&adding, Adding::Again(name) if self.settings.yard(name).is_some_and(|yard| yard.is_hosted()))
-            && channel.is_none()
-        {
+        // A member's code is one the edge handed out: the router reads and
+        // returns it, so the edge knows the password a PAKE would run on
+        // and could sit in the run as either end. Only the QR an operator
+        // opens on the yard's own screen seals a member's device, so a
+        // typed code, or a QR without its key, is refused here, before
+        // anything is sent, and it is still good. The run goes to the yard
+        // the third segment names where one is typed, else the yard's own,
+        // so either naming another account's yard refuses it.
+        let member = match &adding {
+            Adding::Again(name) => self.settings.yard(name).is_some_and(|yard| {
+                yard.member().is_some()
+                    || payload.as_ref().is_some_and(|named| {
+                        api::member_yard(named)
+                            .is_some_and(|(owner, _)| owner != yard.handle.trim())
+                    })
+            }),
+            _ => false,
+        };
+        if member && channel.is_none() {
             self.yard_said = Some(
-                "This hosted yard's pairing QR has no channel key. Update yardr on the yard, then paste its full QR. Nothing was sent, and the code is still good."
-                    .to_string(),
+                "Pairing from this page cannot seal the app: the edge reads the code it gives a member. Ask the yard's operator to open a pairing QR on the yard's own screen, then paste the full QR here. Nothing was sent, and the code is still good.".to_string(),
             );
             return;
         }
@@ -871,6 +873,14 @@ impl Footplate {
             }),
             _ => String::new(),
         };
+        // A hosted yard's code that arrived with no key of the yard's, a
+        // code typed or read aloud, is redeemed through the PAKE: the run
+        // seals this device to the yard with nothing but the code, which
+        // the edge never learns (the member's, which it does, was refused
+        // above). A yard reached direct keeps its code-only pairing: it
+        // takes sealed calls down its link alone, so a key pinned there
+        // would be pinned for nothing.
+        let pake = session.is_some() && channel.is_none();
         self.pairing = true;
         self.yard_said = None;
         cx.spawn(async move |this, cx| {
@@ -889,31 +899,30 @@ impl Footplate {
                             file.display()
                         )
                     })?;
-                    let device = match channel {
-                        Some(_) => Some(e2e::ChannelKey::generate().map_err(|why| {
+                    let device = match (&channel, pake) {
+                        (None, false) => None,
+                        _ => Some(e2e::ChannelKey::generate().map_err(|why| {
                             format!("This device's channel key could not be made ({why}). The code was not sent, and is still good.")
                         })?),
-                        None => None,
                     };
                     // Keep the channel file's ready place through the
                     // redeem, so it is written before the token after the
-                    // yard answers.
-                    let channel_place = match (&channel, &device) {
-                        (Some(yard_key), Some(device)) => {
-                            Some(yard::channel_place(&file, &device.private, yard_key).map_err(
-                                |err| {
-                                    format!(
-                                        "The channel key file {} cannot be written ({err}). The code was not sent, and is still good.",
-                                        yard::key_path(&file).display()
-                                    )
-                                },
-                            )?)
-                        }
-                        (None, None) => None,
-                        _ => unreachable!("a channel key and its device are made together"),
+                    // yard answers, with the key of the yard's that the
+                    // pairing pins: a QR's, or the one a typed code's run
+                    // answers with.
+                    let channel_place = match &device {
+                        Some(device) => Some(yard::channel_place(&file, &device.private).map_err(
+                            |err| {
+                                format!(
+                                    "The channel key file {} cannot be written ({err}). The code was not sent, and is still good.",
+                                    yard::key_path(&file).display()
+                                )
+                            },
+                        )?),
+                        None => None,
                     };
-                    let paired = match (&session, &channel, &device) {
-                        (Some(session), Some(yard_key), Some(device)) => {
+                    let (paired, pinned) = match (&session, &channel, &device) {
+                        (Some(session), Some(yard_key), Some(device)) => (
                             api::pair_hosted_sealed(
                                 &address,
                                 &code,
@@ -922,24 +931,36 @@ impl Footplate {
                                 &device.private,
                                 yard_key,
                             )
-                            .map_err(pairing_failure)
-                        }
-                        (None, Some(yard_key), Some(device)) => {
+                            .map_err(pairing_failure)?,
+                            Some(*yard_key),
+                        ),
+                        (None, Some(yard_key), Some(device)) => (
                             api::pair_sealed(&address, &code, &device.private, yard_key)
-                                .map_err(|err| err.to_string())
+                                .map_err(|err| err.to_string())?,
+                            Some(*yard_key),
+                        ),
+                        (Some(session), None, Some(device)) => {
+                            let (paired, yard_key) =
+                                api::pair_hosted_pake(&address, &code, session, &edge_yard, device)
+                                    .map_err(pairing_failure)?;
+                            (paired, Some(yard_key))
                         }
-                        (Some(session), _, _) => api::pair_hosted(
-                            &address,
-                            &code,
-                            session,
-                            &edge_yard,
-                        )
-                        .map_err(pairing_failure),
-                        (None, _, _) => {
-                            api::pair(&address, &code).map_err(|err| err.to_string())
-                        }
-                    }?;
-                    yard::keep_pair(place, channel_place, &paired.token, &address).map_err(
+                        (None, None, None) => (
+                            api::pair(&address, &code).map_err(|err| err.to_string())?,
+                            None,
+                        ),
+                        // A key and its device are made together, and a
+                        // hosted yard's code with no key of its own runs
+                        // the PAKE: no code is redeemed plain at an edge.
+                        _ => unreachable!("a device key is made where a key is pinned"),
+                    };
+                    yard::keep_pair(
+                        place,
+                        channel_place.zip(pinned),
+                        &paired.token,
+                        &address,
+                    )
+                    .map_err(
                         |err| match err {
                             yard::PairingKeepError::Channel(err) => format!(
                                 "The yard gave this device its token, but its channel key could not be kept in {} ({err}). The new token was not written. Remove this device from the yard (yardr user device rm {} {}) and open another pairing.",
@@ -960,7 +981,7 @@ impl Footplate {
                         paired.device,
                         paired.user,
                         paired.yard,
-                        match channel {
+                        match pinned {
                             Some(_) => " Its calls are sealed to this yard.",
                             None => "",
                         }

@@ -1375,7 +1375,9 @@ mod tests {
             message: "That is not the code. The fifth wrong code ends the pairing.".to_string(),
         });
         assert!(refused.starts_with("Pairing failed: That is not the code."));
-        assert!(refused.contains("Check the code on the ready page before trying again;"));
+        assert!(
+            refused.contains("Check the code the yard shows on its own screen before trying again")
+        );
         assert!(refused.contains("if the pairing ended, ask the operator to open another one."));
 
         let down = pairing_failure(api::Error::Down(std::io::Error::new(
@@ -23811,12 +23813,17 @@ yardr.dev
         assert!(edge.proxied() > 0);
     }
 
-    /// Pairing a hosted yard of the list again: a QR without its channel
-    /// key is refused before it reaches the edge, then the full QR seals
-    /// the pairing while the session and yard name ride beside it.
+    /// Pairing a hosted yard of the list again by a typed code, with no key
+    /// of the yard's in what was typed: a yard that holds no channel key
+    /// takes no run of it, and that is said, with nothing plain sent and
+    /// the code still good; a third segment naming another account's yard
+    /// is a member's pairing and is refused before anything is sent; the
+    /// yard holding its key, the same code runs the PAKE through the edge,
+    /// and the pairing is sealed while the session and yard name ride
+    /// beside each step.
     #[cfg(unix)]
     #[gpui::test]
-    fn pairing_a_hosted_yard_again_requires_its_sealed_qr(cx: &mut TestAppContext) {
+    fn pairing_a_hosted_yard_again_by_a_typed_code_runs_the_pake(cx: &mut TestAppContext) {
         use crate::fake::{Router, SESSION};
 
         let dir = tempfile::tempdir().unwrap();
@@ -23875,33 +23882,75 @@ yardr.dev
             Some(Adding::Again("south".into()))
         );
         far.pair("ABCD-EFGH");
-        // A hosted code with no fourth field must not be redeemed in the
-        // clear. It remains good so the person can paste the full QR.
-        let keyless = format!("{}#abcd efgh#airy", edge.address());
+        // A hosted code with no fourth field is a typed one, and runs the
+        // PAKE, which a yard with no channel key cannot take: that is said,
+        // and nothing plain follows it. The code stays good.
+        let typed = format!("{}#abcd efgh#airy", edge.address());
         view.update(cx, |v, cx| {
-            v.code.update(cx, |line, cx| line.set_text(&keyless, cx));
+            v.code.update(cx, |line, cx| line.set_text(&typed, cx));
         });
         cx.simulate_keystrokes("enter");
-        wait(cx, "the hosted yard asks for its channel QR", |cx| {
-            yard_said(&view, cx).contains("has no channel key")
+        wait(cx, "the yard that takes no typed code", |cx| {
+            yard_said(&view, cx).contains("takes no typed code sealed")
         });
-        assert!(edge.seen("POST /user/pair ").is_empty());
+        // The run's first message alone went, and no body of it holds the code.
+        assert_eq!(edge.seen("POST /user/pair ").len(), 1);
+        assert!(!edge.pairs()[0].0.contains("abcd"));
+        assert!(far.pairing_open());
 
-        // The fourth field pins the yard's key; the code and the name
-        // still occupy the second and third positions.
-        let qr = format!("{}#abcd efgh#airy#{}", edge.address(), far.channel_public());
+        // The yard holds its key now. A third segment naming another
+        // account's yard is a member's pairing, wherever this entry stands:
+        // the edge hands a member's code out, so a PAKE on it would not
+        // seal this device. It is refused before anything is sent, and the
+        // pairing stands.
+        let yard_key = crate::e2e::parse_channel_public(&far.channel_public()).unwrap();
+        let member = format!("{}#ABCD-EFGH#alice/lab", edge.address());
         view.update(cx, |v, cx| {
-            v.code.update(cx, |line, cx| line.set_text(&qr, cx));
+            v.code.update(cx, |line, cx| line.set_text(&member, cx));
+        });
+        cx.simulate_keystrokes("enter");
+        wait(cx, "the member yard the pairing names refused", |cx| {
+            yard_said(&view, cx).contains("the edge reads the code it gives a member")
+        });
+        assert_eq!(edge.seen("POST /user/pair ").len(), 1);
+        assert!(far.pairing_open());
+        // The yard's own name runs, with no fourth field wanted, and the
+        // code and the name stand as they stood.
+        view.update(cx, |v, cx| {
+            v.code.update(cx, |line, cx| line.set_text(&typed, cx));
         });
         cx.simulate_keystrokes("enter");
         wait(cx, "the pairing", |cx| {
             yard_said(&view, cx).starts_with("Paired:")
         });
+        assert!(
+            yard_said(&view, cx).contains("Its calls are sealed to this yard."),
+            "{}",
+            yard_said(&view, cx)
+        );
         wait(cx, "the yard again", |cx| {
             texts(&view, cx) == ["From afar."] && view.read_with(cx, |v, _| v.down.is_none())
         });
-        assert_ne!(yard::read_token(&token).unwrap(), crate::fake::TOKEN);
+        let kept = yard::read_token(&token).unwrap();
+        assert_ne!(kept, crate::fake::TOKEN);
         assert_eq!(mode_of(&token), 0o600);
+        // The key the run answered with is the yard's own, pinned beside
+        // the token, and the list says the yard is sealed to this device.
+        let channel = yard::channel_for(&token, &api::Address::parse(edge.address()).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(channel.yard_public, yard_key);
+        assert!(far.pinned_key(&kept).is_some());
+        assert!(view.read_with(cx, |v, _| {
+            v.settings.yard("south").unwrap().sealed(v.kept.as_deref())
+        }));
+        // The edge read neither the code nor the token in any body of it.
+        for (asked, answered) in edge.pairs() {
+            for secret in [kept.as_str(), "abcd", "ABCD", "efgh", "EFGH"] {
+                assert!(!asked.contains(secret), "{secret} in {asked}");
+                assert!(!answered.contains(secret), "{secret} in {answered}");
+            }
+        }
         // The yard names it from here on, and every call says it.
         assert_eq!(
             view.read_with(cx, |v, _| v
@@ -24091,6 +24140,21 @@ yardr.dev
         assert!(edge.seen("POST /user/pair ").is_empty());
         assert!(!token.exists());
         assert!(!far.pairing_open());
+
+        // A typed code is no better for a member: the edge hands a member's
+        // code out, so a PAKE run on it would not seal this device. It is
+        // refused before anything is sent, and the pairing stands.
+        far.pair_for("eve", "test-mac", "ABCD-EFGH");
+        view.update(cx, |v, cx| {
+            v.code.update(cx, |line, cx| line.set_text("ABCD-EFGH", cx));
+        });
+        click_on(cx, "yard pair");
+        wait(cx, "the typed code refused for a member", |cx| {
+            yard_said(&view, cx).contains("the edge reads the code it gives a member")
+        });
+        assert!(edge.seen("POST /user/pair ").is_empty());
+        assert!(far.pairing_open());
+        assert!(!token.exists());
 
         // An operator-opened QR pins the yard key. Its code is sealed to the
         // yard and the member's session only resolves which yard to reach.
@@ -24400,8 +24464,8 @@ yardr.dev
         assert_eq!(south.account, KRATOS_EMAIL);
         assert_eq!(south.edge_yard, "airy");
 
-        // A code alone is refused before it reaches the edge. The full QR
-        // carries the yard key and seals the redemption.
+        // A wrong code in the full QR is the yard's to refuse, and counted;
+        // the right one in it seals the redemption.
         far.pair("K7QM-2XPD");
         let wrong_qr = format!("{}#WXYZ-2345#airy#{}", edge.address(), far.channel_public());
         view.update(cx, |v, cx| {
@@ -24411,7 +24475,7 @@ yardr.dev
         wait(cx, "that hosted pairing rejected the code", |cx| {
             yard_said(&view, cx).starts_with("Pairing failed: That is not the code.")
         });
-        assert!(yard_said(&view, cx).contains("Check the code on the ready page"));
+        assert!(yard_said(&view, cx).contains("Check the code the yard shows on its own screen"));
         assert!(far.pairing_open());
         assert!(!token.exists());
 
@@ -27385,6 +27449,11 @@ yardr.dev
             "yardr-dev-paired-1"
         );
         assert_eq!(far.devices(), [crate::fake::TOKEN, "yardr-dev-paired-1"]);
+        // A yard reached direct keeps its code-only pairing: no run of the
+        // PAKE, so no key of the device's is pinned at the yard and none
+        // is kept here beside the token.
+        assert_eq!(far.pinned_key("yardr-dev-paired-1"), None);
+        assert!(!yard::key_path(&dir.path().join("footplate/yard-far.token")).exists());
     }
 
     /// From where there is no yard, a pairing's http address off this

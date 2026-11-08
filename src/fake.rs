@@ -25,6 +25,7 @@ use serde_json::Value;
 
 use crate::api::{Address, Client};
 use crate::e2e;
+use crate::pake;
 
 /// The token of the device a yard at an address starts with, and who
 /// `/user/me` says it is.
@@ -200,7 +201,20 @@ struct State {
     /// The live channel sessions, by their tag: the session and the
     /// token of the device whose handshake founded it.
     sessions: HashMap<Vec<u8>, (Arc<e2e::Session>, String)>,
+    /// The one live PAKE run of a typed code's redemption: a new start
+    /// replaces it, and a finish, a failed confirmation or the pairing's
+    /// end spends it.
+    pake: Option<PakeRun>,
     stopped: bool,
+}
+
+/// A typed code's redemption under way, as the yard holds it between the
+/// steps: the id it answered the start with, its half of the run, and
+/// whether the device's confirmation held.
+struct PakeRun {
+    id: String,
+    responder: pake::Responder,
+    confirmed: bool,
 }
 
 struct Shared {
@@ -678,14 +692,51 @@ fn code_of(typed: &str) -> String {
         .collect()
 }
 
+/// A wrong code at the open pairing: counted, and the fifth ends the
+/// pairing.
+fn wrong_try(state: &mut State) {
+    if let Some((_, wrong)) = state.pairing.as_mut() {
+        *wrong += 1;
+        if *wrong == 5 {
+            state.pairing = None;
+        }
+    }
+}
+
+/// The open pairing is redeemed: it ends, and a device is added with a
+/// token of its own, under the key its handshake or its run pinned where it
+/// proved one. Answers the token, and the user and the name the device is
+/// paired as.
+fn redeem(state: &mut State, device_key: Option<String>) -> (String, String, String) {
+    state.pairing = None;
+    state.paired += 1;
+    let token = format!("yardr-dev-paired-{}", state.paired);
+    state.devices.push(token.clone());
+    let (user, device) = state
+        .pairing_for
+        .take()
+        .unwrap_or(("jo".to_string(), "laptop".to_string()));
+    state
+        .who
+        .insert(token.clone(), (user.clone(), device.clone()));
+    if let Some(key) = device_key {
+        state.pinned.insert(token.clone(), key);
+    }
+    (token, user, device)
+}
+
 /// `POST /user/pair`: a token for the right code, once. A wrong code is
 /// counted, and the fifth ends the pairing. A sealed code is redeemed
 /// inside its handshake, and its answer sealed back: the pairing's
 /// first message is opened before any code is read, so one that does
-/// not open is no try against the pairing.
+/// not open is no try against the pairing. A typed code's PAKE is the
+/// third form ([`pair_pake`]).
 fn pair(conn: &mut Wire, shared: &Shared, body: &[u8]) -> io::Result<()> {
     const JSON: &str = "application/json";
     let asked: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    if asked["pake"].is_object() {
+        return pair_pake(conn, shared, &asked["pake"]);
+    }
     // The yard's channel half of a sealed redemption, opened first.
     let mut opening: Option<(e2e::PairingHandshake, String)> = None;
     let typed = match asked["sealed"].as_str() {
@@ -719,33 +770,20 @@ fn pair(conn: &mut Wire, shared: &Shared, body: &[u8]) -> io::Result<()> {
         return plain(conn, "400 Bad Request", "text/plain", "no code\n");
     }
     let mut state = shared.state.lock().unwrap();
-    let Some((code, wrong)) = state.pairing.as_mut() else {
+    let Some((code, _)) = state.pairing.as_ref() else {
         unreachable!("the path is there while a pairing is open")
     };
     if code_of(code) != typed {
-        *wrong += 1;
-        if *wrong == 5 {
-            state.pairing = None;
-        }
+        wrong_try(&mut state);
         drop(state);
         return plain(conn, "403 Forbidden", JSON, r#"{"refused": "wrong_code"}"#);
     }
-    state.pairing = None;
-    state.paired += 1;
-    let token = format!("yardr-dev-paired-{}", state.paired);
-    state.devices.push(token.clone());
-    let (user, device) = state
-        .pairing_for
-        .take()
-        .unwrap_or(("jo".to_string(), "laptop".to_string()));
-    state
-        .who
-        .insert(token.clone(), (user.clone(), device.clone()));
     // A sealed pairing pins the device key its handshake proved,
     // under the token it bought.
-    if let Some((_, device)) = &opening {
-        state.pinned.insert(token.clone(), device.clone());
-    }
+    let (token, user, device) = redeem(
+        &mut state,
+        opening.as_ref().map(|(_, device)| device.clone()),
+    );
     drop(state);
     let answer = format!(
         r#"{{"token": "{token}", "user": "{user}", "device": "{device}", "yard": "south"}}"#
@@ -760,6 +798,115 @@ fn pair(conn: &mut Wire, shared: &Shared, body: &[u8]) -> io::Result<()> {
             plain(conn, "200 OK", JSON, &body)
         }
         None => plain(conn, "200 OK", JSON, &answer),
+    }
+}
+
+/// The PAKE form of `POST /user/pair`, as the yard answers it (the yardr
+/// repository's docs/users.md, "By a typed code, through a PAKE"): three
+/// steps of one run over the code of the pairing that is open. A yard that
+/// holds no channel key serves no run, as the real one; a step that names
+/// no live run, or that is out of its order, or that is no message, is 400
+/// and no try; a confirmation that does not hold is a wrong code, counted,
+/// and spends the run; a finish spends it whatever it carries, and the
+/// token crosses sealed under the run's key, with the yard's channel key
+/// beside it for the device to pin.
+fn pair_pake(conn: &mut Wire, shared: &Shared, ask: &Value) -> io::Result<()> {
+    const JSON: &str = "application/json";
+    let b64 = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let bad = |conn: &mut Wire| plain(conn, "400 Bad Request", "text/plain", "Bad Request\n");
+    let field = |name: &str| ask[name].as_str().and_then(|text| b64.decode(text).ok());
+    let said = |conn: &mut Wire, step: Value| {
+        plain(
+            conn,
+            "200 OK",
+            JSON,
+            &serde_json::json!({ "pake": step }).to_string(),
+        )
+    };
+    let mut state = shared.state.lock().unwrap();
+    match ask["step"].as_str() {
+        Some("start") => {
+            // No channel key, no run: there is no static key to exchange.
+            let code = state.pairing.as_ref().map(|(code, _)| code.clone());
+            let (Some(first), Some(code), true) = (field("msg"), code, state.channel.is_some())
+            else {
+                return bad(conn);
+            };
+            let Ok((second, responder)) = pake::answer(&code, &first) else {
+                return bad(conn);
+            };
+            let id = b64.encode(e2e::random16().unwrap_or([0; e2e::TAG_SIZE]));
+            state.pake = Some(PakeRun {
+                id: id.clone(),
+                responder,
+                confirmed: false,
+            });
+            drop(state);
+            said(
+                conn,
+                serde_json::json!({"step": "exchange", "session": id, "msg": b64.encode(second)}),
+            )
+        }
+        Some("confirm") => {
+            let confirm = field("confirm");
+            let live = state
+                .pake
+                .as_mut()
+                .filter(|run| ask["session"].as_str() == Some(run.id.as_str()));
+            let (Some(run), Some(confirm)) = (live, confirm) else {
+                return bad(conn);
+            };
+            match run.responder.confirm(&confirm) {
+                Ok(yard) => {
+                    run.confirmed = true;
+                    drop(state);
+                    said(
+                        conn,
+                        serde_json::json!({"step": "confirmed", "confirm": b64.encode(yard)}),
+                    )
+                }
+                Err(_) => {
+                    state.pake = None;
+                    wrong_try(&mut state);
+                    drop(state);
+                    plain(conn, "403 Forbidden", JSON, r#"{"refused": "wrong_code"}"#)
+                }
+            }
+        }
+        Some("finish") => {
+            // A finish before the confirmation is refused and the run
+            // lives on; a confirmed one is spent by it.
+            let confirmed = state.pake.as_ref().is_some_and(|run| {
+                run.confirmed && ask["session"].as_str() == Some(run.id.as_str())
+            });
+            if !confirmed {
+                return bad(conn);
+            }
+            let run = state.pake.take().expect("a confirmed run is live");
+            let Some(sealed) = field("key") else {
+                return bad(conn);
+            };
+            let Ok(device) = run.responder.open_key(&sealed) else {
+                return bad(conn);
+            };
+            let Some(yard) = state.channel.as_ref().map(|key| key.public) else {
+                return bad(conn);
+            };
+            let (token, user, name) = redeem(&mut state, Some(e2e::channel_public(&device)));
+            drop(state);
+            let answer = serde_json::json!({
+                "token": token, "user": user, "device": name, "yard": "south",
+                "channel_key": e2e::channel_public(&yard),
+            });
+            let Ok(sealed) = run.responder.seal_answer(answer.to_string().as_bytes()) else {
+                return bad(conn);
+            };
+            said(
+                conn,
+                serde_json::json!({"step": "done", "answer": b64.encode(sealed)}),
+            )
+        }
+        _ => bad(conn),
     }
 }
 
@@ -1543,8 +1690,19 @@ struct EdgeShared {
     /// The pairing the edge opened and the session it opened it for: the
     /// code stands for that session alone.
     opener: Mutex<Option<(String, String)>>,
+    /// The body of each pairing request that crossed, and of the answer the
+    /// yard gave it, as the edge read them, oldest first.
+    pairs: Mutex<Vec<(String, String)>>,
+    /// What the edge does to the pairing path's JSON before it passes it on,
+    /// where a test makes it a rewriting edge ([`Router::rewrite_pairing`]).
+    rewrite: Mutex<Option<Arc<PairRewrite>>>,
     stopped: Mutex<bool>,
 }
+
+/// Turns a pairing request's JSON body (`false`) or the yard's answer's
+/// (`true`) on its way across the edge.
+#[cfg(any(test, debug_assertions))]
+type PairRewrite = dyn Fn(bool, &mut Value) + Send + Sync;
 
 /// What the yard's web view answers a request it is sent with no minted
 /// token: `http.Error` of internal/web's JWT gateway, 401 with the plain
@@ -1603,6 +1761,8 @@ impl Router {
             heads: Mutex::new(Vec::new()),
             beated: Mutex::new(0),
             opener: Mutex::new(None),
+            pairs: Mutex::new(Vec::new()),
+            rewrite: Mutex::new(None),
             stopped: Mutex::new(false),
         });
         let accept = thread::spawn({
@@ -1825,6 +1985,22 @@ impl Router {
         *self.shared.proxied.lock().unwrap()
     }
 
+    /// The body of each pairing request that crossed the edge and of the
+    /// answer the yard gave it, as the edge read them: what a carrier that
+    /// keeps its traffic holds of a pairing. Oldest first.
+    pub fn pairs(&self) -> Vec<(String, String)> {
+        self.shared.pairs.lock().unwrap().clone()
+    }
+
+    /// From now on the edge rewrites the pairing path's JSON as it passes
+    /// it on: `turn` is handed each request's body (`false`) and each
+    /// answer's (`true`), and may change any field of it. What the edge
+    /// keeps of the traffic ([`Router::pairs`]) is what it read, before
+    /// it turned anything.
+    pub fn rewrite_pairing(&self, turn: impl Fn(bool, &mut Value) + Send + Sync + 'static) {
+        *self.shared.rewrite.lock().unwrap() = Some(Arc::new(turn));
+    }
+
     /// The edge goes away: nothing listens any more.
     pub fn stop(&self) {
         *self.shared.stopped.lock().unwrap() = true;
@@ -1971,6 +2147,9 @@ fn serve_edge(conn: TcpStream, target: &str, origin: &str, shared: &EdgeShared) 
         .map(|line| format!("{line}\r\n"))
         .collect();
     head.push_str("\r\n");
+    if asked.starts_with("POST /user/pair ") {
+        return relay_pair(conn, &head, &body, target, shared);
+    }
     relay(
         conn,
         &head,
@@ -1979,6 +2158,70 @@ fn serve_edge(conn: TcpStream, target: &str, origin: &str, shared: &EdgeShared) 
         &session.unwrap_or_default(),
         shared,
     )
+}
+
+/// The head with its `Content-Length` made `length`, for a body the edge
+/// turned.
+#[cfg(any(test, debug_assertions))]
+fn with_length(head: &str, length: usize) -> String {
+    let mut out: String = head
+        .lines()
+        .filter(|line| !line.is_empty())
+        .filter(|line| {
+            line.split_once(':')
+                .is_none_or(|(name, _)| !name.eq_ignore_ascii_case("content-length"))
+        })
+        .map(|line| format!("{line}\r\n"))
+        .collect();
+    out.push_str(&format!("Content-Length: {length}\r\n\r\n"));
+    out
+}
+
+/// A JSON body turned by the edge's hook, or as it was where the hook
+/// leaves it be or the body is no JSON.
+#[cfg(any(test, debug_assertions))]
+fn turned(hook: &Option<Arc<PairRewrite>>, answer: bool, body: &[u8]) -> Vec<u8> {
+    let (Some(hook), Ok(mut json)) = (hook, serde_json::from_slice::<Value>(body)) else {
+        return body.to_vec();
+    };
+    hook(answer, &mut json);
+    json.to_string().into_bytes()
+}
+
+/// One request of the pairing path proxied to the yard: the edge reads
+/// the request and the answer whole, keeps both as it read them, and passes
+/// each on turned by the hook of a rewriting edge where a test set one. The
+/// yard answers a pairing with a length, so the answer is read to its end.
+#[cfg(any(test, debug_assertions))]
+fn relay_pair(
+    conn: TcpStream,
+    head: &str,
+    body: &[u8],
+    target: &str,
+    shared: &EdgeShared,
+) -> io::Result<()> {
+    let mut conn = conn;
+    let hook = shared.rewrite.lock().unwrap().clone();
+    let sent = turned(&hook, false, body);
+    let mut yard = at_once(TcpStream::connect(target)?);
+    yard.write_all(with_length(head, sent.len()).as_bytes())?;
+    yard.write_all(&sent)?;
+    yard.flush()?;
+    let mut reply = Vec::new();
+    yard.read_to_end(&mut reply)?;
+    let at = reply
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(reply.len(), |at| at + 4);
+    let (reply_head, reply_body) = reply.split_at(at);
+    shared.pairs.lock().unwrap().push((
+        String::from_utf8_lossy(body).into_owned(),
+        String::from_utf8_lossy(reply_body).into_owned(),
+    ));
+    let reply_body = turned(&hook, true, reply_body);
+    conn.write_all(with_length(&String::from_utf8_lossy(reply_head), reply_body.len()).as_bytes())?;
+    conn.write_all(&reply_body)?;
+    conn.flush()
 }
 
 /// One request of the login API flow: a flow is opened, and the

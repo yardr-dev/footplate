@@ -197,7 +197,7 @@ pub(crate) enum Adding {
 pub(crate) fn pairing_failure(error: api::Error) -> String {
     match error {
         api::Error::Refused { code, message } if code == "wrong_code" => format!(
-            "Pairing failed: {message} Check the code on the ready page before trying again; if the pairing ended, ask the operator to open another one."
+            "Pairing failed: {message} Check the code the yard shows on its own screen before trying again (a code the edge's page showed you does not seal this device); if the pairing ended, ask the operator to open another one."
         ),
         api::Error::Refused { message, .. } => format!("Pairing failed: {message}"),
         api::Error::Down(why) => format!(

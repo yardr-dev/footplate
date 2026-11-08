@@ -108,6 +108,18 @@ The window, its state and the yard:
   stream marker as associated data, opened against their own call with a
   sliding replay window. Which calls are sealed is `src/api.rs`'s; the
   key a yard is pinned by is kept in `src/yard.rs`.
+- `src/pake.rs`: a pairing code that is typed or read aloud, redeemed
+  through a PAKE, as bytes only: the device's half of SPAKE2 in RFC 9382's
+  P-256 suite, which the yard pins, run by pakery (no PAKE arithmetic of its
+  own), as three states (start, finish, verify) so that the device's key is
+  sealed and the answer opened only on a run whose yard has shown that it
+  holds the code; the code's cleaning as the yard does it, the password's
+  scalar, and what is sealed under the run's key. The yard's half stands
+  beside it for the stand-in yard of the tests' alone. Its three posts are
+  `src/api.rs`'s (`pair_hosted_pake`), and which pairings run it is
+  `src/window/yards.rs`'s: a typed code at a hosted yard of the account's
+  own, never a member's (the edge hands out a member's code, so no PAKE
+  on it seals that device) and never a direct yard's.
 - `src/voice.rs`: the voice session's rules, as plain functions and one small
   book, tested on any system: the request the spoken sentences stand for (every
   request since the last delegation, in order, noise tags and greetings cut),
@@ -222,7 +234,9 @@ Setup, release and tests:
   screenshots, named by `FOOTPLATE_SHOT`; the voice state stands a session
   against a fake `Live` as well, with no microphone or speaker opened.
 - `src/fake.rs`: a yard for tests (socket or TCP, scripted JSON, tokens and
-  pairing; no TLS), a stand-in for PostHog's capture (`Posthog`), and, for
+  pairing, plain, sealed or by a typed code's PAKE; no TLS) with `Router` in
+  front of it as the edge, which keeps what crosses the pairing path and
+  can rewrite it, a stand-in for PostHog's capture (`Posthog`), and, for
   tests and the voice shot, one for OpenAI's Live socket (`Live`: the
   server's side of a voice session as events in and out, held to the
   reference, not to the module that uses it). `Yard::start()` is the

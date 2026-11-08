@@ -23760,7 +23760,13 @@ yardr.dev
         });
 
         // If the one member yard stops being held, the open-yard update
-        // forgets it too and leaves the fallback yard open.
+        // forgets it too and leaves the fallback yard open. The follower's
+        // stream is waited for before the edge refuses anything (a request it
+        // turns away never registers), since `end_streams` ends only the
+        // streams the yard has registered.
+        wait(cx, "the member yard's stream", |_| {
+            far.streams_asked().len() == 1
+        });
         edge.no_yard(crate::api::HOLDS_NO_YARD);
         far.end_streams();
         wait(cx, "the open member yard forgotten", |cx| {
@@ -23828,7 +23834,13 @@ yardr.dev
         });
 
         // Another 403 of the member yard is trouble that passes: the yard
-        // stays, said down, and is asked again.
+        // stays, said down, and is asked again. The follower's stream is
+        // waited for before the edge refuses anything (a request it turns
+        // away never registers), since `end_streams` ends only the streams
+        // the yard has registered.
+        wait(cx, "the member yard's stream", |_| {
+            member_far.streams_asked().len() == 1
+        });
         member_edge.no_yard("the yard is building");
         member_far.end_streams();
         wait(cx, "the member yard building", |cx| {

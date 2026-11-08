@@ -1584,7 +1584,11 @@ mod tests {
         assert_eq!(state.me, "jo");
 
         // Any other 403 of a member yard is trouble that passes: the yard
-        // is said down and asked again, never removed.
+        // is said down and asked again, never removed. The follower's stream
+        // is waited for before the edge refuses anything (a request it turns
+        // away never registers), since `end_streams` ends only the streams
+        // the yard has registered.
+        streams_opened(&yard, 1);
         edge.no_yard("the yard is building");
         yard.end_streams();
         let (why, _) = loop {

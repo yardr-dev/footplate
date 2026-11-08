@@ -120,6 +120,14 @@ until it is shown, and a conversation that is not open keeps its count. A
 yard built before `Conversation` had pages answers the whole conversation
 at once.
 
+A mail that answers another says so on its head, after the sender's name:
+`re 12`, where 12 is the number the yard gives the mail it answers; the
+yard's `yardr inbox` and `yardr chat` carry the same mark. A reply heads a
+group of its own, since the head is where the mark stands, and the mails
+under that head answer the same mail. Mail that answers none has no mark,
+and neither has any mail of a yard from before it recorded the link. The
+line writes a new mail; it does not reply to one.
+
 Above the cards the head names the yard, the bead and the topic once. A
 card shows, in this order: the question, the largest text, with how long it
 waits beside it; the asker; the context, with the bead whole one disclosure

@@ -395,7 +395,9 @@ this machine's that stands in for PostHog), `reactions` (the conversation with
 the parties' reactions under three mails), `reactions-hover` (that
 conversation with the bar of reactions to tap floating over one
 mail), `reactions-zoom`
-(that bar with the pointer on one emoji), `notice` (the
+(that bar with the pointer on one emoji), `reply` (the conversation
+with replies among its mails, each head saying which mail it
+answers), `notice` (the
 conversation with the notice a flows view that did not answer
 leaves under the mail), `drawer` (the conversation with the
 bead its chip names open in the drawer beside it), `delivery`

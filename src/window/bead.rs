@@ -29,7 +29,9 @@ use super::rail::{ImageOpen, OpenTip, Picture, RailTip, Unsent, post};
 use super::screen::{screen_control, screen_icon};
 use super::state::{Piece, Talk};
 use super::ui::{keys_hint, send_held, small_button};
-use super::words::{ask_words, bead_back_name, bead_sub, remark_color, worker_words};
+use super::words::{
+    answered_words, ask_words, bead_back_name, bead_sub, remark_color, worker_words,
+};
 use crate::api::{self, Address, BlobRef, Event, Reaction};
 use crate::draft::{self, Attachment, Found};
 use crate::model::{
@@ -1653,8 +1655,9 @@ impl Footplate {
     /// The letter's head, with the bar of reactions at its right while the
     /// pointer stands on the letter: the head is the letter's first line,
     /// where it has one. `at` is the time it says: the time alone where a
-    /// separator above names the day, with the date where none does.
-    /// `item` is the row of the list the head stands in.
+    /// separator above names the day, with the date where none does. A
+    /// reply says which mail it answers after the name. `item` is the row
+    /// of the list the head stands in.
     pub(crate) fn entry_head(
         &self,
         entry: &Entry,
@@ -1694,6 +1697,14 @@ impl Footplate {
                 .when(entry.mine, |el| el.text_color(palette.faint))
                 .child(entry.from.clone()),
         )
+        // What a reply answers stands after the name, in the clock's
+        // faint; the head says it for every mail under it.
+        .children(answered_words(entry.answered).map(|words| {
+            div()
+                .debug_selector(|| format!("answers {seq} {words}"))
+                .text_color(palette.faint)
+                .child(words)
+        }))
         .when(self.reacting(seq), |el| {
             el.children(self.react_row(seq, item, &entry.reactions, palette, cx))
         })

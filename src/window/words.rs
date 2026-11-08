@@ -373,6 +373,13 @@ pub(crate) fn unread_words(unread: usize) -> String {
     plural(unread, "none unread", "unread", "unread")
 }
 
+/// What a mail's head says it answers: `re 12`, the yard's own mark for a
+/// reply, as its inbox line, chat head and talk page say it. Nothing for
+/// mail that answers none.
+pub(crate) fn answered_words(answered: u64) -> Option<String> {
+    (answered != 0).then(|| format!("re {answered}"))
+}
+
 const ASK_ONE: &str = "question, among your decisions";
 const ASK_MANY: &str = "questions, among your decisions";
 

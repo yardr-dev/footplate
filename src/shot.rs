@@ -90,6 +90,8 @@ use crate::yard::Env;
 /// and the
 /// yardmaster's conversation with the parties' reactions under three
 /// mails, with the bar of reactions to tap floating over one of them, the
+/// yardmaster's conversation with replies among its mails, each head saying
+/// which mail it answers, the
 /// yardmaster's conversation with the notice a flows view that did not
 /// answer leaves under the mail, the yardmaster's conversation with
 /// the bead its chip names open in the drawer beside it, the yard row
@@ -201,6 +203,7 @@ pub const STATES: &[&str] = &[
     "reactions",
     "reactions-hover",
     "reactions-zoom",
+    "reply",
     "notice",
     "drawer",
     "delivery",
@@ -1912,6 +1915,36 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
         }
+        "reply" => {
+            // The yardmaster's conversation with two replies among its
+            // mails: jo's answer to the question names it, 12, and the
+            // yardmaster's to that names jo's, 14. The mail between the
+            // question and its follow-up reads under one head, as ever;
+            // the last answers none, and heads its own without a mark,
+            // since the head above it says one.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [], "unread": 0, "last": 0, "from": []}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                &json!({"result": [
+                    {"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo",
+                     "text": "The gate passed. Shall I land it?", "read": true},
+                    {"seq": 13, "at": "2026-10-08T09:31:00Z", "from": "yardmaster", "to": "jo",
+                     "text": "Nothing else waits on it.", "read": true},
+                    {"seq": 14, "at": "2026-10-08T09:36:00Z", "from": "jo", "to": "yardmaster",
+                     "text": "Land it.", "read": true, "answered": 12},
+                    {"seq": 15, "at": "2026-10-08T09:37:00Z", "from": "yardmaster", "to": "jo",
+                     "text": "Landed. The branch is gone and its worktree with it.",
+                     "read": true, "answered": 14},
+                    {"seq": 16, "at": "2026-10-08T09:38:00Z", "from": "yardmaster", "to": "jo",
+                     "text": "The next release has no blockers.", "read": true},
+                ]})
+                .to_string(),
+            );
+            yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
+        }
         "mail" | "image" => {
             // The yardmaster's mail carries a page and an image, as the
             // bead's note does in the page state: the yard holds the
@@ -3286,6 +3319,15 @@ mod tests {
                     assert_eq!(letters[1].reactions.len(), 2, "{state}");
                     assert!(letters[2].reactions.is_empty(), "{state}");
                     assert_eq!(letters[3].reactions.len(), 1, "{state}");
+                }
+                "reply" => {
+                    assert!(loaded.asks.open.is_empty(), "{state}");
+                    // Five mails: the yardmaster's two, jo's answer to the
+                    // first, the yardmaster's to that, and a last that
+                    // answers none.
+                    let letters = yard.client().conversation("jo", "yardmaster", 0).unwrap();
+                    let answered: Vec<u64> = letters.iter().map(|l| l.answered).collect();
+                    assert_eq!(answered, [0, 0, 12, 14, 0], "{state}");
                 }
                 "notice" => {
                     assert!(loaded.asks.open.is_empty(), "{state}");

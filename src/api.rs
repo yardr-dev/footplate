@@ -757,6 +757,11 @@ pub struct Letter {
     /// On mail to a linked yard only: `queued`, `sent` or `failed`.
     #[serde(default)]
     pub delivery: String,
+    /// The seq of the mail this one answers, 0 where it answers none. A
+    /// yard from before the field sends none, and the mail reads as it
+    /// always has.
+    #[serde(default)]
+    pub answered: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -9331,7 +9336,7 @@ mod tests {
     }
 
     #[test]
-    fn a_letter_carries_its_parties_reactions_or_none() {
+    fn a_letter_carries_its_reactions_and_the_mail_it_answers_or_none() {
         let yard = Yard::start();
         yard.answer(
             "Conversation",
@@ -9340,7 +9345,7 @@ mod tests {
                  "text": "Shall I land it?", "read": false,
                  "reactions": [{"from": "jo", "emoji": "👍"}]},
                 {"seq": 13, "at": "2026-10-08T09:31:00Z", "from": "jo", "to": "yardmaster",
-                 "text": "Land it.", "read": true}]}"#,
+                 "text": "Land it.", "read": true, "answered": 12}]}"#,
         );
         let letters = yard.client().conversation("jo", "yardmaster", 0).unwrap();
         assert_eq!(
@@ -9350,9 +9355,12 @@ mod tests {
                 emoji: "👍".into()
             }]
         );
+        assert_eq!(letters[1].answered, 12);
         // A yard from before reactions sends no such field, and the mail
-        // reads as it always has.
+        // reads as it always has. A yard from before the answered number
+        // sends none either, as one does for mail that answers none.
         assert_eq!(letters[1].reactions, vec![]);
+        assert_eq!(letters[0].answered, 0);
     }
 
     /// The PNG of docs/api.md: one pixel, 70 bytes.

@@ -1334,10 +1334,11 @@ mod tests {
     use super::state::{Counts, pairing_failure, rail_counts, waiting};
     use super::ui::shorten;
     use super::words::{
-        LineCounts, ask_words, bead_back_name, bead_sub, bead_words, decided_words, flow_words,
-        footplate_words, headcode_color, line_counts, more_words, remark_color, stage_group_words,
-        stage_lamp, stage_state, unread_words, waiting_words, waits_for_seat, worked_first,
-        worker_words, working_group_words, working_tip, working_words, yardr_place, yardr_words,
+        LineCounts, answered_words, ask_words, bead_back_name, bead_sub, bead_words, decided_words,
+        flow_words, footplate_words, headcode_color, line_counts, more_words, remark_color,
+        stage_group_words, stage_lamp, stage_state, unread_words, waiting_words, waits_for_seat,
+        worked_first, worker_words, working_group_words, working_tip, working_words, yardr_place,
+        yardr_words,
     };
     use super::*;
     use crate::api::{Flow, FlowBead, FlowDepot, FlowStage};
@@ -17325,6 +17326,70 @@ yardr.dev
         }
         // The mail that reads under the first head has none of its own.
         assert!(!drawn(cx, "head 13"));
+    }
+
+    /// A reply says which mail it answers on its head, after the name, as
+    /// the yard's inbox, chat and talk page say it: `re 13`. It heads a
+    /// group of its own, so that there is a head to say it on, and the
+    /// mails under that head answer the same mail. Mail that answers none,
+    /// as every mail of a yard from before the field does, says nothing.
+    #[gpui::test]
+    fn a_reply_s_head_says_which_mail_it_answers(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer(
+            "Conversation",
+            &json!({"result": [
+                {"seq": 12, "at": "2026-10-13T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "one", "read": true},
+                {"seq": 13, "at": "2026-10-13T09:31:00Z", "from": "yardmaster", "to": "jo", "text": "two", "read": true},
+                {"seq": 14, "at": "2026-10-13T09:32:00Z", "from": "jo", "to": "yardmaster", "text": "three", "read": true, "answered": 13},
+                {"seq": 15, "at": "2026-10-13T09:33:00Z", "from": "jo", "to": "yardmaster", "text": "four", "read": true, "answered": 13},
+                {"seq": 16, "at": "2026-10-13T09:34:00Z", "from": "jo", "to": "yardmaster", "text": "five", "read": true, "answered": 12},
+                {"seq": 17, "at": "2026-10-13T09:35:00Z", "from": "jo", "to": "yardmaster", "text": "six", "read": true},
+            ]})
+            .to_string(),
+        );
+        let (view, cx) = opened(&yard, &["one", "two", "three", "four", "five", "six"], cx);
+        assert_eq!(answered_words(13).as_deref(), Some("re 13"));
+        assert_eq!(answered_words(0), None);
+
+        // Mail 13 reads under 12's head: both answer none. Jo's 14 answers
+        // 13 and heads a group, 15 answers it too and reads under 14, 16
+        // answers another mail and heads its own, and 17 answers none.
+        let entries = view.read_with(cx, |v, _| v.model.as_ref().unwrap().entries());
+        let heads: Vec<bool> = entries.iter().map(|e| e.head).collect();
+        let answered: Vec<u64> = entries.iter().map(|e| e.answered).collect();
+        assert_eq!(heads, [true, false, true, false, true, true]);
+        assert_eq!(answered, [0, 0, 13, 13, 12, 0]);
+
+        // The mark stands on the head of a mail that answers one, with the
+        // yard's words, and on no other: not on the head of mail that
+        // answers none, and not on a mail under a head, which says it for
+        // that mail too.
+        for entry in &entries {
+            for n in [12, 13] {
+                assert_eq!(
+                    drawn(cx, &format!("answers {} re {n}", entry.seq)),
+                    entry.head && entry.answered == n,
+                    "mail {} re {n}",
+                    entry.seq
+                );
+            }
+        }
+
+        // It stands on the head's line, after the time and the name.
+        let time = local("2026-10-13T09:32:00Z", "%H:%M");
+        let (head, clock, mark) = (
+            bounds_of(cx, "head 14"),
+            bounds_of(cx, &format!("clock 14 {time}")),
+            bounds_of(cx, "answers 14 re 13"),
+        );
+        assert!(head.contains(&mark.center()), "{mark:?} in {head:?}");
+        assert!(mark.left() > clock.right(), "{mark:?} after {clock:?}");
+        assert!(
+            near(mark.top(), clock.top()),
+            "{mark:?} on {clock:?}'s line"
+        );
     }
 
     /// The notice under the mail stands in the reading column, with the

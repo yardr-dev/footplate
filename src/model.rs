@@ -365,7 +365,8 @@ pub struct Entry {
     /// line, under the last of them.
     pub standing: Option<String>,
     /// Whether the name and the time stand above it: the first of its
-    /// sender's mails within five minutes does, and the rest read under it.
+    /// sender's mails within five minutes that answer the same mail does,
+    /// and the rest read under it.
     pub head: bool,
     /// The day's separator above it, where the day changes: `Today`,
     /// `Yesterday`, or the weekday with the day and the month.
@@ -384,6 +385,9 @@ pub struct Entry {
     /// The parties' emoji on the mail, by who put them, as the yard
     /// answered them: shown under its text.
     pub reactions: Vec<Reaction>,
+    /// The seq of the mail it answers, 0 when it answers none: its head
+    /// says `re <seq>`.
+    pub answered: u64,
 }
 
 /// The reactions a tap puts: the yard's fixed set, in its order.
@@ -4433,8 +4437,9 @@ impl Model {
                 shown.standing = None;
             }
             // A mail reads under the sender's name and time above it while
-            // it comes within five minutes on the same day; every other one
-            // heads its own group, and a new day breaks above it.
+            // it comes within five minutes on the same day and answers the
+            // same mail; every other one heads its own group, and a new day
+            // breaks above it.
             let head = match before {
                 None => true,
                 Some(b) => !grouped(b, l, &zone),
@@ -4469,6 +4474,7 @@ impl Model {
                 refs,
                 asks,
                 reactions: l.reactions.clone(),
+                answered: l.answered,
             });
         }
         out
@@ -5302,6 +5308,7 @@ impl Model {
             to: to.to_string(),
             text: e.text("text").to_string(),
             files: e.files(),
+            answered: e.number("answered"),
             ..Letter::default()
         };
         let peer = e.text("to_peer");
@@ -5792,9 +5799,11 @@ where
 
 /// Whether the mail `after` reads under `before`'s name and time: from the
 /// same sender, within five minutes of it, on the same day in the zone of
-/// the person reading. A time that cannot be read stands on its own.
+/// the person reading, and answering the same mail, or both none. The head
+/// says which mail a reply answers, so every mail under it answers that
+/// one. A time that cannot be read stands on its own.
 fn grouped<Tz: TimeZone>(before: &Letter, after: &Letter, zone: &Tz) -> bool {
-    if before.from != after.from {
+    if before.from != after.from || before.answered != after.answered {
         return false;
     }
     let (Ok(first), Ok(next)) = (
@@ -8381,14 +8390,18 @@ mod tests {
             ],
         );
         m.event(&mail_to_jo(22, "yardmaster"));
+        // Mail 21, which only the stream tells of, is jo's answer to 12:
+        // the event carries it, as a read would.
         m.event(&event(
             21,
             "mail",
             "jo",
-            json!({"to": "yardmaster", "text": "between"}),
+            json!({"to": "yardmaster", "text": "between", "answered": 12}),
         ));
         let seqs: Vec<u64> = m.entries().iter().map(|e| e.seq).collect();
         assert_eq!(seqs, [12, 21, 22]);
+        let answered: Vec<u64> = m.entries().iter().map(|e| e.answered).collect();
+        assert_eq!(answered, [0, 12, 0]);
     }
 
     /// The mails `seqs` of `from` to jo, oldest first.
@@ -8915,7 +8928,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mail_joins_the_sender_s_group_within_five_minutes_on_the_day() {
+    fn a_mail_joins_the_sender_s_group_within_five_minutes_on_the_day_answering_the_same_mail() {
         let zone = chrono::FixedOffset::east_opt(2 * 3600).unwrap();
         let mail = |from: &str, at: &str| letter_at(1, from, "jo", at, "x");
         // Five minutes on the day, under the name above.
@@ -8951,6 +8964,21 @@ mod tests {
             &mail("ym", "2026-10-08T12:00:00Z"),
             &zone
         ));
+        // The head says which mail a reply answers, so a mail reads under
+        // it only while it answers the same one, or both answer none: any
+        // other number, or one beside none, heads a group of its own.
+        let reply = |answered: u64, at: &str| Letter {
+            answered,
+            ..mail("ym", at)
+        };
+        let (first, next) = ("2026-10-08T12:00:00Z", "2026-10-08T12:01:00Z");
+        assert!(grouped(&reply(12, first), &reply(12, next), &zone));
+        for (before, after) in [(0, 12), (12, 0), (12, 13)] {
+            assert!(
+                !grouped(&reply(before, first), &reply(after, next), &zone),
+                "{before} {after}"
+            );
+        }
     }
 
     #[test]

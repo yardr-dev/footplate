@@ -1,0 +1,90 @@
+# Throwaway probe for footplate-ghen, taken out before the bead finishes (net
+# nothing under .github/). Does `footplate.exe --version` reach a console, as
+# it does for a person at a prompt? The Smoke step of windows.yml reads its
+# line through a pipe, which shows it with or without AttachConsole.
+# .github/probe/console.ps1 runs an exe in a console of its own and reads the
+# console back. It runs on push to the branch, so that a push starts it.
+name: probe-ghen
+
+on:
+  push:
+    branches: [yard/footplate-ghen]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Two stand-ins, built in seconds, that say their line as the old footplate
+  # did and as the new one does. The probe must read the first as red and the
+  # second as green: this tells whether it can tell them apart, minutes
+  # before the real builds are done.
+  controls:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        shell: bash
+        run: |
+          rustc --edition 2021 -O -o silent.exe .github/probe/silent.rs
+          rustc --edition 2021 -O -o attached.exe .github/probe/attached.rs
+
+      - name: Probe
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .github\probe\console.ps1 -Exe silent.exe -Version 0.0.0
+          $silent = $LASTEXITCODE
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .github\probe\console.ps1 -Exe attached.exe -Version 0.0.0
+          $attached = $LASTEXITCODE
+          "silent.exe exited $silent (red is 1), attached.exe exited $attached (green is 0)"
+          if ($silent -ne 1 -or $attached -ne 0) { exit 1 }
+
+  # The release build of the base, as it was before the change, and of the
+  # branch, with the change: the probe is wanted red on the first, green on
+  # the second.
+  real:
+    name: real (${{ matrix.which }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [old, new]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: new
+
+      - uses: actions/checkout@v4
+        if: matrix.which == 'old'
+        with:
+          ref: 37097eb601adfd968fe066993445f7be75308a7b
+          path: old
+
+      - name: Rust
+        shell: bash
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Build
+        shell: bash
+        working-directory: ${{ matrix.which }}
+        run: cargo build --locked --release
+
+      - name: Version
+        shell: bash
+        run: |
+          version=$(tr -d '\r' < new/Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Probe (${{ matrix.which }}; the old code is wanted red, the new green)
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File new\.github\probe\console.ps1 -Exe "${{ matrix.which }}\target\release\footplate.exe" -Version $env:version

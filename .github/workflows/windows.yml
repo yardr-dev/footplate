@@ -86,8 +86,10 @@ jobs:
           (cd dist && 7z a -tzip "../footplate_${version}_windows_amd64.zip" footplate.exe README.md LICENSE NOTICE)
 
       # The footplate.exe that runs is the one in the zip, unpacked as a
-      # person would. It has no console, so its line reaches this step only
-      # because the shell captures it.
+      # person would. It has no console of its own, so on the runner its line
+      # reaches this step through the pipe the shell gives it. It is read into
+      # a variable and held to the version, then run again with nothing
+      # capturing it, so that the log has the line as the exe says it.
       - name: Smoke
         run: |
           mkdir smoke
@@ -98,6 +100,8 @@ jobs:
             echo "footplate.exe --version said [$said], not [footplate $version]" >&2
             exit 1
           }
+          echo "footplate.exe --version, not captured:"
+          smoke/footplate.exe --version
 
       # scripts/release.sh takes the zip of the commit it releases from the
       # artifacts after the run finishes. Each successful run leaves one, and

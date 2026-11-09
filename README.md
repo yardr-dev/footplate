@@ -121,9 +121,7 @@ opening the window:
 
 - macOS: `/Applications/Footplate.app/Contents/MacOS/footplate --version`
 - Linux: `~/.local/bin/footplate --version`, where the Linux steps put it
-- Windows: `.\footplate.exe --version | more`, in the folder that holds it.
-  Without `| more` a prompt shows nothing, since `footplate.exe` has no
-  console.
+- Windows: `.\footplate.exe --version`, in the folder that holds it
 
 ## Running and building
 

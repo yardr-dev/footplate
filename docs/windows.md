@@ -54,4 +54,6 @@ none of; the item in the tray, whose settings are not shown; the number on
 the taskbar. The title bar is the system's. An installer, and signing, are
 for later. The release's zip is not signed, and [Installing](../README.md#windows-pc) says
 what Windows shows for that. A release build is a console-less
-`footplate.exe`.
+`footplate.exe`, but for `--version`, which attaches to the console of the
+prompt that ran it and prints its line there. A prompt does not wait for a
+program with no console, so the line can come after the next prompt.

@@ -111,9 +111,10 @@ runs on no push. A builder on a Windows bead starts a run on its branch with
 `gh workflow run windows.yml --ref yard/<bead>`. It runs `cargo build
 --release`, zips `footplate.exe`, README.md, LICENSE and NOTICE as
 `footplate_<version>_windows_amd64.zip`, unpacks that zip and checks that its
-`footplate.exe --version` says Cargo.toml's version, and keeps the zip as an
-artifact of a successful run for 30 days. Each successful run leaves one, and
-they count against the account's storage.
+`footplate.exe --version` says Cargo.toml's version, read through a pipe, then
+runs it once more with nothing capturing it, so that the log has the line, and
+keeps the zip as an artifact of a successful run for 30 days. Each successful
+run leaves one, and they count against the account's storage.
 
 `scripts/release.sh` takes the zip of the run for the commit it releases
 (`HEAD`) with `gh`, which must be logged in, starting the run itself when the

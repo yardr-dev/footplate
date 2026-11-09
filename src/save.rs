@@ -98,6 +98,14 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
             ));
         };
         let path = dir.join(file_name);
+        // A directory at the name is a taken name. It is told here and not by
+        // the open: Windows opens no directory for writing and answers with
+        // "access denied", which is no "exists", so the write would end on
+        // it. The check follows no link; a link at the name is the open's to
+        // refuse, as it is on every system.
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            continue;
+        }
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         // Pictures can come from a yard or a hook. Keep them private like

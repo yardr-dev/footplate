@@ -82,12 +82,12 @@ fn numbered(name: &str, n: usize) -> Option<String> {
 }
 
 /// Writes `bytes` into the folder `dir` under `name`, or under the first of
-/// `name (2)`, `name (3)` and so on that nothing stands at (no file, no
-/// directory, no link), and returns the path it wrote. The folder is made
-/// where it is not there. A file that stands at a name is never opened for
-/// writing, nor is a link followed: each try creates its file or fails, so
-/// another program's file made between two tries is passed over, not written
-/// into. Half a picture is not kept.
+/// `name (2)`, `name (3)` and so on that no file stands at, and returns the
+/// path it wrote. The folder is made where it is not there. A file that
+/// stands at a name is never opened for writing, nor is a link followed:
+/// each try creates its file or fails, so another program's file made
+/// between two tries is passed over, not written into. Half a picture is not
+/// kept.
 pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     for n in 1..=TRIES {
@@ -98,6 +98,14 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
             ));
         };
         let path = dir.join(file_name);
+        // A directory at the name is a taken name. It is told here and not by
+        // the open: Windows opens no directory for writing and answers with
+        // "access denied", which is no "exists", so the write would end on
+        // it. The check follows no link; a link at the name is the open's to
+        // refuse, as it is on every system.
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            continue;
+        }
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         // Pictures can come from a yard or a hook. Keep them private like
@@ -115,7 +123,7 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
                     }
                 };
             }
-            Err(err) if taken(&err, &path) => continue,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
         }
     }
@@ -126,22 +134,6 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
             dir.display()
         ),
     ))
-}
-
-/// Whether `err`, the refusal of the open of `path`, says its name is taken.
-/// A file at the name is `AlreadyExists` everywhere, and so is a directory
-/// there, except on Windows, which opens no directory for writing and answers
-/// "access denied" instead: `PermissionDenied`, the same kind as a folder the
-/// person may not write in. So that refusal is a taken name where something
-/// stands at the name, and is returned as the folder's own where nothing does,
-/// at once and not after `TRIES` numbered names. `symlink_metadata` asks
-/// whether something stands there without opening it or following a link.
-fn taken(err: &io::Error, path: &Path) -> bool {
-    match err.kind() {
-        io::ErrorKind::AlreadyExists => true,
-        io::ErrorKind::PermissionDenied => fs::symlink_metadata(path).is_ok(),
-        _ => false,
-    }
 }
 
 #[cfg(test)]
@@ -259,24 +251,6 @@ mod tests {
         fs::create_dir(dir.path().join("pics")).unwrap();
         let path = write(dir.path(), "pics", b"z").unwrap();
         assert_eq!(path, dir.path().join("pics (2)"));
-        // A taken name is refused in the system's own word: "exists", and on
-        // Windows, for a directory, "access denied". The step above meets
-        // only the word of the system it runs on, so this asks the rule with
-        // each. "Access denied" is a taken name where something stands at the
-        // name, and the folder's own refusal where nothing does.
-        let stands = dir.path().join("pics");
-        let nothing = dir.path().join("nothing");
-        for (kind, at, want) in [
-            (io::ErrorKind::AlreadyExists, &stands, true),
-            (io::ErrorKind::PermissionDenied, &stands, true),
-            (io::ErrorKind::PermissionDenied, &nothing, false),
-            // No other refusal says a name is taken, whatever stands there.
-            (io::ErrorKind::NotFound, &stands, false),
-            (io::ErrorKind::InvalidInput, &stands, false),
-        ] {
-            let err = io::Error::from(kind);
-            assert_eq!(taken(&err, at), want, "{kind:?} at {at:?}");
-        }
         // A long name keeps its number and its extension whole.
         let long = format!("{}.png", "a".repeat(300));
         write(dir.path(), &long, b"x").unwrap();

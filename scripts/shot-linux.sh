@@ -94,7 +94,11 @@
 # with `docs` in its filter), `waiting` (the Decide list with three
 # beads parked for jo's move under the open ask, one of them open on
 # its card with the moves the yard offers), `waiting-end` (that card
-# at its end, where the moves and the line for their note are), `keys`
+# at its end, where the moves and the line for their note are),
+# `lines-waiting` (the same bead's Lines details, with the same moves under
+# its body), `lines-waiting-end` (those details at their end, the move
+# back picked and its note typed), `lines-help` (the same details on a yard
+# from before the call, which say who moves the stage in one line), `keys`
 # (the cheatsheet open over an open card), `about` (the About card open over the yardmaster's
 # conversation, naming footplate's version and the kept yardr's),
 # `about-missing` (that card with no yardr on the machine), `feedback` (the
@@ -138,7 +142,7 @@ set -e
 caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered waiting waiting-end keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered waiting waiting-end lines-waiting lines-waiting-end lines-help keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;

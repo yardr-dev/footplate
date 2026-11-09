@@ -37,6 +37,9 @@ pub(crate) enum KeysView {
     Conversation,
     Card,
     Waiting,
+    /// The Lines details of a bead the yard parks for the person: the
+    /// waiting card's keys, in Lines.
+    Moves,
     Grants,
     Teammates,
     Pairing,
@@ -54,6 +57,7 @@ impl KeysView {
             KeysView::Conversation => "this conversation",
             KeysView::Card => "this card",
             KeysView::Waiting => "this waiting bead",
+            KeysView::Moves => "this bead's moves",
             KeysView::Grants => "Grants",
             KeysView::Teammates => "Teammates",
             KeysView::Pairing => "Pair a phone",
@@ -154,6 +158,23 @@ pub(crate) fn keys_for(view: KeysView, drawer: bool) -> Vec<(String, String)> {
             ),
             ("?".into(), "this list".into()),
         ],
+        KeysView::Moves => vec![
+            ("1–9".into(), "pick a move".into()),
+            ("↑↓".into(), "pick, even while a note is typed".into()),
+            (
+                "enter".into(),
+                "makes the move picked, with the note typed".into(),
+            ),
+            ("shift+enter".into(), "breaks the line".into()),
+            ("i".into(), "types the note in".into()),
+            ("esc".into(), "leaves the line, the pick, then the note".into()),
+            (
+                "tab · shift+tab".into(),
+                "the next, the previous row".into(),
+            ),
+            ("pageup · pagedown".into(), "scroll by a page".into()),
+            ("?".into(), "this list".into()),
+        ],
         KeysView::Grants => vec![
             (
                 "tab · shift+tab".into(),
@@ -235,7 +256,9 @@ pub(crate) fn keys_for(view: KeysView, drawer: bool) -> Vec<(String, String)> {
                         .into();
                 }
             }
-            KeysView::Switcher | KeysView::Settings | KeysView::Away => {}
+            // A bead open full width shuts the drawer, so none stands
+            // beside its details.
+            KeysView::Switcher | KeysView::Settings | KeysView::Away | KeysView::Moves => {}
         }
     }
     // The window's keys, which answer in every view.

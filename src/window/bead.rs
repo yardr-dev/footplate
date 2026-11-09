@@ -2342,12 +2342,17 @@ impl Footplate {
     /// link naming where it came from leads there, and Open takes the
     /// bead's page to the browser where the web view answers. Full width
     /// in the reading pane and in the drawer beside it alike; `scroll`
-    /// is whose scroll it moves.
+    /// is whose scroll it moves. In the reading pane (`moves`) a bead the
+    /// yard parks for the person ends with the moves its card in Decide
+    /// offers, and one a yard from before the call cannot tell ends with
+    /// the one line that says who moves its stage; the drawer stands beside
+    /// another row, whose line the note would need, and has neither.
     pub(crate) fn talk_bead(
         &self,
         model: &Model,
         bead: &str,
         scroll: &ScrollHandle,
+        moves: bool,
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -2533,6 +2538,17 @@ impl Footplate {
         }
         list =
             list.child(self.bead_body(select::key(("bead", &detail.bead)), &detail, palette, cx));
+        // The moves are the card's own, from the same read: where the yard
+        // parks the bead for the person there is no other trigger, and the
+        // line of a yard without the read stands in their place, never
+        // beside them.
+        if moves {
+            if let Some(waiting) = model.waiting_detail(&detail.bead, &chrono::Utc::now()) {
+                list = list.child(self.moves_block(&waiting, palette, cx));
+            } else if model.stage_help(&detail.bead) {
+                list = list.child(self.stage_help_line(&detail.bead, palette));
+            }
+        }
         pane.children(self.reconnect_strip(palette))
             .child(head)
             .child(list)

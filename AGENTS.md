@@ -43,8 +43,10 @@ The window, its state and the yard:
     Waiting section (the rows are `waiting.rs`'s) and its decided history,
     each open ask's card with its secret, run and setup blocks, and what the
     cards do (answer, approve, give, decline, put aside).
-  - `src/window/bead.rs`: one bead's views: the bead whole, the conversation
-    thread with its mail, and the pictures and attachments of both.
+  - `src/window/bead.rs`: one bead's views: the bead whole (in the reading
+    pane it ends with `waiting.rs`'s moves where the bead is parked), the
+    conversation thread with its mail, and the pictures and attachments of
+    both.
   - `src/window/chrome.rs`: the shell the views stand in: the rail, the list
     and the open conversation, the settings and the keys, the tray and the
     badge. `told` takes in what the yard says, and `Footplate::run_in`
@@ -90,7 +92,10 @@ The window, its state and the yard:
     for their note), and what the moves do: pick, note, make (`MoveBead`),
     with a refusal and an unanswered call said on the card. The pick and the
     rows are the model's (`src/model.rs`); a card's note is kept under ask 0,
-    which no ask has.
+    which no ask has. The moves block is the Lines bead detail's too, for a
+    bead in the Waiting rows (`waiting_card` answers for both, so the keys
+    and the note are one), and on a yard from before the call the one
+    stage-help line stands in its place (`Model::stage_help`).
   - `src/window/words.rs`: the window's words for its rows (what its heads
     and counts say) and the colours that say what waits and for whom.
   - `src/window/yards.rs`: the yards' views: the switcher with its rows, each

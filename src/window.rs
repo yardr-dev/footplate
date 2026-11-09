@@ -1140,6 +1140,15 @@ impl Render for Footplate {
             {
                 CONTEXT
             }
+            // The Lines details of a parked bead end with the card's line,
+            // where it is drawn: no other bead's details have a line to
+            // type in, and their keys are not the line's text.
+            Some(Selected::Bead(_))
+                if self.waiting_card().is_some()
+                    && self.line.focus_handle(cx).is_focused(window) =>
+            {
+                CONTEXT
+            }
             _ => NO_LINE_CONTEXT,
         };
         let root = div()
@@ -4671,24 +4680,35 @@ mod tests {
     #[gpui::test]
     fn the_drawer_s_open_shows_the_bead_full_width_and_shuts_it(cx: &mut TestAppContext) {
         let yard = Yard::start();
-        a_yard_of_two_beads(&yard);
-        let mail = "over in bead-a after yd-zulu";
+        a_yard_with_parked_beads(&yard);
+        lines_with_parked_beads(&yard);
+        let mail = "over in bead-p after yd-zulu";
         mails(&yard, &[mail]);
         let (view, cx) = opened(&yard, &[mail], cx);
         cx.simulate_resize(gpui::size(px(1280.), px(800.)));
         assert!(drawn(cx, "text 12"));
 
-        click(cx, 12, mail, 24, 1.);
-        wait(cx, "yd-zulu read whole", |cx| {
-            has_bead(&view, cx, "yd-zulu")
+        click(cx, 12, mail, 10, 1.);
+        wait(cx, "bead-p read whole", |cx| has_bead(&view, cx, "bead-p"));
+        assert_eq!(drawer_of(&view, cx), Some("bead-p".to_string()));
+        wait(cx, "the drawer's bead", |cx| drawn(cx, "bead title bead-p"));
+        view.read_with(cx, |v, _| {
+            assert!(v.model.as_ref().unwrap().is_parked("bead-p"));
         });
-        assert_eq!(drawer_of(&view, cx), Some("yd-zulu".to_string()));
+        assert!(!drawn(cx, "waiting move bead-p 1"));
+        assert!(!drawn(cx, "waiting note bead-p"));
+        assert_eq!(
+            view.read_with(cx, |v, _| v.keys_view()),
+            KeysView::Conversation
+        );
         click_on(cx, "drawer open");
         wait(cx, "the bead full width", |cx| {
-            open_row(&view, cx) == Some(Selected::Bead("yd-zulu".into()))
+            open_row(&view, cx) == Some(Selected::Bead("bead-p".into()))
+                && drawn(cx, "waiting move bead-p 1")
         });
         assert_eq!(drawer_of(&view, cx), None);
         assert_eq!(view.read_with(cx, |v, _| v.mode()), Mode::Timetable);
+        assert_eq!(view.read_with(cx, |v, _| v.keys_view()), KeysView::Moves);
         assert!(drawn(cx, "bead back"));
     }
 
@@ -4824,7 +4844,17 @@ mod tests {
             does(KeysView::Waiting, false),
             ["leaves the line, the pick, then the note"]
         );
-        for view in [KeysView::Switcher, KeysView::Settings, KeysView::Away] {
+        assert_eq!(
+            does(KeysView::Moves, false),
+            ["leaves the line, the pick, then the note"]
+        );
+        // A bead open full width shuts the drawer, so its details name none.
+        for view in [
+            KeysView::Switcher,
+            KeysView::Settings,
+            KeysView::Away,
+            KeysView::Moves,
+        ] {
             assert_eq!(does(view, false), does(view, true), "{view:?}");
         }
     }
@@ -15745,6 +15775,7 @@ yardr.dev
             KeysView::Conversation,
             KeysView::Card,
             KeysView::Waiting,
+            KeysView::Moves,
             KeysView::Grants,
             KeysView::Yard,
             KeysView::Timetable,
@@ -15762,6 +15793,14 @@ yardr.dev
         }
         for key in ["x", "d", "a", "e"] {
             assert!(!rows(KeysView::Waiting).contains(&key.to_string()), "{key}");
+        }
+        // The same keys on the Lines details of a parked bead, which have no
+        // decisions' history to filter.
+        for key in ["1–9", "enter", "i", "esc", "?"] {
+            assert!(rows(KeysView::Moves).contains(&key.to_string()), "{key}");
+        }
+        for key in ["x", "d", "a", "e", "/"] {
+            assert!(!rows(KeysView::Moves).contains(&key.to_string()), "{key}");
         }
         assert!(rows(KeysView::Grants).contains(&"?".to_string()));
         assert!(!rows(KeysView::Grants).contains(&"d".to_string()));
@@ -33877,6 +33916,413 @@ yardr.dev
         yard.emit(r#"{"seq": 30, "kind": "advanced", "actor": "yardmaster", "bead": "bead-z", "at": "2026-10-08T09:30:00Z", "data": {}}"#);
         wait(cx, "the section's head", |cx| drawn(cx, "section Waiting"));
         assert_eq!(words::waiting_words(0), "none waiting");
+    }
+
+    /// The board and the flows the beads of `a_yard_with_parked_beads`
+    /// stand in on the Lines view: bead-p and bead-r in `ready` and bead-s
+    /// in `review`, two stages of people of plantime's flow (a session works
+    /// bead-s), bead-w worked in `build`, bead-e in no stage of the flow,
+    /// and bead-q with no line. The yard parks bead-p and bead-q for jo;
+    /// bead-r waits in a stage of people for someone else.
+    fn lines_with_parked_beads(yard: &Yard) {
+        let row = |bead: &str, title: &str, stage: &str, line: &str, remark: &str| {
+            json!({"bead": bead, "title": title, "platform": stage, "line": line,
+                   "expected": "—", "remark": remark,
+                   "tone": if remark.is_empty() { "none" } else { "amber" }})
+        };
+        yard.answer(
+            "Arrivals",
+            &json!({"result": {"rows": [
+                row("bead-p", "Release the autumn timetable", "ready", "plantime", "waits for jo"),
+                row("bead-r", "Wait for the printers", "ready", "plantime", "waits for mckean"),
+                row("bead-s", "A session works it", "review", "plantime", ""),
+                row("bead-w", "Build the fares", "build", "plantime", ""),
+                row("bead-e", "A bead off its flow", "odd", "plantime", ""),
+                row("bead-q", "Take the new fares live", "siding", "", "waits for jo"),
+            ], "platforms": ["build", "ready", "review", "siding"]}})
+            .to_string(),
+        );
+        let flowed = |bead: &str, title: &str, remark: &str| {
+            json!({"bead": bead, "title": title, "expected": "—", "remark": remark,
+                   "tone": if remark.is_empty() { "none" } else { "amber" },
+                   "working": false})
+        };
+        yard.answer(
+            "Flows",
+            &json!({"result": {
+                "travelling": 6,
+                "depots": [{"name": "plantime", "kind": "git", "travelling": 5, "flows": [
+                    {"name": "default", "type": "", "source": "store", "stages": [
+                        {"stage": "build", "group": "muse-builders", "human": false,
+                         "lamp": "none", "beads": [
+                            {"bead": "bead-w", "title": "Build the fares", "expected": "1h–2h",
+                             "remark": "", "tone": "none", "working": true,
+                             "worker": "claude pid 7", "group": "muse-builders"}]},
+                        {"stage": "ready", "group": "people", "human": true,
+                         "lamp": "turn", "beads": [
+                            flowed("bead-p", "Release the autumn timetable", "waits for jo"),
+                            flowed("bead-r", "Wait for the printers", "waits for mckean")]},
+                        {"stage": "review", "group": "people", "human": true,
+                         "lamp": "none", "beads": [
+                            {"bead": "bead-s", "title": "A session works it", "expected": "—",
+                             "remark": "", "tone": "none", "working": true,
+                             "worker": "claude pid 9", "group": "muse-reviewers"}]},
+                    ]}],
+                    "elsewhere": [flowed("bead-e", "A bead off its flow", "")]}],
+                "unassigned": [flowed("bead-q", "Take the new fares live", "waits for jo")],
+            }})
+            .to_string(),
+        );
+        for (bead, title) in [
+            ("bead-r", "Wait for the printers"),
+            ("bead-s", "A session works it"),
+            ("bead-w", "Build the fares"),
+            ("bead-e", "A bead off its flow"),
+        ] {
+            yard.answer_for("Bead", "bead", bead, &bead_parked(bead, title));
+        }
+    }
+
+    /// A bead the yard parks for the person, found on the board or among
+    /// the beads with no line, ends its details with the moves of its card
+    /// in Decide: the same buttons under the bead whole, the same line for
+    /// the note, the same keys, from the same read. The move is made as
+    /// there, and the bead stays open: its block goes with its row, the
+    /// line is empty again, and the counts of the board, of the panel and of
+    /// Decide fall together. The yard's words for a refusal stand on the
+    /// block. A bead in a stage of people the yard parks for no one the
+    /// reader is offers neither the block nor a line, and the back link
+    /// leads to where the bead was opened from.
+    #[gpui::test]
+    fn a_parked_bead_found_in_lines_ends_its_details_with_the_card_s_moves(
+        cx: &mut TestAppContext,
+    ) {
+        let yard = Yard::start();
+        a_yard_with_parked_beads(&yard);
+        lines_with_parked_beads(&yard);
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+        to_timetable(&view, cx);
+        click_on(cx, "row arrivals");
+        wait(cx, "the panel", |cx| {
+            drawn(cx, "panel headcode bead-p") && drawn(cx, "panel waits")
+        });
+        // What waits on jo is one number: the question and the two parked
+        // beads, as the panel's summary and the board's banner count it and
+        // as the rail, the switcher and Decide's section do.
+        let waiting = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
+            view.read_with(cx, |v, _| {
+                let m = v.model.as_ref().unwrap();
+                (
+                    m.waiting_on_you().len(),
+                    m.decisions_count() + m.parked_count(),
+                )
+            })
+        };
+        assert_eq!(waiting(&view, cx), (3, 3));
+        let back_to = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
+            view.read_with(cx, |v, _| v.model.as_ref().unwrap().bead_back())
+        };
+
+        // Found on the panel, or in its line, the details hold the same keys
+        // for the moves, and the back link leads to where the bead was
+        // opened from.
+        click_on(cx, "panel headcode bead-p");
+        wait(cx, "the bead from the panel", |cx| {
+            has_bead(&view, cx, "bead-p")
+                && open_row(&view, cx) == Some(Selected::Bead("bead-p".into()))
+        });
+        assert_eq!(view.read_with(cx, |v, _| v.keys_view()), KeysView::Moves);
+        assert_eq!(back_to(&view, cx), Selected::Arrivals);
+        click_on(cx, "bead back");
+        wait(cx, "the panel again", |cx| {
+            open_row(&view, cx) == Some(Selected::Arrivals)
+        });
+        click_on(cx, "row plantime");
+        wait(cx, "the line", |cx| drawn(cx, "card bead-p"));
+        click_on(cx, "card bead-p");
+        wait(cx, "the bead from its line", |cx| {
+            open_row(&view, cx) == Some(Selected::Bead("bead-p".into()))
+        });
+        assert_eq!(view.read_with(cx, |v, _| v.keys_view()), KeysView::Moves);
+        assert_eq!(back_to(&view, cx), Selected::Line("plantime".into()));
+        click_on(cx, "bead back");
+        wait(cx, "the line again", |cx| {
+            open_row(&view, cx) == Some(Selected::Line("plantime".into()))
+        });
+
+        // On the board, the details end with the card's moves, under the
+        // bead's head.
+        click_on(cx, "row arrivals");
+        to_departures(cx);
+        wait(cx, "the board", |cx| {
+            drawn(cx, "arrival bead-p") && drawn(cx, "waits banner")
+        });
+        assert_eq!(waiting(&view, cx), (3, 3));
+
+        click_on(cx, "arrival bead-p");
+        wait(cx, "the bead", |cx| {
+            has_bead(&view, cx, "bead-p") && drawn(cx, "bead title bead-p")
+        });
+        assert_eq!(open_row(&view, cx), Some(Selected::Bead("bead-p".into())));
+        assert_eq!(view.read_with(cx, |v, _| v.keys_view()), KeysView::Moves);
+        let (sub, one, two, field) = (
+            bounds_of(cx, "bead sub bead-p"),
+            bounds_of(cx, "waiting move bead-p 1"),
+            bounds_of(cx, "waiting move bead-p 2"),
+            bounds_of(cx, "waiting note bead-p"),
+        );
+        assert!(sub.bottom() <= one.top() + px(1.), "{sub:?} {one:?}");
+        assert!(one.bottom() <= two.top() + px(1.), "{one:?} {two:?}");
+        assert!(two.bottom() <= field.top() + px(1.), "{two:?} {field:?}");
+        assert!(one.size.height >= px(31.), "a target of 32: {one:?}");
+        // The moves, not the line of a yard without the call.
+        assert!(!drawn(cx, "stage help bead-p"));
+
+        // Enter with two moves and none picked makes none, and says so; the
+        // move back wants its note.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("MoveBead"), Vec::<Value>::new());
+        assert_eq!(notice(&view, cx), "pick a move first: 1-2, or the arrows");
+        cx.simulate_keystrokes("2 enter");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("MoveBead"), Vec::<Value>::new());
+        assert!(
+            notice(&view, cx).ends_with("needs a note: say what should change in the line (i)")
+        );
+        // `i` types the note in the card's line, which the details draw; esc
+        // leaves it and the words stay.
+        cx.simulate_keystrokes("i");
+        cx.simulate_input("the printed fares fail the check on page 2");
+        assert_eq!(
+            typed(&view, cx),
+            "the printed fares fail the check on page 2"
+        );
+        cx.simulate_keystrokes("escape");
+        assert_eq!(
+            typed(&view, cx),
+            "the printed fares fail the check on page 2"
+        );
+        // The note is the bead's, as on its card: it is there again when
+        // the bead's row in Decide is opened.
+        view.update_in(cx, |v, window, cx| {
+            v.select(Selected::Waiting("bead-p".into()), window, cx)
+        });
+        assert_eq!(
+            typed(&view, cx),
+            "the printed fares fail the check on page 2"
+        );
+        view.update_in(cx, |v, window, cx| {
+            v.select(Selected::Bead("bead-p".into()), window, cx)
+        });
+        assert_eq!(
+            typed(&view, cx),
+            "the printed fares fail the check on page 2"
+        );
+
+        // Enter makes the move the pick names, with the revision of the row
+        // and the note, as on the card.
+        yard.answer(
+            "MoveBead",
+            r#"{"result": {"bead": "bead-p", "stage": "shape"}}"#,
+        );
+        yard.answer("Waiting", &parked_board_without(&["bead-p"]));
+        cx.simulate_keystrokes("enter");
+        wait(cx, "the move made", |_| !yard.asked("MoveBead").is_empty());
+        assert_eq!(
+            yard.asked("MoveBead"),
+            [json!({
+                "bead": "bead-p", "outcome": "changes", "revision": "rev-p", "actor": "jo",
+                "note": "the printed fares fail the check on page 2"
+            })]
+        );
+        // The bead leaves the section at once and the details stand on the
+        // bead with no block; the note is gone with the move, and the
+        // counts of the board, the panel and Decide fell together.
+        wait(cx, "the section read again", |_| {
+            yard.asked("Waiting").len() >= 2
+        });
+        view.read_with(cx, |v, _| {
+            let m = v.model.as_ref().unwrap();
+            assert!(!m.is_parked("bead-p"));
+            assert_eq!(m.selected(), Some(&Selected::Bead("bead-p".into())));
+            assert!(!v.ask_words.contains_key(&("bead-p".into(), 0)));
+        });
+        assert_eq!(typed(&view, cx), "");
+        assert_eq!(waiting(&view, cx), (2, 2));
+        assert_eq!(
+            view.read_with(cx, |v, _| v.keys_view()),
+            KeysView::Timetable
+        );
+        // Enter makes nothing now.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("MoveBead").len(), 1);
+        // The back link leads to the board it was opened from.
+        click_on(cx, "bead back");
+        wait(cx, "the board again", |cx| {
+            open_row(&view, cx) == Some(Selected::Arrivals)
+        });
+
+        // A bead with no line is found in No line, and its block is the
+        // same; the yard's words for a refusal stand on it, and the back
+        // link leads to No line.
+        click_on(cx, "row No line");
+        wait(cx, "No line", |cx| drawn(cx, "no line bead bead-q"));
+        click_on(cx, "no line bead bead-q");
+        wait(cx, "the bead", |cx| {
+            has_bead(&view, cx, "bead-q") && drawn(cx, "waiting move bead-q 1")
+        });
+        assert_eq!(view.read_with(cx, |v, _| v.keys_view()), KeysView::Moves);
+        let stale = "bead bead-q is at revision rev-q2, not rev-q; read it again";
+        yard.answer(
+            "MoveBead",
+            &json!({"error": {"code": "conflict", "message": stale}}).to_string(),
+        );
+        let (waits, beads) = (yard.asked("Waiting").len(), yard.asked("Bead").len());
+        // A lone move stands picked: a click makes it at once.
+        click_on(cx, "waiting move bead-q 1");
+        wait(cx, "the refusal", |cx| {
+            refused_of(&view, cx, "bead-q", 0) == format!("not moved: {stale}")
+        });
+        assert!(drawn(cx, "waiting refused bead-q"));
+        wait(cx, "the reads", |_| {
+            yard.asked("Waiting").len() > waits && yard.asked("Bead").len() > beads
+        });
+        assert_eq!(yard.asked("MoveBead").len(), 2);
+        // The bead stands as the yard has it: still parked, still open.
+        assert_eq!(open_row(&view, cx), Some(Selected::Bead("bead-q".into())));
+        click_on(cx, "bead back");
+        wait(cx, "No line again", |cx| {
+            open_row(&view, cx) == Some(Selected::NoLine)
+        });
+
+        // A stage of people is no trigger: a bead the yard does not park
+        // for jo is read whole and ends with nothing, though bead-r waits
+        // in the same stage as bead-p did.
+        click_on(cx, "row arrivals");
+        wait(cx, "the board", |cx| drawn(cx, "arrival bead-r"));
+        click_on(cx, "arrival bead-r");
+        wait(cx, "bead-r", |cx| {
+            has_bead(&view, cx, "bead-r") && drawn(cx, "bead title bead-r")
+        });
+        assert!(!drawn(cx, "waiting move bead-r 1"));
+        assert!(!drawn(cx, "waiting note bead-r"));
+        assert!(!drawn(cx, "stage help bead-r"));
+        assert_eq!(
+            view.read_with(cx, |v, _| v.keys_view()),
+            KeysView::Timetable
+        );
+        cx.simulate_keystrokes("1 enter");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("MoveBead").len(), 2);
+    }
+
+    /// A yard from before the call serves no one's queue, and a bead's
+    /// details end with no moves; where the bead stands in a stage of people
+    /// of a served flow that no session works they say so in one line, to
+    /// every reader alike, with nothing to press. A stage no person works,
+    /// a bead off its flow or with no line, and a bead a session works say
+    /// nothing, and the line is not said again beside the moves of a yard
+    /// that serves the call.
+    #[gpui::test]
+    fn a_yard_from_before_the_call_says_who_moves_a_stage_in_one_line(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        lines_with_parked_beads(&yard);
+        yard.answer_for(
+            "Bead",
+            "bead",
+            "bead-p",
+            &bead_parked("bead-p", "Release the autumn timetable"),
+        );
+        yard.answer_for(
+            "Bead",
+            "bead",
+            "bead-q",
+            &bead_parked("bead-q", "Take the new fares live"),
+        );
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+        to_timetable(&view, cx);
+        click_on(cx, "row arrivals");
+        to_departures(cx);
+        wait(cx, "the board", |cx| drawn(cx, "arrival bead-p"));
+        view.read_with(cx, |v, _| {
+            let m = v.model.as_ref().unwrap();
+            assert!(m.waiting_too_old());
+            assert_eq!(m.parked_count(), 0);
+        });
+
+        // In a stage of people that no session works: the line, once, where
+        // the moves would stand, below the bead's head and with no button.
+        click_on(cx, "arrival bead-p");
+        wait(cx, "the bead", |cx| {
+            has_bead(&view, cx, "bead-p") && drawn(cx, "bead title bead-p")
+        });
+        assert!(drawn(cx, "stage help bead-p"));
+        let (sub, help) = (
+            bounds_of(cx, "bead sub bead-p"),
+            bounds_of(cx, "stage help bead-p"),
+        );
+        assert!(sub.bottom() <= help.top() + px(1.), "{sub:?} {help:?}");
+        assert!(!drawn(cx, "waiting move bead-p 1"));
+        assert!(!drawn(cx, "waiting note bead-p"));
+        assert_eq!(
+            view.read_with(cx, |v, _| v.keys_view()),
+            KeysView::Timetable
+        );
+        // It names the stage's mechanism, and promises nothing of this
+        // reader, nor of a move.
+        assert_eq!(
+            waiting::STAGE_HELP,
+            "this stage is moved by its people: yardr review on the yard's machine offers them its moves"
+        );
+        // Nothing is made by the keys or by a click on the line.
+        cx.simulate_keystrokes("1 enter");
+        click_on(cx, "stage help bead-p");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("MoveBead"), Vec::<Value>::new());
+        assert_eq!(open_row(&view, cx), Some(Selected::Bead("bead-p".into())));
+
+        // A reader the yard would not park the bead for gets the same line:
+        // it is the stage's, and no reader's. So does a second bead of the
+        // stage.
+        click_on(cx, "bead back");
+        wait(cx, "the board again", |cx| {
+            open_row(&view, cx) == Some(Selected::Arrivals)
+        });
+        click_on(cx, "arrival bead-r");
+        wait(cx, "bead-r", |cx| {
+            has_bead(&view, cx, "bead-r") && drawn(cx, "bead title bead-r")
+        });
+        assert!(drawn(cx, "stage help bead-r"));
+
+        // No line is said for a bead a session works, though it stands in a
+        // stage of people (`yardr review` offers a bead under its own
+        // group, which a session's never is a manual one), for a stage no
+        // person works, a bead off its flow, or one with no line at all.
+        for bead in ["bead-s", "bead-w", "bead-e"] {
+            click_on(cx, "bead back");
+            wait(cx, "the board again", |cx| {
+                open_row(&view, cx) == Some(Selected::Arrivals)
+            });
+            click_on(cx, &format!("arrival {bead}"));
+            wait(cx, bead, |cx| {
+                has_bead(&view, cx, bead) && drawn(cx, &format!("bead title {bead}"))
+            });
+            assert!(!drawn(cx, &format!("stage help {bead}")), "{bead}");
+            assert!(!drawn(cx, &format!("waiting move {bead} 1")), "{bead}");
+        }
+        click_on(cx, "row No line");
+        wait(cx, "No line", |cx| drawn(cx, "no line bead bead-q"));
+        click_on(cx, "no line bead bead-q");
+        wait(cx, "bead-q", |cx| {
+            has_bead(&view, cx, "bead-q") && drawn(cx, "bead title bead-q")
+        });
+        assert!(!drawn(cx, "stage help bead-q"));
+        assert!(!drawn(cx, "waiting move bead-q 1"));
     }
 
     /// A yard opened again is on the row it was left on, and that row's

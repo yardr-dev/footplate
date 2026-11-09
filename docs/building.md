@@ -391,7 +391,11 @@ look-alike row), `decisions-filtered` (that history with `docs`
 in its filter), `waiting` (the Decide list with three beads parked for
 jo's move under the open ask, one of them open on its card with the moves
 the yard offers), `waiting-end` (that card at its end, where the moves and
-the line for their note are), `keys` (the cheatsheet open over an open
+the line for their note are), `lines-waiting` (the same bead's Lines
+details, with the same moves under its body), `lines-waiting-end` (those
+details at their end, the move back picked and its note typed),
+`lines-help` (the same details on a yard from before the call, which say who
+moves the stage in one line), `keys` (the cheatsheet open over an open
 card),
 `about` (the About card open over the yardmaster's conversation,
 naming footplate's version and the yardr's, with its path), `about-missing`

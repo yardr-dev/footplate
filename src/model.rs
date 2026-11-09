@@ -2100,6 +2100,42 @@ impl Model {
         self.parked().count()
     }
 
+    /// Whether the yard parks the bead for the person's move: its row
+    /// stands in the Waiting section, and the Lines details of the bead end
+    /// with the same moves. On a yard that serves the call that is the only
+    /// trigger of the moves there.
+    pub fn is_parked(&self, bead: &str) -> bool {
+        self.parked().any(|row| row.bead == bead)
+    }
+
+    /// Whether the Lines details of the bead end with the one line that says
+    /// its stage is moved by people, in place of the moves: only on a yard
+    /// from before `Waiting`, which serves no one's queue, for a bead that
+    /// stands in a stage of a served flow whose group is a manual one. It
+    /// is the stage's word and no reader's: Flows serves no group's members.
+    ///
+    /// `yardr review` takes a bead's own group before its route's, and
+    /// Flows serves that group while a session works the bead, which is
+    /// never a manual group's: a worked bead stands in the stage but is not
+    /// one review offers, so it gets no line. A bead a person claimed is not
+    /// told by Flows, nor is one a route of its own sends to another group,
+    /// and for those the line follows the stage's flag.
+    pub fn stage_help(&self, bead: &str) -> bool {
+        if !self.waiting_too_old {
+            return false;
+        }
+        let Some(route) = self.route_for(bead) else {
+            return false;
+        };
+        route
+            .stages
+            .get(route.current)
+            .is_some_and(|stage| stage.human)
+            && self
+                .flow_bead(bead)
+                .is_some_and(|(found, _)| !found.working)
+    }
+
     /// The parked queue as read again. The yard has the call, so it is not
     /// too old for it. A bead the yard parks no more (another member moved
     /// it, or a question of the person's stands on it now) leaves the list,
@@ -2114,7 +2150,7 @@ impl Model {
     /// queue. Decisions then has no Waiting section, and no words about
     /// one; Lines' number of what waits on the reader goes by the remarks
     /// of the beads it shows ([`Model::waiting_on_you`]), and the bead
-    /// details' stage-help line keys on it, which lands next.
+    /// details' stage-help line keys on it ([`Model::stage_help`]).
     pub fn waiting_too_old(&self) -> bool {
         self.waiting_too_old
     }
@@ -13071,6 +13107,83 @@ mod tests {
         let (m, _) = Model::new(yard_without_waiting(), Mode::Chat, None);
         assert!(m.waiting_too_old());
         assert_eq!(m.parked_count(), 0);
+    }
+
+    /// The Lines details of a bead end with its moves where the yard parks
+    /// it for the person, and with nothing where it does not, though the
+    /// stage is one of people: a bead with a question of the person's
+    /// stands in Decide alone, and on a yard that serves the queue its rows
+    /// are the only trigger. A yard from before the queue serves which
+    /// stages people work and not whose move a bead is, so its details say
+    /// who moves a stage in one line, for a bead in a stage of people that no
+    /// session works: `yardr review` takes a bead's own group before its
+    /// route's, and a session's group is never a manual one. Nothing is said for a stage
+    /// no person works, for a bead Elsewhere, with no line, or in no flow
+    /// at all.
+    #[test]
+    fn a_bead_s_details_end_with_its_moves_or_on_an_old_yard_with_who_moves_its_stage() {
+        let mut flows = flow_view();
+        // A session works a bead in the stage of people.
+        flows.depots[0].flows[0].stages[1].beads.push(FlowBead {
+            working: true,
+            worker: "claude pid 7".into(),
+            group: "muse-reviewers".into(),
+            ..flowed("yd-worked", "Worked", "1h–2h", "", "none")
+        });
+
+        let mut state = yard(&[]);
+        state.parked = vec![
+            parked("yd-alpha", "Alpha moves first", "2026-11-01T09:00:00Z"),
+            parked("yd-asked", "Asked too", "2026-11-02T09:00:00Z"),
+        ];
+        state.asks.open = vec![open_ask(
+            "yd-asked",
+            "Asked too",
+            "",
+            3,
+            "Which first?",
+            "yardmaster",
+            "2026-11-04T09:00:00Z",
+        )];
+        let (mut m, _) = Model::new(state, Mode::Timetable, None);
+        m.flows(flows.clone());
+        assert!(!m.waiting_too_old());
+        assert!(m.is_parked("yd-alpha"));
+        // The question stands among the decisions alone, and a bead in a
+        // stage of people that the queue does not list offers no move.
+        assert!(!m.is_parked("yd-asked"));
+        assert!(!m.is_parked("yd-worked"));
+        assert_eq!(m.route_for("yd-worked").map(|r| r.current), Some(1));
+        // The line is a yard from before the queue's: it is never said
+        // where the yard serves the queue, whatever the stage.
+        for bead in ["yd-alpha", "yd-zulu", "yd-worked", "yd-shed", "yd-asked"] {
+            assert!(!m.stage_help(bead), "{bead}");
+        }
+
+        let (mut m, _) = Model::new(yard_without_waiting(), Mode::Timetable, None);
+        assert!(m.waiting_too_old());
+        // Before the flows are read no bead stands in a stage.
+        assert!(!m.stage_help("yd-alpha"));
+        m.flows(flows);
+        assert!(!m.is_parked("yd-alpha"));
+        assert!(m.stage_help("yd-alpha"));
+        // A stage no person works, whoever's turn the bead waits for.
+        assert!(!m.stage_help("yd-zulu"));
+        // A session works it: review does not offer a bead under its own
+        // group.
+        assert!(!m.stage_help("yd-worked"));
+        // Elsewhere, with no line, and in no flow at all.
+        for bead in ["yardr-pinned", "yd-shed", "yd-nobody"] {
+            assert!(!m.stage_help(bead), "{bead}");
+        }
+        // The queue read again: the yard has the call, and the line goes.
+        m.waiting(vec![parked(
+            "yd-alpha",
+            "Alpha moves first",
+            "2026-11-01T09:00:00Z",
+        )]);
+        assert!(m.is_parked("yd-alpha"));
+        assert!(!m.stage_help("yd-alpha"));
     }
 
     /// A yard from before the grants view has no SourceGrants call: its

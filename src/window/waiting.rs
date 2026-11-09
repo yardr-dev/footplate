@@ -32,6 +32,13 @@ pub(crate) const NEEDS_NOTE: &str = "needs a note";
 /// yard's own words: no move exists to offer until the flow is fixed.
 pub(crate) const NO_MOVE_UNTIL_FIXED: &str = "no move is offered until the flow is fixed";
 
+/// What the Lines details of a bead in a stage of people say, where the
+/// moves would stand, on a yard from before `Waiting`: the stage's
+/// mechanism, to every reader alike. It offers no button and does not say
+/// that this reader may move the bead.
+pub(crate) const STAGE_HELP: &str =
+    "this stage is moved by its people: yardr review on the yard's machine offers them its moves";
+
 /// The keys of a parked bead's card, as they stand under it. Several moves
 /// are picked by number; a lone move stands picked.
 pub(crate) fn waiting_keys(moves: usize) -> String {
@@ -63,15 +70,24 @@ pub(crate) fn note_wanted(label: &str) -> String {
 }
 
 impl Footplate {
-    /// The bead of the open card when it is a parked bead's, in view: the
-    /// settings stand where the card does, and the Feedback form over it,
-    /// and the keys are not for a card that is not in view.
+    /// The bead whose moves are in view: a parked bead's card, or the Lines
+    /// details of a bead the yard parks for the person once the bead is
+    /// read, whose block is the card's own. The settings stand where the
+    /// card does, and the Feedback form over it, and the keys are not for
+    /// moves that are not in view.
     pub(crate) fn waiting_card(&self) -> Option<String> {
         if self.settings_open || self.feedback.is_some() {
             return None;
         }
-        match self.model.as_ref()?.selected()? {
+        let model = self.model.as_ref()?;
+        match model.selected()? {
             Selected::Waiting(bead) => Some(bead.clone()),
+            // The details draw "Reading the bead." and no block until the
+            // bead is read; a drawer beside another row shuts as a bead
+            // opens full width, so none is open here.
+            Selected::Bead(bead) if model.is_parked(bead) && model.has_bead(bead) => {
+                Some(bead.clone())
+            }
             _ => None,
         }
     }
@@ -287,11 +303,17 @@ impl Footplate {
             })
     }
 
-    /// The moves under the bead: the yard's error where its flow does not
-    /// resolve, or its words for the stage's template that broke and the
-    /// moves all the same; one button for each move; the line for the
-    /// note; why the yard refused the last move; and the keys.
-    fn moves_block(&self, detail: &WaitingDetail, palette: Palette, cx: &mut Context<Self>) -> Div {
+    /// The moves under the bead, on its card and at the end of its Lines
+    /// details alike: the yard's error where its flow does not resolve, or
+    /// its words for the stage's template that broke and the moves all the
+    /// same; one button for each move; the line for the note; why the yard
+    /// refused the last move; and the keys.
+    pub(crate) fn moves_block(
+        &self,
+        detail: &WaitingDetail,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let bead = detail.bead.clone();
         let mut block = div().flex().flex_col().gap_2();
         // A flow that does not resolve offers no move: the error stands
@@ -404,6 +426,21 @@ impl Footplate {
         )
     }
 
+    /// The one line a yard from before `Waiting` gets where a bead's moves
+    /// would stand in its Lines details: who moves its stage. It is a line
+    /// and no more: nothing to press, and no claim that this reader may move
+    /// the bead.
+    pub(crate) fn stage_help_line(&self, bead: &str, palette: Palette) -> Div {
+        div()
+            .debug_selector({
+                let bead = bead.to_string();
+                move || format!("stage help {bead}")
+            })
+            .text_sm()
+            .text_color(palette.faint)
+            .child(STAGE_HELP)
+    }
+
     /// Enter on a parked bead's card, and a click on a move: the move
     /// the pick names, or the only one offered. A move that wants words and
     /// finds the line empty is not made, and says so; so does Enter when
@@ -456,7 +493,7 @@ impl Footplate {
                     // event reads the board and the flows.
                     Ok(_) => {
                         this.change_in(session, cx, |m| m.moved(&bead));
-                        this.forget_note(session, &bead);
+                        this.forget_note(session, &bead, cx);
                     }
                     // Whatever the yard said, the bead may stand as it did
                     // not when the row was read: the parked beads and the
@@ -487,11 +524,18 @@ impl Footplate {
     /// The note that went with a move is not kept for the bead: it has
     /// moved, and a note typed for its next stage is not this one. It was
     /// kept where the row was left (the line's text goes with the open
-    /// row, and a yard that is not open keeps its own).
-    fn forget_note(&mut self, session: u64, bead: &str) {
+    /// row, and a yard that is not open keeps its own). The Lines details
+    /// of the bead stay open on it when it is moved, so no row change
+    /// empties the line there: it would hold the note when the bead is
+    /// parked for the person again.
+    fn forget_note(&mut self, session: u64, bead: &str, cx: &mut Context<Self>) {
         let at = (bead.to_string(), 0);
         if session == self.session {
             self.ask_words.remove(&at);
+            let open = self.model.as_ref().and_then(|m| m.selected());
+            if open == Some(&Selected::Bead(bead.to_string())) {
+                self.line.update(cx, |line, cx| line.set_text("", cx));
+            }
             return;
         }
         let yard = self

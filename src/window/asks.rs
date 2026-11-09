@@ -77,6 +77,9 @@ impl Footplate {
             }
             Some(Selected::Decided(_, _)) => "Words with the pick".to_string(),
             Some(Selected::Waiting(_)) => "Note with the move (i)".to_string(),
+            Some(Selected::Bead(_)) if self.waiting_card().is_some() => {
+                "Note with the move (i)".to_string()
+            }
             _ => String::new(),
         };
         self.line

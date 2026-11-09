@@ -1242,20 +1242,24 @@ impl Footplate {
                             Some(((Selected::Decision(bead.clone()), px(1_000_000.)), false));
                     }
                     // The waiting-end shot stands the parked bead's card at its
-                    // end, where its moves and the line for their note are:
-                    // as above, past its end, where the layout stops. The
-                    // move back is picked, with its note typed, as a number
-                    // key and the words would leave it. A debug build's
-                    // alone.
+                    // end, where its moves and the line for their note are,
+                    // and the lines-waiting-end shot the same bead's Lines
+                    // details: as above, past its end, where the layout
+                    // stops. The move back is picked, with its note typed, as
+                    // a number key and the words would leave it. A debug
+                    // build's alone.
                     #[cfg(debug_assertions)]
-                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("waiting-end")
-                        && let Some(Selected::Waiting(bead)) = model.selected().cloned()
+                    if matches!(
+                        std::env::var("FOOTPLATE_SHOT").as_deref(),
+                        Ok("waiting-end") | Ok("lines-waiting-end")
+                    ) && let Some(open) = model.selected().cloned()
+                        && let Selected::Waiting(bead) | Selected::Bead(bead) = &open
                     {
-                        model.choose_move(&bead, 2);
+                        model.choose_move(bead, 2);
                         self.line.update(cx, |line, cx| {
                             line.set_text("the printed fares fail the check on page 2", cx)
                         });
-                        self.returning = Some(((Selected::Waiting(bead), px(1_000_000.)), false));
+                        self.returning = Some(((open, px(1_000_000.)), false));
                     }
                     // The image shot opens the mail's image over the
                     // window, as a click on its thumbnail does: the yard
@@ -2351,17 +2355,23 @@ impl Footplate {
             Selected::Waiting(bead) => {
                 self.ask_words.insert((bead.clone(), 0), typed);
             }
+            // The Lines details of a parked bead end with the same line:
+            // its note is the card's, kept the same way. A bead that is
+            // not parked draws no line to type in.
+            Selected::Bead(bead) => {
+                if self.model.as_ref().is_some_and(|m| m.is_parked(bead)) {
+                    self.ask_words.insert((bead.clone(), 0), typed);
+                }
+            }
             // Nothing is typed on the yard row, the grants, the
-            // teammates, the pairing, the board, a line, No line or the
-            // bead.
+            // teammates, the pairing, the board, a line or No line.
             Selected::Yard
             | Selected::Grants
             | Selected::Teammates
             | Selected::Pairing
             | Selected::Arrivals
             | Selected::Line(_)
-            | Selected::NoLine
-            | Selected::Bead(_) => {}
+            | Selected::NoLine => {}
         }
     }
 
@@ -2383,6 +2393,14 @@ impl Footplate {
                 .ask_words
                 .remove(&(bead.clone(), 0))
                 .unwrap_or_default(),
+            // The note of a parked bead is the same on its Lines details.
+            Some(Selected::Bead(bead))
+                if self.model.as_ref().is_some_and(|m| m.is_parked(bead)) =>
+            {
+                self.ask_words
+                    .remove(&(bead.clone(), 0))
+                    .unwrap_or_default()
+            }
             _ => String::new(),
         }
     }
@@ -3806,6 +3824,9 @@ impl Footplate {
             Some(Selected::Conversation(_)) => KeysView::Conversation,
             Some(Selected::Decision(_) | Selected::Decided(_, _)) => KeysView::Card,
             Some(Selected::Waiting(_)) => KeysView::Waiting,
+            // The Lines details of a parked bead hold the card's keys for
+            // its moves.
+            Some(Selected::Bead(_)) if self.waiting_card().is_some() => KeysView::Moves,
             Some(Selected::Grants) => KeysView::Grants,
             Some(Selected::Teammates) => KeysView::Teammates,
             Some(Selected::Pairing) => KeysView::Pairing,
@@ -6560,7 +6581,7 @@ impl Footplate {
             }
             Some(Selected::NoLine) => self.talk_no_line(model, palette, cx).into_any_element(),
             Some(Selected::Bead(bead)) => self
-                .talk_bead(model, bead, &self.decision, palette, cx)
+                .talk_bead(model, bead, &self.decision, true, palette, cx)
                 .into_any_element(),
             Some(Selected::Decision(bead)) => self
                 .talk_decision(model, bead, palette, cx)
@@ -6704,6 +6725,7 @@ impl Footplate {
                     model,
                     &bead,
                     &self.drawer_scroll,
+                    false,
                     palette,
                     cx,
                 )))
@@ -6767,6 +6789,10 @@ fn shot_selected() -> Option<Selected> {
         }
         Ok("waiting") | Ok("waiting-end") => {
             return Some(Selected::Waiting("plantime-4f2a".into()));
+        }
+        // The same bead's Lines details, from the board.
+        Ok("lines-waiting") | Ok("lines-waiting-end") | Ok("lines-help") => {
+            return Some(Selected::Bead("plantime-4f2a".into()));
         }
         Ok("run")
         | Ok("teammates")

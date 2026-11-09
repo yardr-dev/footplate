@@ -106,7 +106,10 @@ use crate::yard::Env;
 /// the Decide list with three beads parked for jo's move under the open ask
 /// and the history folded, one of the parked beads open on its card with the
 /// moves the yard offers, and that card stood at its end, where the moves and
-/// the line for their note are,
+/// the line for their note are, the Lines details of the first of those beads
+/// with the same moves under its body, those details stood at their end with
+/// the move back picked and its note typed, and the same details on a yard
+/// from before the call, which say in one line who moves the stage,
 /// The stopped yard answers nothing, as the refused one answers nowhere:
 /// both open on a yard that is down, as the posed setup does. The yard at
 /// an address is opened from the settings the shot script writes; the
@@ -202,6 +205,9 @@ pub const STATES: &[&str] = &[
     "decisions-filtered",
     "waiting",
     "waiting-end",
+    "lines-waiting",
+    "lines-waiting-end",
+    "lines-help",
     "keys",
     "about",
     "about-missing",
@@ -2073,14 +2079,18 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("Bead", &bead_links());
         }
-        "waiting" | "waiting-end" => {
+        "waiting" | "waiting-end" | "lines-waiting" | "lines-waiting-end" | "lines-help" => {
             // The Decide list: one open ask, and under it three beads
             // parked for jo's move, the longest waiting first: a bead with
             // a move forward and a move back that wants a note, one with
             // the one move a siding offers, and one a person approves
             // for production, which closes it. Twelve dealt with asks are
             // folded under them. The first parked bead is open on its card,
-            // with the stage's route under its title.
+            // with the stage's route under its title. The Lines shots open
+            // that bead's details instead, from the board: the same moves
+            // under its body, and on a yard from before the call, which
+            // serves no `Waiting`, the one line that says who moves its
+            // stage.
             yard.answer(
                 "UserInbox",
                 r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
@@ -2102,9 +2112,11 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("Bead", &bead_links());
             let midnight = shot_midnight();
-            yard.answer(
-                "Waiting",
-                &json!({"result": [
+            // The yard from before the call answers no such method.
+            if state != "lines-help" {
+                yard.answer(
+                    "Waiting",
+                    &json!({"result": [
                     {"bead": "plantime-4f2a", "title": "Release the autumn timetable",
                      "depot": "plantime", "stage": "ready", "group": "people",
                      "since": shot_since(&midnight, 3, 9, 30), "revision": "01KJ8W3C5T0E9XRQ2NAM4PBD7F",
@@ -2128,6 +2140,7 @@ fn populate(yard: &Yard, state: &str) {
                 ]})
                 .to_string(),
             );
+            }
             for (bead, title, stage, note) in [
                 (
                     "plantime-4f2a",
@@ -2958,7 +2971,10 @@ mod tests {
                 "decisions" | "decisions-filtered" => {
                     assert_eq!(loaded.asks.decided.len(), 156, "{state}")
                 }
-                "waiting" | "waiting-end" => assert_eq!(loaded.asks.decided.len(), 12, "{state}"),
+                "waiting" | "waiting-end" | "lines-waiting" | "lines-waiting-end"
+                | "lines-help" => {
+                    assert_eq!(loaded.asks.decided.len(), 12, "{state}")
+                }
                 _ => assert_eq!(loaded.asks.decided.len(), 0, "{state}"),
             }
             match *state {
@@ -3540,7 +3556,7 @@ mod tests {
                     assert_eq!(telling.number("limit"), 30, "{state}");
                     assert!(!telling.text("until").is_empty(), "{state}");
                 }
-                "waiting" | "waiting-end" => {
+                "waiting" | "waiting-end" | "lines-waiting" | "lines-waiting-end" => {
                     // One open ask, and three beads parked for jo's move,
                     // the longest waiting first, with the moves the yard
                     // offers each: the first open on its card, where the
@@ -3560,6 +3576,23 @@ mod tests {
                     assert_eq!(bead.stage, "ready", "{state}");
                     assert_eq!(bead.notes.len(), 1, "{state}");
                     assert_eq!(loaded.flows.depots[0].flows[0].stages.len(), 6, "{state}");
+                }
+                "lines-help" => {
+                    // The same yard from before the call: no beads parked
+                    // and the call too old, with the bead in a stage of
+                    // people that no session works, so that its details
+                    // say who moves the stage.
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    assert!(loaded.waiting_too_old, "{state}");
+                    assert!(loaded.parked.is_empty(), "{state}");
+                    let stage = &loaded.flows.depots[0].flows[0].stages[2];
+                    assert_eq!(
+                        (stage.stage.as_str(), stage.human),
+                        ("ready", true),
+                        "{state}"
+                    );
+                    assert!(!stage.beads[0].working, "{state}");
+                    assert_eq!(stage.beads[0].bead, "plantime-4f2a", "{state}");
                 }
                 "decisions" | "decisions-filtered" => {
                     // One open ask with four options on its card.

@@ -343,7 +343,9 @@ docker exec "$name" sh /src/scripts/shot-linux-stop.sh /tmp/shots/footplate.pid 
 docker exec -e "SHOT_LOOK=$look" -e "SHOT_TEXT=$text" "$name" sh -c 'export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
     scratch=$(mktemp -d /tmp/shots/scratch.XXXXXX)
-    mkdir -p "$scratch/home" "$scratch/config" "$scratch/data"
+    # config/footplate is made here, since the settings file written below
+    # goes into it, and a write into a directory that is not there is lost.
+    mkdir -p "$scratch/home" "$scratch/config/footplate" "$scratch/data"
     chown -R shot:shot "$scratch"
     echo "$scratch" > /tmp/shots/last-scratch
     # The yardr of the shot, where the installer puts it: doctor and

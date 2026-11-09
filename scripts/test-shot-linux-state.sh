@@ -165,10 +165,14 @@ esac
 
 # settings_given <state> <look> <text>: shoots the state against the stub,
 # with the look and the text size asked for (either may be empty), then runs
-# the lines of the container's script that write the settings file against
-# an empty directory, and prints what they wrote, or nothing where they
-# wrote nothing. The stub runs none of that script, so this is where the
-# rule of which states are given a file, and what is in it, is run.
+# the lines of the container's script that make the shot's directories and
+# those that write the settings file against an empty directory, and prints
+# what they wrote, or nothing where they wrote nothing. The stub runs none of
+# that script, so this is where the rule of which states are given a file,
+# and what is in it, is run. The directory the file goes in is made by the
+# script's own lines and by nothing here: a fixture that made it would hide a
+# write into a directory the script never made, which is lost with an error
+# on stderr and a window that opens with no settings.
 settings_given() {
     st=$1
     lk=$2
@@ -178,11 +182,16 @@ settings_given() {
         "$script" "$st" "$tmp/shot-given-$key.png" >/dev/null 2>&1 ||
         fail "$st at look [$lk] and text size [$tx] did not shoot"
     scratch=$tmp/scratch-$key
-    mkdir -p "$scratch/config/footplate"
+    mkdir -p "$scratch"
+    # shellcheck disable=SC2016 # the container's script holds a literal $scratch
+    sed -n '/^    mkdir -p "\$scratch\//p' "$tmp/log-given-$key" >"$scratch/section.sh"
+    [ -s "$scratch/section.sh" ] || fail "the script run for $st makes none of the shot's directories"
     sed -n '/^    shot_settings=""$/,/^    chown -R shot:shot /p' "$tmp/log-given-$key" |
-        sed '$d' >"$scratch/section.sh"
-    [ -s "$scratch/section.sh" ] || fail "the script run for $st holds no lines that write settings"
-    env SHOT_LOOK="$lk" SHOT_TEXT="$tx" scratch="$scratch" sh "$scratch/section.sh"
+        sed '$d' >"$scratch/writes.sh"
+    [ -s "$scratch/writes.sh" ] || fail "the script run for $st holds no lines that write settings"
+    cat "$scratch/writes.sh" >>"$scratch/section.sh"
+    env SHOT_LOOK="$lk" SHOT_TEXT="$tx" scratch="$scratch" sh "$scratch/section.sh" ||
+        fail "the lines that write the settings for $st at look [$lk] and text size [$tx] failed"
     if [ -f "$scratch/config/footplate/settings.json" ]; then
         cat "$scratch/config/footplate/settings.json"
     fi

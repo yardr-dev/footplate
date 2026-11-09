@@ -67,8 +67,20 @@ case "$look" in light|dark) ;; *)
     ;;
 esac
 # SHOT_SIZE is two positive whole numbers joined by an x, as
-# scripts/shot-linux.sh takes it.
+# scripts/shot-linux.sh takes it. grep reads a value line by line and is
+# content with one line right, so a value of several is refused before it:
+# the window (size_from, src/shot.rs) takes the whole value, finds no size in
+# it, and opens at its default without a word. A case does it, since ^ and $
+# stand at each line of a value even when grep -z reads it whole.
 size=${SHOT_SIZE:-}
+nl='
+'
+case "$size" in
+    *"$nl"*)
+        echo "shot-mac.sh: SHOT_SIZE must be WIDTHxHEIGHT using positive integers" >&2
+        exit 2
+        ;;
+esac
 if [ -n "$size" ] && ! printf '%s\n' "$size" | grep -E -q '^[1-9][0-9]*x[1-9][0-9]*$'; then
     echo "shot-mac.sh: SHOT_SIZE must be WIDTHxHEIGHT using positive integers" >&2
     exit 2

@@ -197,9 +197,16 @@ esac
 [ ! -e "$MOCK_LOG" ] || fail "a bad look started something: $(cat "$MOCK_LOG")"
 
 # A size that is not two positive whole numbers joined by an x is refused the
-# same way, and one that is reaches the window as the size to open at.
+# same way, and one that is reaches the window as the size to open at. grep
+# reads a value line by line and is content with one line right, so a value of
+# several passes it wherever the right one stands; size_from (src/shot.rs)
+# then gets the whole of it, finds no size, and the window opens at its
+# default as if the size had been taken. A newline is written as a variable
+# since $(...) strips trailing newlines, and the last value ends in one.
+nl='
+'
 export MOCK_LOG="$tmp/log-bogus-size"
-for bogus in 1200 x800 1200x 1200x800x2 0x800 1200x0 wide; do
+for bogus in 1200 x800 1200x 1200x800x2 0x800 1200x0 wide "1200x800${nl}wide" "wide${nl}1200x800" "1200x800$nl"; do
     set +e
     err=$(SHOT_SIZE=$bogus run_script yardmaster dark "$tmp/shot-size.png" "$tmp/bin/footplate-hold" 2>&1)
     code=$?

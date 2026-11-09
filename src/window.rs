@@ -1218,7 +1218,7 @@ impl Render for Footplate {
             .flex()
             .bg(palette.ground)
             .text_color(palette.text)
-            .text_size(rems(0.875));
+            .text_size(rems(select::ROOT_TEXT_REM));
         // Where the content reaches up into the title bar, a drag on the
         // window's top moves it, and the band across the rail and the list
         // leaves that strip to the traffic lights.
@@ -7899,6 +7899,57 @@ yardr.dev
         let (at, max) = screen_stand(&view, cx);
         assert!(max.height > px(0.), "the pane does not overflow its card");
         assert_eq!((at, max.width), (gpui::point(px(0.), -max.height), px(0.)));
+        // That pane is eight columns, under the card's least width, so its
+        // card stands at the least: 20 rems.
+        let rem = cx.update(|window, _| window.rem_size());
+        let card = bounds_now(cx, "screen card assembly").size.width;
+        assert!(
+            (card - rem * 20.).abs() < px(0.5),
+            "a narrow pane's card {card:?} is not at its least width"
+        );
+        // A pane of 80 columns, a terminal's own width, has a card sized
+        // for the widest mono face at the root's text size, with the card's
+        // padding and border. Menlo measures about 0.602 em; the test
+        // platform's face is 0.6 em, so its row fits with a little room.
+        // Sizing as if the text were 16 px, where it is drawn at 14, left
+        // the card 93 px wider than the row. The layout takes a row's width
+        // up to whole pixels.
+        let columns = 80;
+        let terminal = (1..=24)
+            .map(|n| format!("{n:02} {}", "x".repeat(columns - 3)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        yard.answer(
+            "SessionScreen",
+            &json!({"result": {"screen": terminal}}).to_string(),
+        );
+        let asked = yard.asked("SessionScreen").len();
+        click_on(cx, "screen refresh");
+        wait(cx, "the 80-column screen", |cx| {
+            yard.asked("SessionScreen").len() == asked + 1 && screen_of(&view, cx) == "24 lines"
+        });
+        let (_, max) = screen_stand(&view, cx);
+        let row = (rem * select::ROOT_TEXT_REM * screen::CHAR_ADVANCE * columns as f32).ceil();
+        let test_row = (rem * select::ROOT_TEXT_REM * 0.6 * columns as f32).ceil();
+        let body = bounds_now(cx, "screen body assembly").size.width;
+        let card = bounds_now(cx, "screen card assembly").size.width;
+        assert!(
+            (body - row).abs() < px(0.5),
+            "the body {body:?} is not as wide as the estimate for Menlo {row:?}"
+        );
+        assert!(
+            body >= test_row,
+            "the body {body:?} clips the test platform's row {test_row:?}"
+        );
+        assert!(
+            (card - (row + rem * 2. + px(2.))).abs() < px(0.5),
+            "the card {card:?} is not its row {row:?} with its padding and border"
+        );
+        assert_eq!(
+            max.width,
+            px(0.),
+            "the row {row:?} runs out of its body {body:?}"
+        );
         // A pane wider than the window scrolls sideways, to the last char of
         // its longest line and no further: the lines are as wide as that
         // line is drawn (the test platform sets a char 0.6 of the text's
@@ -7920,8 +7971,15 @@ yardr.dev
             yard.asked("SessionScreen").len() == asked + 1 && screen_of(&view, cx) == "120 lines"
         });
         let (at, max) = screen_stand(&view, cx);
-        let longest = cx.update(|window, _| window.rem_size()) * 0.875 * 0.6 * columns as f32;
+        let longest = rem * select::ROOT_TEXT_REM * 0.6 * columns as f32;
         let body = bounds_now(cx, "screen body assembly").size.width;
+        // Its card is as wide as the window leaves it, a margin each side.
+        let overlay = bounds_now(cx, "screen overlay").size.width;
+        let card = bounds_now(cx, "screen card assembly").size.width;
+        assert!(
+            (card - (overlay - rem * IMAGE_MARGIN * 2.)).abs() < px(0.5),
+            "the card {card:?} is not the window {overlay:?} less its margins"
+        );
         assert!(max.width > px(0.), "the pane does not scroll sideways");
         assert!(
             (max.width - (longest - body)).abs() < px(1.),

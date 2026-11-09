@@ -50,9 +50,9 @@ pub(crate) enum Shown {
 /// What the entries' hover says: what opening the screen shows.
 pub(crate) const SCREEN_TIP: &str = "screen: what the session's pane shows";
 
-/// A monospaced character's width, in ems: the advance of the faces
-/// [`select::mono`] names.
-const CHAR_ADVANCE: f32 = 0.6;
+/// A monospaced character's width, in ems: Menlo, the widest face
+/// [`select::mono`] names, measures about 0.602.
+pub(super) const CHAR_ADVANCE: f32 = 0.602;
 /// How narrow the card never is, in rems: an empty screen still stands
 /// with its head and its refresh.
 const CARD_MIN: f32 = 20.;
@@ -310,16 +310,25 @@ impl Footplate {
             face.font_family = mono.clone();
         }
         face.color = dark.text.into();
-        // The card fits the longest line, with its padding: the pane's
-        // width, as the call omits it and the parse measures it. A
+        // The card fits the longest line, with its padding and border: the
+        // pane's width, as the call omits it and the parse measures it. A
         // screen not there yet sizes to its line; a narrow one never
         // stands under the minimum, and none outgrows the window.
         let margin = f32::from(rem) * IMAGE_MARGIN;
         let avail = window.viewport_size();
         let card_w = match &open.shown {
             Shown::Here(screen) => {
-                let em = f32::from(face.font_size.to_pixels(rem));
-                let w = f32::from(rem) * 2. + screen.width as f32 * CHAR_ADVANCE * em;
+                // The text is drawn at the root's size. `face` is the
+                // view's own style, which still has gpui's 1 rem here: the
+                // root sets its size when its element lays out, after this.
+                let em = f32::from(rem) * select::ROOT_TEXT_REM;
+                // What the card's padding (`p_4`, a rem a side) and border
+                // (`border_1`, a pixel a side) leave of its width is the body
+                // a row stands in, and the layout takes a row's width up to
+                // whole pixels. With both counted, a row of the estimated
+                // width fits its body to the pixel.
+                let chrome = f32::from(rem) * 2. + 2.;
+                let w = chrome + (CHAR_ADVANCE * em * screen.width as f32).ceil();
                 w.clamp(
                     f32::from(rem) * CARD_MIN,
                     f32::from(avail.width) - 2. * margin,
@@ -396,11 +405,11 @@ impl Footplate {
                 // layout measures as the text is drawn, so a wide pane
                 // scrolls to its last character and not past it, and a
                 // narrow one has nowhere to go. The card's width is no
-                // measure to scroll by: it is an estimate, 0.6 em a char
-                // at the size the text has before the root sets its own,
-                // and a scroll by it would end in blank room or short of
-                // the line. Items at the start keep the lines their own
-                // height, for the scroll down.
+                // measure to scroll by: it is an estimate, 0.6 em a char,
+                // which the mono faces differ from (Ubuntu Mono is 0.5,
+                // Menlo 0.602), and a scroll by it would end in blank room
+                // or short of the line. Items at the start keep the lines
+                // their own height, for the scroll down.
                 div()
                     .id("screen scroll")
                     .flex_1()

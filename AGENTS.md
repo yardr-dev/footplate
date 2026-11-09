@@ -79,7 +79,10 @@ The window, its state and the yard:
     agent's input line is (`screen_scroll`); the open stands them at the left
     edge too. A pane wider than the card scrolls sideways: the lines are a
     `flex_none` item of a flex scroll, so gpui measures their width, which
-    the card's estimate (`CHAR_ADVANCE`) is not good enough for.
+    the card's estimate (`CHAR_ADVANCE`) is not good enough for. That
+    estimate is at the root's text size, `select::ROOT_TEXT_REM`:
+    `window.text_style()` has gpui's 1 rem while the view renders, before the
+    root's element sets its own.
   - `src/window/state.rs`: what the window keeps beside the model: where a
     yard stood when it was left, what waits in the yards it follows, and
     what the switch and the settings are asking or doing.

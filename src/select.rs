@@ -808,6 +808,12 @@ const COPY_HEIGHT: f32 = 1.5;
 /// How long a copy control reads "copied" after it was clicked.
 const COPIED_FOR: Duration = Duration::from_secs(2);
 
+/// The size the window's text is drawn at, in rems: the root sets it and
+/// what stands under it inherits it. A view that sizes something for its
+/// text while it renders reads it here, not from `window.text_style()`,
+/// which answers gpui's 1 rem until the root's element lays out.
+pub(crate) const ROOT_TEXT_REM: f32 = 0.875;
+
 /// A monospaced face this machine has, for code: the first of these.
 const MONO: [&str; 7] = [
     "Menlo",
@@ -1515,7 +1521,7 @@ mod tests {
     /// The text's own style, as the window sets it: seven eighths of a rem.
     fn base() -> TextStyle {
         TextStyle {
-            font_size: rems(0.875).into(),
+            font_size: rems(ROOT_TEXT_REM).into(),
             ..Default::default()
         }
     }

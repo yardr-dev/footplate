@@ -463,10 +463,13 @@ where:
   shows of itself (the About card and the away screen) on every system.
 - `icon-512.png`, 512 pixels, from `footplate.svg`: the full tile, edge to
   edge and rounded at 228 of 1024. It is Linux's: `footplate.png` of the
-  archive, and the icon `src/taskbar.rs` installs.
+  archive, and the icon `src/taskbar.rs` installs at 512 pixels.
 - `icon-small-16.png` and `icon-small-32.png`, from `footplate-small.svg`:
   the full tile with the line 112 thick where the others have 80, so that it
-  does not go faint. The bundle's icns takes them at 16 and 32 pixels.
+  does not go faint. The bundle's icns takes them at 16 and 32 pixels, and so
+  does Linux: `src/taskbar.rs` installs them as the 16 and 32 pixel hicolor
+  icons, and under X11 puts the 32 pixel one in the window's icon, whose
+  larger sizes are the full tile scaled.
 - `tray-icon.png`, 128 pixels, from `footplate-tray-symbolic.svg`: the Y
   alone in one colour, black on transparent. The menu bar item and the tray
   item draw it, and the system recolours it, or the program turns it white
@@ -507,18 +510,20 @@ options have no icon, so the program sees to it when it starts
   is the window's (`footplate`). There is no installer to put one there, so
   footplate writes its own, for you alone: `footplate.desktop` under
   `$XDG_DATA_HOME/applications` (`~/.local/share` without the variable) and
-  the icon under `icons/hicolor/512x512/apps` beside it. They are written
-  when they are missing or differ, so the entry names the binary that ran
-  last. It is for the open window and not in the menu of applications
-  (`NoDisplay`). The Linux archive carries an entry that does show in the
-  menu, which [Installing](../README.md#installing) has you copy to the same place.
+  the icon in three directories of `icons/hicolor` beside it, `16x16/apps`
+  and `32x32/apps` with the small tile and `512x512/apps` with the full one.
+  They are written when they are missing or differ, so the entry names the
+  binary that ran last. It is for the open window and not in the menu of
+  applications (`NoDisplay`). The Linux archive carries an entry that does
+  show in the menu, which [Installing](../README.md#installing) has you copy
+  to the same place.
   footplate leaves an entry like that as it is, whichever binary ran, and
   makes over only one that hides itself or is no entry at all. A desktop that
   has not read the entry by the time the window opens, on the very first
   start, shows the icon from the next.
   Under X11 the icon is also set on the window itself (`_NET_WM_ICON`), for
-  a panel that reads no desktop entries. To be rid of both, delete the two
-  files.
+  a panel that reads no desktop entries. To be rid of both, delete the four
+  files, the entry and the three icons.
 
 ## The code
 

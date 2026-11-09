@@ -75,16 +75,17 @@ The entry runs `$HOME/.local/bin/footplate`, through `sh`. An entry cannot
 name a home folder, and `.local/bin` is on no desktop's PATH until its owner
 puts it there, which is why steps 3 and 4 go together.
 
-The first time it runs, footplate puts its icon in
-`.local/share/icons/hicolor/512x512/apps`, so the menu shows the icon from the
-second start. To have it from the first, copy `footplate.png` there yourself,
-making any folder that is missing. footplate leaves the `footplate.desktop`
-you copied as it is.
+The first time it runs, footplate puts its icon in three sizes, in the
+folders `16x16/apps`, `32x32/apps` and `512x512/apps` of
+`.local/share/icons/hicolor`, so the menu shows the icon from the second
+start. To have it from the first, copy `footplate.png` into `512x512/apps`
+yourself, making any folder that is missing; the first start adds the other
+two. footplate leaves the `footplate.desktop` you copied as it is.
 
 To update, copy the new `footplate` over the old one. To remove it, delete
 `footplate` from `.local/bin`, `footplate.desktop` from
-`.local/share/applications` and `footplate.png` from
-`.local/share/icons/hicolor/512x512/apps`.
+`.local/share/applications` and `footplate.png` from each of the three folders
+`16x16/apps`, `32x32/apps` and `512x512/apps` of `.local/share/icons/hicolor`.
 
 ### Windows PC
 

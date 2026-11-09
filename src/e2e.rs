@@ -1119,6 +1119,14 @@ mod tests {
         )
     }
 
+    /// Whether `needle` stands whole in `bytes`, looked for in windows
+    /// of its own length: a width written beside a needle drifts from
+    /// it, and a window narrower than its needle finds nothing in
+    /// whatever `bytes` holds.
+    fn holds(bytes: &[u8], needle: &[u8]) -> bool {
+        bytes.windows(needle.len()).any(|w| w == needle)
+    }
+
     #[test]
     fn a_channel_public_key_round_trips_and_no_other_text_does() {
         let (_, yard) = pair();
@@ -1135,11 +1143,29 @@ mod tests {
     fn a_pairing_opens_at_the_yard_it_was_made_for_and_nowhere_else() {
         let (device, yard) = pair();
         let other = ChannelKey::generate().unwrap();
-        let (first, opening) = start_pairing(&device.private, &yard.public, "K7QM-2XPD").unwrap();
-        // Neither the code nor the device key crosses readable.
-        assert!(!first.windows(8).any(|w| w == b"K7QM-2XPD"));
+        let code = "K7QM-2XPD";
+        let (first, opening) = start_pairing(&device.private, &yard.public, code).unwrap();
+        // Neither the code nor the device key crosses readable: the key
+        // neither as the text it is written in (`channel_public`) nor as
+        // the bytes a handshake carries.
+        let key_text = channel_public(&device.public);
+        for (what, needle) in [
+            ("the code", code.as_bytes()),
+            ("the device key's text", key_text.as_bytes()),
+            ("the device key's bytes", device.public.as_slice()),
+        ] {
+            assert!(!holds(&first, needle), "the first message holds {what}");
+            // And the look finds what it looks for: the message with the
+            // needle planted in it holds it, so no pass is for want of
+            // looking.
+            let planted = [first.as_slice(), needle].concat();
+            assert!(
+                holds(&planted, needle),
+                "the look misses {what} planted in the first message"
+            );
+        }
         let opened = open_pairing(&yard.private, &first).unwrap();
-        assert_eq!(opened.code, "K7QM-2XPD");
+        assert_eq!(opened.code, code);
         assert_eq!(opened.device_key, channel_public(&device.public));
         assert!(open_pairing(&other.private, &first).is_err());
         let reply = opened.seal_answer(b"{\"token\":\"yardr-x\"}").unwrap();
@@ -1148,7 +1174,7 @@ mod tests {
             b"{\"token\":\"yardr-x\"}"
         );
         // A second opening spends nothing of the first's state.
-        let (first2, opening2) = start_pairing(&device.private, &yard.public, "K7QM-2XPD").unwrap();
+        let (first2, opening2) = start_pairing(&device.private, &yard.public, code).unwrap();
         let opened2 = open_pairing(&yard.private, &first2).unwrap();
         let reply2 = opened2.seal_answer(b"two").unwrap();
         assert_eq!(opening2.open_answer(&reply2).unwrap(), b"two");

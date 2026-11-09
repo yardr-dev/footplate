@@ -27,8 +27,9 @@ by a person with a key (its `RUN.md` has the command); it is deleted when
 The window, its state and the yard:
 
 - `src/main.rs`: opens the one window, owns the app lifecycle; draws nothing.
-  `--version` is answered before any of it (the Windows build's smoke test
-  runs it).
+  `--version` is answered before any of it, on Windows once it has attached
+  to the prompt's console (a release has none of its own); the Windows
+  build's smoke test runs it.
 - `src/window.rs`: draws the window from the model; no protocol. It holds the
   `Footplate` view, its actions and key bindings, and its `Render`, which
   picks what the window shows (the list with the open conversation, the

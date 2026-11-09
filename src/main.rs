@@ -8,7 +8,8 @@
 //! conversations a person has with this yard's crew and with the crew a
 //! linked yard exposes, as `yardr chat` shows them.
 
-// A release build on Windows is a window and no console; a debug build keeps
+// A release build on Windows is a window and no console, but for `--version`,
+// which attaches to its prompt's (attach_parent_console); a debug build keeps
 // the console, where what it prints is read.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 // The tests that start the socket fake, or a shell, are a unix system's and
@@ -98,11 +99,35 @@ fn version_line() -> String {
     format!("{NAME} {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// A Windows release has no console of its own (windows_subsystem, above), and
+/// a prompt hands such a program no standard output unless it redirects it, so
+/// `--version` would print nowhere. Attaching to the parent's console gives
+/// the line a place to go. Where the parent has none (Explorer started it) the
+/// call fails, and the line reaches only what was redirected, a pipe or a
+/// file, as before; so the result is not read. Only `--version` attaches: the
+/// window never touches a console, and allocating one would open a console
+/// window beside every launch of it.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+
+    // SAFETY: no pointer is passed. The call attaches this process to the
+    // console of its parent, which nothing else in the program has attached
+    // to, and fails where there is none.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+/// Only a Windows release is without a console.
+#[cfg(not(windows))]
+fn attach_parent_console() {}
+
 fn main() {
-    // Before the environment is read or anything is drawn. A Windows release
-    // has no console (windows_subsystem, above), so there the line reaches a
-    // pipe or a file, which is how the workflow reads it, and not a console.
+    // Before the environment is read or anything is drawn. The console is
+    // attached first, since a line said before it would go nowhere.
     if asks_version(std::env::args_os().skip(1)) {
+        attach_parent_console();
         println!("{}", version_line());
         return;
     }

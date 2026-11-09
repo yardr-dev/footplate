@@ -351,6 +351,19 @@ pub fn load(client: &Client, name: &str) -> Result<State, Trouble> {
     let unread = inbox.mail.into_iter().filter(|l| !l.read).collect();
     let notifications = client.user_notifications(&user.name, 0)?.notifications;
     let asks = client.user_asks(&user.name)?;
+    // The beads parked for the person's move are read beside the asks, and
+    // fail as the Lines calls below do: an unreadable queue reads as empty,
+    // with why for the window to say, and a yard from before the call has
+    // none to count, which is no notice either.
+    let (parked, parked_notice, waiting_too_old) = match client.waiting(&user.name) {
+        Ok(rows) => (rows, None, false),
+        Err(err) if model::waiting_too_old(&err) => (Vec::new(), None, true),
+        Err(err) => (
+            Vec::new(),
+            Some(format!("the waiting beads could not be read: {err}")),
+            false,
+        ),
+    };
     // One call's failure must not hold the whole yard away: an
     // unreadable board reads as empty, with why for the window to say,
     // and an unreadable flows view with it. A yard from before the
@@ -464,6 +477,9 @@ pub fn load(client: &Client, name: &str) -> Result<State, Trouble> {
         notification_cursor: user.notification_cursor,
         notifications,
         asks,
+        parked,
+        parked_notice,
+        waiting_too_old,
         arrivals,
         arrivals_notice,
         arrivals_too_old,
@@ -810,12 +826,21 @@ mod tests {
     }
 
     #[test]
-    fn load_reads_the_notifications_and_the_asks() {
+    fn load_reads_the_notifications_the_asks_and_the_parked_beads() {
         let yard = Yard::start();
         a_yard_of_jo(&yard);
         yard.answer(
             "GetUser",
             r#"{"result": {"name": "jo", "cursor": 5, "notification_cursor": 9}}"#,
+        );
+        yard.answer(
+            "Waiting",
+            r#"{"result": [
+                {"bead": "yd-notes", "title": "Publish the release notes", "stage": "proof",
+                 "group": "elders", "since": "2026-10-08T09:30:00Z", "revision": "01KJ8",
+                 "actions": [{"kind": "done", "label": "done: move to published",
+                              "outcome": "done", "to": "published"}]}
+            ]}"#,
         );
         yard.answer(
             "UserNotifications",
@@ -842,6 +867,51 @@ mod tests {
             vec![json!({"name": "jo", "limit": 0})]
         );
         assert_eq!(yard.asked("UserAsks"), vec![json!({"name": "jo"})]);
+        // The beads parked for the user's move are read beside the asks,
+        // by the same name.
+        assert_eq!(state.parked.len(), 1);
+        assert_eq!(state.parked[0].bead, "yd-notes");
+        assert_eq!(state.parked[0].actions[0].label, "done: move to published");
+        assert_eq!(state.parked_notice, None);
+        assert!(!state.waiting_too_old);
+        assert_eq!(yard.asked("Waiting"), vec![json!({"name": "jo"})]);
+    }
+
+    /// A parked queue the yard serves unreadably does not fail the state
+    /// read: it is empty, with why for the window to say. A yard from
+    /// before the call has none to read, which is no notice either, and the
+    /// state says so.
+    #[test]
+    fn load_reads_on_past_a_parked_queue_that_is_unreadable_or_too_old() {
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Waiting", r#"{"result": [7]}"#);
+        let state = load(&yard.client(), "jo").unwrap();
+        assert!(state.parked.is_empty());
+        assert!(
+            state
+                .parked_notice
+                .as_deref()
+                .unwrap()
+                .starts_with("the waiting beads could not be read: "),
+            "{:?}",
+            state.parked_notice
+        );
+        assert!(!state.waiting_too_old);
+        // A yard from before the call: empty, no notice, and too old. The
+        // stand-in answers an unscripted call so.
+        let old = Yard::start();
+        a_yard_of_jo(&old);
+        let state = load(&old.client(), "jo").unwrap();
+        assert!(state.parked.is_empty());
+        assert_eq!(state.parked_notice, None);
+        assert!(state.waiting_too_old);
+        // A queue that reads, none waiting, carries neither.
+        yard.answer("Waiting", r#"{"result": []}"#);
+        let state = load(&yard.client(), "jo").unwrap();
+        assert!(state.parked.is_empty());
+        assert_eq!(state.parked_notice, None);
+        assert!(!state.waiting_too_old);
     }
 
     /// An arrivals board the yard serves unreadably does not fail the

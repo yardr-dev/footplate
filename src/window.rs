@@ -8849,8 +8849,10 @@ yardr.dev
     }
 
     /// A put-aside ask whose return is past while the yard still lists it as
-    /// put aside: the queue is read once more for it and no more. Read again
-    /// for every answer that still lists it, the window asked without end.
+    /// put aside: the queue is read once more for it and no more, and the
+    /// parked beads with it, since an ask that is back takes its bead out of
+    /// them and tells no event. Read again for every answer that still lists
+    /// it, the window asked without end.
     #[gpui::test]
     fn a_return_that_is_past_reads_the_queue_once(cx: &mut TestAppContext) {
         let yard = Yard::start();
@@ -8875,13 +8877,14 @@ yardr.dev
         });
         // Once as the yard is opened, and once for the return that is past.
         wait(cx, "the queue read for the return", |_| {
-            yard.asked("UserAsks").len() == 2
+            yard.asked("UserAsks").len() == 2 && yard.asked("Waiting").len() == 2
         });
         for _ in 0..20 {
             cx.run_until_parked();
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(yard.asked("UserAsks").len(), 2);
+        assert_eq!(yard.asked("Waiting").len(), 2);
         view.read_with(cx, |v, _| {
             assert_eq!(v.model.as_ref().unwrap().decided_count(), 1);
         });
@@ -10365,6 +10368,21 @@ yardr.dev
                 == [json!({"bead": "bead-a", "text": "what about the docs links?", "actor": "jo"})]
         });
         assert_eq!(typed(&view, cx), "");
+    }
+
+    /// The beads parked for jo's move, as `Waiting` serves them: each at
+    /// `ready`, with the one move a stage without outcomes offers.
+    fn waiting_of(beads: &[&str]) -> String {
+        let rows: Vec<Value> = beads
+            .iter()
+            .map(|bead| {
+                json!({"bead": bead, "title": format!("{bead} waits"), "depot": "yardr",
+                       "stage": "ready", "group": "people",
+                       "since": "2026-10-12T11:07:00Z", "revision": format!("{bead}-rev"),
+                       "actions": [{"kind": "advance", "label": "Move to build", "to": "build"}]})
+            })
+            .collect();
+        json!({ "result": rows }).to_string()
     }
 
     /// One open ask that wants words, on its own bead.
@@ -15094,7 +15112,11 @@ yardr.dev
 
     /// A wait for several without an open ask banners nothing: the row
     /// stands as the yard printed it, and counts toward no "waiting on
-    /// you".
+    /// you". That is all a yard from before `Waiting` can say. One that
+    /// serves it says whose move it is: with the same bead parked for the
+    /// person among several, it counts and the banner stands once the
+    /// bead's next event has the queue read, and the click opens the
+    /// decisions mode.
     #[gpui::test]
     fn a_wait_for_several_without_an_open_ask_banners_nothing(cx: &mut TestAppContext) {
         let yard = Yard::start();
@@ -15107,9 +15129,31 @@ yardr.dev
         to_departures(cx);
         wait(cx, "the arrivals", |cx| drawn(cx, "arrival yd-zulu"));
         view.read_with(cx, |v, _| {
-            assert!(v.model.as_ref().unwrap().waiting_on_you().is_empty());
+            let model = v.model.as_ref().unwrap();
+            assert!(model.waiting_too_old());
+            assert!(model.waiting_on_you().is_empty());
         });
         assert!(!drawn(cx, "waits banner"));
+
+        // The yard now serves the queue, and parks the bead for jo.
+        yard.answer("Waiting", &waiting_of(&["yd-zulu"]));
+        yard.emit(r#"{"seq": 21, "kind": "advanced", "actor": "yardmaster", "bead": "yd-zulu", "data": {}}"#);
+        wait(cx, "the parked bead counted", |cx| {
+            view.read_with(cx, |v, _| {
+                let model = v.model.as_ref().unwrap();
+                !model.waiting_too_old()
+                    && model
+                        .waiting_on_you()
+                        .iter()
+                        .map(|(bead, _)| *bead)
+                        .eq(["yd-zulu"])
+            })
+        });
+        wait(cx, "the banner", |cx| drawn(cx, "waits banner"));
+        click_on(cx, "waits banner");
+        wait(cx, "the decisions mode", |cx| {
+            rail_mode(&view, cx) == Mode::Decisions
+        });
     }
 
     /// The banner holds fifty-five waits on its one line: the head
@@ -19770,24 +19814,37 @@ yardr.dev
     }
 
     /// The rail's chat and decisions tiles carry what waits in the open
-    /// yard: its unread mail and its open asks, each at its tile's top
-    /// right. The timetable carries none.
+    /// yard: its unread mail, and its open asks with the beads parked for
+    /// the person's move, each at its tile's top right. The timetable
+    /// carries none.
     #[gpui::test]
     fn the_rail_s_chat_and_decisions_carry_what_waits(cx: &mut TestAppContext) {
         let yard = Yard::start();
         // Mail unread in a conversation that is not open, and one open
-        // ask: the open conversation's own mail is read as shown.
+        // ask: the open conversation's own mail is read as shown. Two
+        // beads are parked for the person's move, one of them the bead
+        // the ask is on, which stands among the decisions alone.
         a_second_yard_of_jo(&yard);
         yard.answer("UserAsks", &asks_words_only());
+        yard.answer("Waiting", &waiting_of(&["bead-w", "yd-notes", "yd-fares"]));
         let (view, cx) = opened(&yard, &["From the second home."], cx);
         wait(cx, "what waits in the open yard", |cx| {
             view.read_with(cx, |v, _| {
                 v.model.as_ref().is_some_and(|m| {
                     let counts = Counts::of(m);
-                    counts.mail == 1 && counts.decisions == 1
+                    counts.mail == 1 && counts.decisions == 1 && counts.parked == 2
                 })
             })
         });
+        // The tile says each apart under one number, and the dock's icon
+        // is told the mail with both.
+        let counts = view.read_with(cx, |v, _| Counts::of(v.model.as_ref().unwrap()));
+        assert_eq!(
+            counts.rail(Mode::Decisions),
+            Some(("3".to_string(), "1 decision · 2 waiting".to_string()))
+        );
+        wait(cx, "the dock's number", |cx| badge_of(&view, cx) == 4);
+        assert_eq!(yard.asked("Waiting"), [json!({"name": "jo"})]);
         assert!(drawn(cx, "rail badge chat"));
         assert!(drawn(cx, "rail badge decisions"));
         assert!(!drawn(cx, "rail badge timetable"));
@@ -20591,6 +20648,19 @@ yardr.dev
             )]
         );
 
+        // A bead parked for the person's move in the yard that was left is
+        // counted with the decisions: in the switcher's words, after them,
+        // and in the icon's number. No notification tells of it: counting
+        // it is all that is done.
+        let waits = badge_of(&view, cx);
+        near.answer("Waiting", &waiting_of(&["yd-notes"]));
+        near.emit(r#"{"seq": 23, "kind": "advanced", "actor": "yardmaster", "bead": "yd-notes", "data": {}, "at": "2026-10-08T09:33:00Z"}"#);
+        wait(cx, "the parked bead in the yard that was left", |cx| {
+            state_of(&view, cx, "this machine") == "2 mail, 1 waiting"
+        });
+        assert_eq!(badge_of(&view, cx), waits + 1);
+        assert_eq!(tellings(cx), []);
+
         // A notification of a yard that is listed no longer opens nothing:
         // a row of its name in the open yard is another conversation, and
         // what is typed in it would be sent to the wrong yard.
@@ -20690,6 +20760,25 @@ yardr.dev
         );
         // In words it is of every yard at once.
         assert_eq!(tip_of(&view, cx).as_deref(), Some("4 wait: 4 mail"));
+
+        // The beads parked for the person's move are said as the decisions
+        // are: in the number, and in the words after them.
+        second.answer("Waiting", &waiting_of(&["yd-notes", "yd-fares"]));
+        second.emit(r#"{"seq": 22, "kind": "advanced", "actor": "yardmaster", "bead": "yd-notes", "data": {}, "at": "2026-10-08T09:34:00Z"}"#);
+        wait(cx, "the parked beads in the second home's yard", |cx| {
+            badge_of(&view, cx) == 6
+        });
+        assert_eq!(
+            tray_of(&view, cx),
+            said(
+                "6",
+                ["this machine · 1 mail", "second home · 3 mail, 2 waiting"]
+            )
+        );
+        assert_eq!(
+            tip_of(&view, cx).as_deref(),
+            Some("6 wait: 4 mail, 2 waiting")
+        );
 
         // The row of the yard that is not open shows the window on it, on
         // the yard's own row: it was not left on one. The yard is the one
@@ -21097,7 +21186,8 @@ yardr.dev
 
     /// The reload of the decisions a noted event makes in a yard that is
     /// not open fails: it is made again after a while, and the switcher
-    /// counts the ask then, with no restart and no event more.
+    /// counts the ask then, with no restart and no event more. So is the
+    /// reload of the beads parked for the person's move.
     #[gpui::test]
     fn a_reload_of_the_decisions_that_fails_is_made_again(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
@@ -21149,6 +21239,28 @@ yardr.dev
         cx.run_until_parked();
         assert_eq!(second.asked("UserAsks").len(), asked + 2);
         assert_eq!(second.streams_asked().len(), 1);
+
+        // The beads parked for the person's move are reloaded by the next
+        // event, and that read fails the same way: it is no verdict that
+        // the yard has no such call, so it is made again after a while,
+        // once, and the switcher counts the bead then.
+        let parked = second.asked("Waiting").len();
+        second.answer("Waiting", &waiting_of(&["yd-notes"]));
+        second.answer_once_status("Waiting", 500, "{}");
+        second.emit(r#"{"seq": 22, "kind": "noted", "actor": "yardmaster", "bead": "bead-s", "data": {"note": 8}, "at": "2026-10-08T09:32:00Z"}"#);
+        wait(cx, "the read of the parked beads that failed", |cx| {
+            notice(cx).starts_with("the waiting beads could not be read")
+        });
+        assert_eq!(second.asked("Waiting").len(), parked + 1);
+        assert_eq!(state_of(&view, cx, "second home"), "2 mail, 1 decision");
+        cx.executor().advance_clock(session::RETRY);
+        wait(cx, "the parked bead counted in the second home", |cx| {
+            state_of(&view, cx, "second home") == "2 mail, 1 decision, 1 waiting"
+        });
+        assert_eq!(second.asked("Waiting").len(), parked + 2);
+        cx.executor().advance_clock(session::RETRY + session::RETRY);
+        cx.run_until_parked();
+        assert_eq!(second.asked("Waiting").len(), parked + 2);
     }
 
     /// A stream that is cut and comes back with nothing new leaves the
@@ -21508,13 +21620,21 @@ yardr.dev
     }
 
     #[test]
-    fn what_waits_over_the_yards_is_their_mail_and_decisions_summed() {
+    fn what_waits_over_the_yards_is_their_mail_decisions_and_parked_beads_summed() {
         let counts = |mail, decisions, notices, changed| {
             Some(Counts {
                 mail,
                 decisions,
+                parked: 0,
                 notices,
                 changed,
+            })
+        };
+        // The beads parked for your move wait on you as a question does.
+        let parked = |parked| {
+            Some(Counts {
+                parked,
+                ..Counts::default()
             })
         };
         // No yard, and one where nothing waits.
@@ -21534,6 +21654,9 @@ yardr.dev
         // nothing from the others.
         assert_eq!(waiting([counts(2, 1, 0, 0), None, counts(0, 3, 0, 0)]), 6);
         assert_eq!(waiting([None]), 0);
+        // The parked beads are summed with the rest, over the yards.
+        assert_eq!(waiting([parked(3)]), 3);
+        assert_eq!(waiting([counts(2, 1, 5, 3), parked(4), None]), 7);
     }
 
     #[test]
@@ -21541,6 +21664,7 @@ yardr.dev
         let counts = |mail, decisions, notices, changed| Counts {
             mail,
             decisions,
+            parked: 0,
             notices,
             changed,
         };
@@ -21548,6 +21672,22 @@ yardr.dev
         assert_eq!(counts(2, 1, 0, 3).line(), "2 mail, 1 decision");
         assert_eq!(counts(1, 0, 1, 0).line(), "1 mail, 1 notice");
         assert_eq!(counts(0, 3, 12, 0).line(), "3 decisions, 12 notices");
+        // The beads parked for your move stand after the decisions.
+        let parked = |parked| Counts {
+            parked,
+            ..counts(1, 2, 1, 0)
+        };
+        assert_eq!(parked(0).line(), "1 mail, 2 decisions, 1 notice");
+        assert_eq!(parked(1).line(), "1 mail, 2 decisions, 1 waiting, 1 notice");
+        assert_eq!(parked(3).line(), "1 mail, 2 decisions, 3 waiting, 1 notice");
+        assert_eq!(
+            Counts {
+                parked: 3,
+                ..Counts::default()
+            }
+            .line(),
+            "3 waiting"
+        );
     }
 
     #[test]
@@ -21555,6 +21695,7 @@ yardr.dev
         let counts = |mail, decisions, notices| Counts {
             mail,
             decisions,
+            parked: 0,
             notices,
             changed: 0,
         };
@@ -21584,6 +21725,34 @@ yardr.dev
                 "1 decision · 1 mail · 1 notice".to_string()
             )
         );
+        // The beads parked for your move add to the number, and stand in
+        // the words after the decisions.
+        let parked = |parked| Counts {
+            parked,
+            ..counts(1, 2, 1)
+        };
+        assert_eq!(
+            parked(3).switcher(),
+            (
+                "6".to_string(),
+                "2 decisions · 3 waiting · 1 mail · 1 notice".to_string()
+            )
+        );
+        assert_eq!(
+            parked(0).switcher(),
+            (
+                "3".to_string(),
+                "2 decisions · 1 mail · 1 notice".to_string()
+            )
+        );
+        assert_eq!(
+            Counts {
+                parked: 1,
+                ..Counts::default()
+            }
+            .switcher(),
+            ("1".to_string(), "1 waiting".to_string())
+        );
     }
 
     #[test]
@@ -21598,6 +21767,7 @@ yardr.dev
         let counts = |mail, decisions, notices, changed| Counts {
             mail,
             decisions,
+            parked: 0,
             notices,
             changed,
         };
@@ -21643,6 +21813,31 @@ yardr.dev
         assert_eq!(counts(0, 0, 5, 0).rail(Mode::Chat), None);
         assert_eq!(counts(0, 0, 5, 0).rail(Mode::Decisions), None);
         assert_eq!(counts(0, 0, 5, 0).rail(Mode::Timetable), None);
+        // The Decide tile carries the decisions and the beads parked for
+        // the move together, its tooltip numbering each apart; the other
+        // tiles carry none of them.
+        let parked = |decisions, parked| Counts {
+            parked,
+            ..counts(0, decisions, 0, 0)
+        };
+        assert_eq!(
+            parked(2, 3).rail(Mode::Decisions),
+            Some(("5".to_string(), "2 decisions · 3 waiting".to_string()))
+        );
+        assert_eq!(
+            parked(0, 1).rail(Mode::Decisions),
+            Some(("1".to_string(), "1 waiting".to_string()))
+        );
+        assert_eq!(
+            parked(1, 0).rail(Mode::Decisions),
+            Some(("1".to_string(), "1 decision".to_string()))
+        );
+        assert_eq!(
+            parked(4, 8).rail(Mode::Decisions),
+            Some(("9+".to_string(), "4 decisions · 8 waiting".to_string()))
+        );
+        assert_eq!(parked(2, 3).rail(Mode::Chat), None);
+        assert_eq!(parked(2, 3).rail(Mode::Timetable), None);
     }
 
     #[test]

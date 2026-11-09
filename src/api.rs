@@ -1430,6 +1430,84 @@ pub struct Asks {
     pub decided: Vec<DecidedAsk>,
 }
 
+/// One move a parked bead is offered, in the yard's words: an outcome its
+/// flow names (`done`), or a stage it allows next (`advance`). It is also
+/// what [`Client::move_bead`] makes.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct Move {
+    /// `done`, which reports an outcome the flow names, or `advance`, which
+    /// sends the bead to a stage by hand.
+    #[serde(default)]
+    pub kind: String,
+    /// The move as `yardr review` prints it ("done: move to review"): shown
+    /// as it is.
+    #[serde(default)]
+    pub label: String,
+    /// The outcome a `done` move reports; absent on an `advance`.
+    #[serde(default)]
+    pub outcome: String,
+    /// The stage the move enters.
+    #[serde(default)]
+    pub to: String,
+    /// The move needs a note saying what should change: a move back to an
+    /// earlier stage, but for the return to a question's asker.
+    #[serde(default)]
+    pub note_required: bool,
+    /// Entering the stage closes the bead.
+    #[serde(default)]
+    pub terminal: bool,
+}
+
+/// One bead parked for the person, as `Waiting` lists it: open in a stage a
+/// manual group works, the person one of its members, and nothing asked of
+/// them that would move it. A bead that carries an open ask to the person
+/// is among their decisions instead, and the yard lists it in one only.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct Parked {
+    pub bead: String,
+    #[serde(default)]
+    pub title: String,
+    /// The depot it is worked in; empty where it has none.
+    #[serde(default)]
+    pub depot: String,
+    /// Where it stands, and the manual group whose stage it is.
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub group: String,
+    /// When the bead last changed: about when it began to wait.
+    #[serde(default)]
+    pub since: String,
+    /// The bead's revision the row was read at: a move names it, and the
+    /// yard refuses one made from a row the bead has changed since.
+    #[serde(default)]
+    pub revision: String,
+    /// The moves offered to the person, in `yardr review`'s order; none
+    /// where `flow_error` stands.
+    #[serde(default, deserialize_with = "or_default")]
+    pub actions: Vec<Move>,
+    /// Why the bead's flow does not resolve, where it does not: no move
+    /// exists until the flow is fixed.
+    #[serde(default)]
+    pub flow_error: String,
+    /// Why entering the stage put no ask for its people, where that ask
+    /// would stand. The bead still moves by hand.
+    #[serde(default)]
+    pub template_error: String,
+}
+
+/// What `MoveBead` answers: the bead, the stage the move entered, and
+/// whether entering it closed the bead.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct Moved {
+    #[serde(default)]
+    pub bead: String,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub closed: bool,
+}
+
 /// One option of an ask, in order, `you decide` last.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct AskOption {
@@ -4029,6 +4107,13 @@ impl Client {
         self.answer("UserAsks", json!({ "name": name }))
     }
 
+    /// The beads parked for the person, longest waiting first, each with the
+    /// moves it is offered and the revision a move is made from. A yard from
+    /// before the call says it has no such method.
+    pub fn waiting(&self, name: &str) -> Result<Vec<Parked>> {
+        self.list("Waiting", json!({ "name": name }))
+    }
+
     /// The arrivals board: the open beads still travelling, up to 15
     /// rows in arrival order, each with its expected arrival and remark.
     /// A yard not yet upgraded serves the rows as a bare list, which
@@ -4196,6 +4281,40 @@ impl Client {
             args["weighed"] = json!(true);
         }
         self.call("AnswerAsk", args).map(drop)
+    }
+
+    /// Makes one move `Waiting` offered the person, from the revision its row
+    /// was read at, with `note` in the same write where it holds words. The
+    /// yard takes exactly one of an outcome and a stage, so the move says
+    /// which by its kind: the outcome of a `done`, the stage of an `advance`;
+    /// a kind this build does not know is refused before any call. A call
+    /// that ends without a reply may have moved the bead: it is not in
+    /// `READS`, and the caller never makes it again, but reads the queue and
+    /// the bead for what the yard says. The Waiting card makes it next, so
+    /// until that lands only the tests do.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn move_bead(
+        &self,
+        bead: &str,
+        how: &Move,
+        note: &str,
+        revision: &str,
+        actor: &str,
+    ) -> Result<Moved> {
+        let mut args = json!({ "bead": bead, "revision": revision, "actor": actor });
+        match how.kind.as_str() {
+            "done" => args["outcome"] = json!(how.outcome),
+            "advance" => args["to"] = json!(how.to),
+            kind => {
+                return Err(Error::Protocol(format!(
+                    "a move of kind {kind:?}, which this footplate cannot make"
+                )));
+            }
+        }
+        if !note.trim().is_empty() {
+            args["note"] = json!(note);
+        }
+        self.answer("MoveBead", args)
     }
 
     /// Answers a secret ask: each name of the ask with the value the person
@@ -4980,6 +5099,7 @@ const READS: &[&str] = &[
     "UserNotifications",
     "DeliveryFiles",
     "UserAsks",
+    "Waiting",
     "Arrivals",
     "Flows",
     "SourceGrants",
@@ -9126,6 +9246,213 @@ mod tests {
             ("talk", "U999")
         );
         assert!(asks.open[1].identity.is_none());
+    }
+
+    /// `Waiting` asks for the user by name alone, and reads its rows as
+    /// docs/api.md shows them: the moves a row offers in the yard's words,
+    /// the revision a move is made from, and a flow that does not resolve
+    /// as a row with no move.
+    #[test]
+    fn waiting_lists_the_parked_beads_with_the_moves_the_yard_offers() {
+        let yard = Yard::start();
+        yard.answer(
+            "Waiting",
+            r#"{"result": [
+                {"bead": "yd-notes", "title": "Publish the release notes", "depot": "yard",
+                 "stage": "proof", "group": "elders", "since": "2026-10-08T09:30:00Z",
+                 "revision": "01KJ8W3C5T0E9XRQ2NAM4PBD7F",
+                 "actions": [
+                    {"kind": "done", "label": "done: finish as published (closes the bead)",
+                     "outcome": "done", "to": "published", "terminal": true},
+                    {"kind": "done", "label": "changes: send back to draft (note required)",
+                     "outcome": "changes", "to": "draft", "note_required": true}]},
+                {"bead": "yd-fares", "title": "Take the new fares live", "stage": "ready",
+                 "group": "people", "since": "2026-10-09T09:30:00Z", "revision": "01KJ9",
+                 "actions": [{"kind": "advance", "label": "Move to build", "to": "build"}],
+                 "template_error": "the stage's ask template does not parse"},
+                {"bead": "yd-broken", "title": "No flow", "stage": "odd", "group": "people",
+                 "since": "2026-10-10T09:30:00Z", "revision": "01KJA",
+                 "actions": null, "flow_error": "flow default: stage odd is not in it"}
+            ]}"#,
+        );
+        let rows = yard.client().waiting("jo").unwrap();
+        // The user by name, and nothing else: a device is its own user's.
+        assert_eq!(yard.asked("Waiting"), vec![json!({"name": "jo"})]);
+        assert_eq!(
+            rows.iter().map(|r| r.bead.as_str()).collect::<Vec<_>>(),
+            ["yd-notes", "yd-fares", "yd-broken"]
+        );
+        let notes = &rows[0];
+        assert_eq!(
+            (
+                notes.title.as_str(),
+                notes.depot.as_str(),
+                notes.stage.as_str(),
+                notes.group.as_str(),
+                notes.since.as_str(),
+                notes.revision.as_str()
+            ),
+            (
+                "Publish the release notes",
+                "yard",
+                "proof",
+                "elders",
+                "2026-10-08T09:30:00Z",
+                "01KJ8W3C5T0E9XRQ2NAM4PBD7F"
+            )
+        );
+        assert_eq!(notes.actions.len(), 2);
+        let (finish, back) = (&notes.actions[0], &notes.actions[1]);
+        assert_eq!(
+            (
+                finish.kind.as_str(),
+                finish.label.as_str(),
+                finish.outcome.as_str(),
+                finish.to.as_str(),
+                finish.note_required,
+                finish.terminal
+            ),
+            (
+                "done",
+                "done: finish as published (closes the bead)",
+                "done",
+                "published",
+                false,
+                true
+            )
+        );
+        assert_eq!(
+            (back.outcome.as_str(), back.to.as_str(), back.note_required),
+            ("changes", "draft", true)
+        );
+        // A depot the bead has not is absent; an advance move names no
+        // outcome; a template that broke still moves by hand.
+        let fares = &rows[1];
+        assert_eq!(fares.depot, "");
+        assert_eq!(
+            (
+                fares.actions[0].kind.as_str(),
+                fares.actions[0].outcome.as_str(),
+                fares.actions[0].to.as_str()
+            ),
+            ("advance", "", "build")
+        );
+        assert_eq!(
+            fares.template_error,
+            "the stage's ask template does not parse"
+        );
+        assert_eq!(fares.flow_error, "");
+        // A flow that does not resolve is a row with no move, so that the
+        // bead is not lost.
+        let broken = &rows[2];
+        assert!(broken.actions.is_empty());
+        assert_eq!(broken.flow_error, "flow default: stage odd is not in it");
+
+        // None waiting is an empty list, or none at all.
+        yard.answer("Waiting", r#"{"result": []}"#);
+        assert_eq!(yard.client().waiting("jo").unwrap(), vec![]);
+        yard.answer("Waiting", r#"{"result": null}"#);
+        assert_eq!(yard.client().waiting("jo").unwrap(), vec![]);
+        // A yard from before the call has no such method, and says so in
+        // the words the window reads as too old.
+        let old = Yard::start();
+        let err = old.client().waiting("jo").unwrap_err();
+        assert_eq!(err.to_string(), "no such method Waiting");
+        // A read: a timeout on it changed nothing.
+        assert!(reads("Waiting"));
+    }
+
+    /// `MoveBead` makes the move a `Waiting` row offered, by the argument
+    /// its kind names and not the other, with the revision of the row and the
+    /// note where the line holds words, and says where the bead went.
+    #[test]
+    fn move_bead_makes_one_offered_move_from_the_revision_it_was_read_at() {
+        let yard = Yard::start();
+        yard.answer(
+            "MoveBead",
+            r#"{"result": {"bead": "yd-notes", "stage": "published", "closed": true}}"#,
+        );
+        let client = yard.client();
+        let done = offered("done", "done", "published");
+        let advance = offered("advance", "", "build");
+        let moved = client
+            .move_bead("yd-notes", &done, "read on the train", "01KJ8", "jo")
+            .unwrap();
+        assert_eq!(
+            moved,
+            Moved {
+                bead: "yd-notes".into(),
+                stage: "published".into(),
+                closed: true
+            }
+        );
+        // An advance names the stage, and no outcome; a blank line sends no
+        // note, however it is blank; the answer says the bead stayed open
+        // by saying nothing of closing.
+        yard.answer(
+            "MoveBead",
+            r#"{"result": {"bead": "yd-fares", "stage": "build"}}"#,
+        );
+        let moved = client
+            .move_bead("yd-fares", &advance, "", "01KJ9", "jo")
+            .unwrap();
+        assert_eq!(
+            (moved.bead.as_str(), moved.stage.as_str(), moved.closed),
+            ("yd-fares", "build", false)
+        );
+        client
+            .move_bead("yd-fares", &advance, " \n ", "01KJ9", "jo")
+            .unwrap();
+        assert_eq!(
+            yard.asked("MoveBead"),
+            vec![
+                json!({"bead": "yd-notes", "outcome": "done", "note": "read on the train",
+                       "revision": "01KJ8", "actor": "jo"}),
+                json!({"bead": "yd-fares", "to": "build", "revision": "01KJ9", "actor": "jo"}),
+                json!({"bead": "yd-fares", "to": "build", "revision": "01KJ9", "actor": "jo"}),
+            ]
+        );
+
+        // A move of a kind this build does not know is not made: the yard
+        // takes exactly one of an outcome and a stage, and none is known.
+        let before = yard.asked("MoveBead").len();
+        let err = client
+            .move_bead(
+                "yd-fares",
+                &offered("close", "", "closed"),
+                "",
+                "01KJ9",
+                "jo",
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::Protocol(_)), "{err}");
+        assert_eq!(yard.asked("MoveBead").len(), before);
+
+        // The yard's refusal is shown whole, as the yard worded it, and a
+        // write, so a timeout on it says it may have run.
+        yard.answer(
+            "MoveBead",
+            r#"{"error": {"code": "conflict", "message": "bead yd-fares is at revision 01KJB, not 01KJ9; read it again"}}"#,
+        );
+        let err = client
+            .move_bead("yd-fares", &advance, "", "01KJ9", "jo")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "bead yd-fares is at revision 01KJB, not 01KJ9; read it again"
+        );
+        assert!(!reads("MoveBead"));
+    }
+
+    /// A move as a `Waiting` row offers it.
+    fn offered(kind: &str, outcome: &str, to: &str) -> Move {
+        Move {
+            kind: kind.into(),
+            label: format!("{kind}: {to}"),
+            outcome: outcome.into(),
+            to: to.into(),
+            ..Move::default()
+        }
     }
 
     #[test]

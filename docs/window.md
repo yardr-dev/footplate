@@ -502,9 +502,9 @@ quits whatever the setting says: there it switches
 
 On macOS footplate has an item in the menu bar: its mark, which is always
 there, and beside it the number of things that wait for you, while any do.
-It is the number on the dock's icon (mail you have not read plus the cards
-to decide, over every yard footplate follows), and changes as that does. A
-click opens a menu:
+It is the number on the dock's icon (mail you have not read, the cards to
+decide and the beads parked for your move, over every yard footplate
+follows), and changes as that does. A click opens a menu:
 
 ```text
 mac · 1 mail
@@ -540,7 +540,8 @@ A tray draws the icon and no title, so the count is on the icon:
 - nothing waits: footplate's mark alone;
 - one to nine wait: the mark with the number on it, white on a red badge
   in its lower right corner. The number is the one of the Mac's item:
-  mail you have not read plus the cards to decide, over every yard;
+  mail you have not read, the cards to decide and the beads parked for your
+  move, over every yard;
 - ten or more wait: a white plus on the badge, where the number would
   take two digits. A badge that wide would cover the stem of the Y, so
   the plus has the width of one digit;

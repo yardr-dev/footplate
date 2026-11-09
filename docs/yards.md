@@ -36,6 +36,7 @@ never otherwise: the microphone is open only while a session stands.
 | `UserNotifications` | what the yard reports, counted on the `yard` row |
 | `DeliveryFiles` | the files of each hook delivery the open `yard` row shows, once for each when its notice first shows, and once more when the yard's `hook_files` for it says they were fetched (they come after the delivery and its notice): shown under the notice as a mail's files are, a line for each one the yard did not take |
 | `UserAsks` | the open questions above the conversations, grouped by topic, with the decided folded under |
+| `Waiting` | the beads parked for you: open beads standing in a stage that a manual group works, you one of its members, with no question of yours open on them, each with the moves the yard offers it and the revision a move is made from. Read with the state, on every event that carries a bead and on the changes of a group, a route, a flow, a depot or the operator that docs/api.md names with the call, and at each put-aside question's return. They are counted with the decisions: on the Decide tile, in the switcher, in the dock's number and in Lines' "waiting on you". A yard from before the call has none to count: Lines' number goes by the remarks of the beads it shows, and no notice is raised |
 | `Arrivals` | the arrivals pane of Lines: the open beads still travelling, each with its expected arrival and remark, on the panel of tracks and the departures board. Read with the state, and again on every event about a bead and on the other changes docs/api.md names with the call |
 | `Flows` | each line of Lines, a depot with its flows, their stages in travel order and the beads on each; the beads that travel with no line; and the travelling total the arrivals row shows. Read as the arrivals are, and again when a depot is removed |
 | `SourceGrants` | the Grants row's pane, where the window runs as the yard's operator: every source × holder × call. Read with the state, when the row is opened, and on a `source_granted` event or a change of operator; a revoke tells no event. Not made for a hosted yard, which serves the list to no request that comes down the link from its edge, nor again once a yard has refused it so: the row and the pane say the grants are read on the yard's machine |
@@ -61,6 +62,7 @@ never otherwise: the microphone is open only while a session stands.
 | `GiveSecret` | Enter, in the field of a secret ask's card: each name the ask asks for with the value typed |
 | `ApproveAsk` | `cmd+enter` (`ctrl+enter` on Linux) or the Approve button, on a run ask's card: the ask named, and nothing of the command |
 | `ApproveSetup` | the same key and button, on a setup ask's card: the preset pick with the account together — the typed values, or the candidate taken. A value is in the call's body and in nothing else of the window |
+| `MoveBead` | one move of a bead parked for you, that `Waiting` offered it: the outcome of a `done` move or the stage of an `advance`, with the note it goes with in the same write and the revision of the row it was decided from. The client makes it, and no view of the window offers it yet. Where the call ends without a reply the bead may have moved: it is not made again, and the queue is read again |
 | `TelemetrySet` | the Telemetry section's Turn on or Turn off button, and nothing else: the switch named, with the operator. Where the yard refuses the change the section says the switch is changed in the yard's web view, and the call is not made again by another path |
 | `UninviteTeammate` | a teammate row's Remove button, and nothing else: the teammate named, with the operator. Files the removal as a run ask on a new bead, and says the bead and the ask; the run-ask card in the queue is where approval happens |
 | `DevicePairOpen` | the Pair a phone pane's Open button, and nothing else: the device name typed, for the operator's user, with the operator. Where the call ends without a reply the pane says the yard did not answer and reads the pairing again |
@@ -75,14 +77,15 @@ yards on `peer_*`, the users on mail from a name of this yard that has no
 row, the notices on an event that notified the user, a hook
 delivery's files on its `hook_files`, the
 queue on every `noted` event and once more at each put-aside ask's
+return, the parked beads on the events `Waiting` names and at the same
 return, and a bead shown on every event whose bead it is. Mail and
 notices arriving never cover or move the open card.
 
 Those reads may answer out of the order they were made in: an answer older
 than one already applied of its kind is dropped. A failed read is made
 again 3 seconds later while the yard answers, until it does; the two Lines
-calls of an older yard stay marked as too old, and so does `DeliveryFiles`: its
-notices show no files. A yard that is not reached
+calls of an older yard stay marked as too old, and so does `Waiting`: nothing
+of it counts. So does `DeliveryFiles`: its notices show no files. A yard that is not reached
 is read whole when it is back. A read that gave up for its timeout says the
 yard is slow to answer, since it changed nothing; a write that did says the
 action may or may not have happened, and is not asked again. A write that
@@ -334,7 +337,8 @@ own, with a token of its own.
 **Switching.** The line under your name in the head is the switcher: a
 click on it, or `cmd+y` (`ctrl+y` on Linux), lists the yards under it, each
 with its kind and its state: `open`, what waits in it now (`2 mail, 1
-decision`, or `nothing waiting`), or that it is not reached and why.
+decision, 3 waiting`, the last for the beads parked for your move, or
+`nothing waiting`), or that it is not reached and why.
 The arrows move, Enter opens, esc leaves, a click on a row opens it, a click
 outside the list shuts it and goes no further, and `cmd+1` to `cmd+9` open
 the yards in the list's order from anywhere. Every

@@ -485,8 +485,9 @@ options have no icon, so the program sees to it when it starts
   one: see "Building".
 
   The dock's icon also carries a number, when something waits for you: the
-  mail you have not read plus the cards to decide, over every yard footplate
-  follows. They are the numbers the switcher says per yard, summed; the
+  mail you have not read, the cards to decide and the beads parked for your
+  move, over every yard footplate follows. They are the numbers the switcher
+  says per yard, summed; the
   notices of a yard are not in it. It changes as they do, with the window
   behind another or hidden, and it is gone when nothing waits. A yard that
   is not reached counts what it last had (`src/dock.rs`). There is no

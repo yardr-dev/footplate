@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::{
     self, AboutBead, Arrival, Arrivals, AskWeight, Asks, Bead, BeadAsk, BeadNote, BlobRef,
     CrewMember, DecidedAsk, DevicePairing, Event, Flow, FlowBead, FlowDepot, Flows, GrantGiven,
-    Identity, Letter, Me, Notification, OpenAsk, Peer, Ran, Reaction, Run, Secret, Setup,
+    Identity, Letter, Me, Notification, OpenAsk, Parked, Peer, Ran, Reaction, Run, Secret, Setup,
     SourceGrant, Teammate, TelemetryPreview, Uninvited, User,
 };
 use crate::markdown;
@@ -63,6 +63,15 @@ pub struct State {
     pub notifications: Vec<Notification>,
     /// The person's open asks with what they dealt with.
     pub asks: Asks,
+    /// The beads parked for the person's move, as `Waiting` read them,
+    /// longest waiting first.
+    pub parked: Vec<Parked>,
+    /// Why the parked queue is empty, in the window's words; `None` where
+    /// it was read.
+    pub parked_notice: Option<String>,
+    /// The yard has no Waiting call: one from before the parked queue.
+    /// Nothing is counted of it, and no notice is raised.
+    pub waiting_too_old: bool,
     /// The arrivals board as read: the rows as served, ordered and
     /// remarked.
     pub arrivals: Arrivals,
@@ -919,6 +928,9 @@ pub enum Effect {
     AckNotifications { through: u64 },
     /// `UserAsks`; answered to [`Model::asks`].
     Asks,
+    /// `Waiting`; answered to [`Model::waiting`] or
+    /// [`Model::waiting_failed`].
+    Waiting,
     /// `Arrivals`; answered to [`Model::arrivals`].
     Arrivals,
     /// `Flows`; answered to [`Model::flows`].
@@ -957,6 +969,7 @@ pub enum Read {
     Users,
     Notifications,
     Asks,
+    Waiting,
     Arrivals,
     Flows,
     Grants,
@@ -974,6 +987,7 @@ impl Read {
             Read::Users => Effect::Users,
             Read::Notifications => Effect::Notifications,
             Read::Asks => Effect::Asks,
+            Read::Waiting => Effect::Waiting,
             Read::Arrivals => Effect::Arrivals,
             Read::Flows => Effect::Flows,
             Read::Grants => Effect::Grants,
@@ -1129,6 +1143,14 @@ impl Hour {
 pub struct Model {
     me: String,
     crew: Vec<CrewMember>,
+    /// The beads parked for the person's move, as `Waiting` read them. A
+    /// bead that carries an open ask to the person is none of them
+    /// ([`Model::parked`]).
+    parked: Vec<Parked>,
+    /// The yard has no Waiting call: one from before the parked queue.
+    /// Nothing is counted of it, and no notice is raised. A queue read
+    /// again clears it, as one read at the start never sets it.
+    waiting_too_old: bool,
     /// The arrivals board as read: the rows as served, ordered and
     /// remarked.
     arrivals: Vec<Arrival>,
@@ -1384,6 +1406,8 @@ impl Model {
             parties: parties(&state.peers),
             trust: trusted(&state.peers),
             crew: state.crew,
+            parked: state.parked,
+            waiting_too_old: state.waiting_too_old,
             arrivals: state.arrivals.rows,
             flows: state.flows,
             arrivals_too_old: state.arrivals_too_old,
@@ -2000,6 +2024,57 @@ impl Model {
         self.decision_beads().len()
     }
 
+    /// The beads parked for the person's move, longest waiting first as the
+    /// yard listed them, less any that carries an open ask to them. The yard
+    /// lists a bead in one of the two only, but the queues are read apart
+    /// and one may be newer than the other: a bead stands among the
+    /// decisions alone and is never counted twice.
+    pub fn parked(&self) -> impl Iterator<Item = &Parked> {
+        let asked: HashSet<&str> = self.open.iter().map(|ask| ask.bead.as_str()).collect();
+        self.parked
+            .iter()
+            .filter(move |row| !asked.contains(row.bead.as_str()))
+    }
+
+    /// How many beads are parked for the person's move: what the Decide
+    /// tile, the switcher and the dock count with the decisions.
+    pub fn parked_count(&self) -> usize {
+        self.parked().count()
+    }
+
+    /// The parked queue as read again. The yard has the call, so it is not
+    /// too old for it.
+    pub fn waiting(&mut self, parked: Vec<Parked>) {
+        self.parked = parked;
+        self.waiting_too_old = false;
+    }
+
+    /// Whether the yard has no Waiting call: one from before the parked
+    /// queue. Lines' number of what waits on the reader then goes by the
+    /// remarks of the beads it shows ([`Model::waiting_on_you`]), and the
+    /// bead details' stage-help line keys on it, which lands next: until
+    /// then only the tests ask.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn waiting_too_old(&self) -> bool {
+        self.waiting_too_old
+    }
+
+    /// The parked queue could not be read again. A yard without the call
+    /// has none to show: it is too old for it, and no notice is raised.
+    /// Anything else is said as a notice, as ever, and the queue stays as
+    /// it was.
+    pub fn waiting_failed(&mut self, err: &api::Error) {
+        match waiting_too_old(err) {
+            true => {
+                self.parked.clear();
+                self.waiting_too_old = true;
+            }
+            false => {
+                self.notice = format!("the waiting beads could not be read: {err}");
+            }
+        }
+    }
+
     /// The open asks above the conversations, grouped by topic, each group
     /// in the order its oldest ask waits. A bead with several open asks is
     /// one row.
@@ -2147,12 +2222,17 @@ impl Model {
         None
     }
 
-    /// The beads that wait on the person reading, in the board's order
-    /// first and then the complete Flows order. Arrivals is capped, so
-    /// the flows also supply waits beyond the rows the table can show. A
-    /// bead waits on them where its remark names them alone, or where
-    /// they have an open ask on it; a wait naming several people counts
-    /// only with an open ask on that bead.
+    /// The beads that wait on the person reading. Where the yard serves
+    /// `Waiting` they are the beads with an open ask to them, oldest first,
+    /// and then the beads parked for their move: the number Decide counts,
+    /// the yard saying whose move it is, a stage of several people
+    /// included. A yard from before the call says nothing of it, and the
+    /// beads Lines shows stand in, in the board's order first and then the
+    /// complete Flows order. Arrivals is capped, so the flows also supply
+    /// waits beyond the rows the table can show. A bead waits on them
+    /// there where its remark names them alone, or where they have an open
+    /// ask on it; a wait naming several people counts only with an open
+    /// ask on that bead.
     pub fn waiting_on_you(&self) -> Vec<(&str, &str)> {
         fn include<'a>(
             waiting: &mut Vec<(&'a str, &'a str)>,
@@ -2168,9 +2248,21 @@ impl Model {
             }
         }
 
-        let asked: HashSet<&str> = self.open.iter().map(|ask| ask.bead.as_str()).collect();
         let mut waiting = Vec::new();
         let mut seen = HashSet::new();
+        if !self.waiting_too_old {
+            for ask in &self.open {
+                if seen.insert(ask.bead.as_str()) {
+                    waiting.push((ask.bead.as_str(), ask.bead_title.as_str()));
+                }
+            }
+            waiting.extend(
+                self.parked()
+                    .map(|row| (row.bead.as_str(), row.title.as_str())),
+            );
+            return waiting;
+        }
+        let asked: HashSet<&str> = self.open.iter().map(|ask| ask.bead.as_str()).collect();
         for row in &self.arrivals {
             include(
                 &mut waiting,
@@ -5291,6 +5383,30 @@ impl Model {
         if arrivals || e.kind.as_str() == "depot_removed" {
             effects.push(Effect::Flows);
         }
+        // The parked queue moves with every event about a bead, `noted`
+        // among them (a stage ask another member answered moves the bead),
+        // and with the changes of its inputs that name none; docs/api.md
+        // lists them with the call, and it is kept apart from the arrivals'
+        // list: a route set moves it, and a session cap does not.
+        let parked = !e.bead.is_empty()
+            || matches!(
+                e.kind.as_str(),
+                "group_set"
+                    | "group_removed"
+                    | "route_added"
+                    | "route_set"
+                    | "route_removed"
+                    | "flow_set"
+                    | "flow_removed"
+                    | "flow_pointer_set"
+                    | "flow_pointer_cleared"
+                    | "depot_updated"
+                    | "depot_removed"
+            )
+            || e.kind.as_str() == "setting_changed" && e.text("key") == "operator";
+        if parked {
+            effects.push(Effect::Waiting);
+        }
         effects
     }
 
@@ -6372,6 +6488,14 @@ pub fn lines_too_old(err: &api::Error) -> bool {
     matches!(err, api::Error::Refused { message, .. } if message.starts_with("no such method"))
 }
 
+/// Whether the yard has no Waiting call: one from before the parked queue,
+/// which says it has no such method. That is no error: nothing is counted
+/// of the queue, and no notice is raised. Its words are read here, as
+/// above, and when they change this is shown as any refusal.
+pub fn waiting_too_old(err: &api::Error) -> bool {
+    matches!(err, api::Error::Refused { message, .. } if message.starts_with("no such method"))
+}
+
 /// What the Lines pane says of a yard from before the Lines view, in
 /// place of the arrivals or the flows it would draw: plain words, never
 /// the wire's method names, and never in red.
@@ -7445,6 +7569,36 @@ mod tests {
                 .map(|(seq, from)| letter(*seq, from, "jo", "unread"))
                 .collect(),
             ..State::default()
+        }
+    }
+
+    /// One bead parked for jo's move at `ready`, with the one move a stage
+    /// without outcomes offers, as `Waiting` serves it.
+    fn parked(bead: &str, title: &str, since: &str) -> Parked {
+        Parked {
+            bead: bead.into(),
+            title: title.into(),
+            depot: "yardr".into(),
+            stage: "ready".into(),
+            group: "people".into(),
+            since: since.into(),
+            revision: format!("{bead}-rev"),
+            actions: vec![api::Move {
+                kind: "advance".into(),
+                label: "Move to build".into(),
+                to: "build".into(),
+                ..api::Move::default()
+            }],
+            ..Parked::default()
+        }
+    }
+
+    /// A yard from before the parked queue: Lines' number of what waits on
+    /// the reader goes by the remarks of the beads it shows.
+    fn yard_without_waiting() -> State {
+        State {
+            waiting_too_old: true,
+            ..yard(&[])
         }
     }
 
@@ -9973,17 +10127,22 @@ mod tests {
     }
 
     #[test]
-    fn arrivals_and_flows_are_read_again_on_a_bead_s_events_and_their_other_inputs() {
+    fn arrivals_flows_and_parked_beads_are_read_again_on_a_bead_s_events_and_their_other_inputs() {
         let (mut m, _) = Model::new(yard(&[]), Mode::Chat, None);
         // Every event about a bead, whatever its kind: a note re-reads
-        // the queue beside the board and the flows view.
+        // the queue beside the board, the flows view and the parked beads.
         assert_eq!(
             m.event(&bead_event(21, "noted", "yd-links", json!({}))),
-            [Effect::Asks, Effect::Arrivals, Effect::Flows]
+            [
+                Effect::Asks,
+                Effect::Arrivals,
+                Effect::Flows,
+                Effect::Waiting
+            ]
         );
         assert_eq!(
             m.event(&bead_event(22, "session_ended", "yd-links", json!({}))),
-            [Effect::Arrivals, Effect::Flows]
+            [Effect::Arrivals, Effect::Flows, Effect::Waiting]
         );
         // The changes that move their other inputs though they name no
         // bead: docs/api.md names them with the calls.
@@ -10000,25 +10159,44 @@ mod tests {
         ] {
             assert_eq!(
                 m.event(&event(seq, kind, "", json!({}))),
-                [Effect::Arrivals, Effect::Flows],
+                [Effect::Arrivals, Effect::Flows, Effect::Waiting],
                 "{kind}"
             );
         }
         // A removed depot's line leaves the timetable, and only
-        // `depot_removed` says so: the flows view alone moves for it.
+        // `depot_removed` says so: the flows view moves for it, and so do
+        // the parked beads, whose inputs it is.
         assert_eq!(
             m.event(&event(32, "depot_removed", "", json!({}))),
-            [Effect::Flows]
+            [Effect::Flows, Effect::Waiting]
         );
-        for (seq, key) in [(33, "max_sessions"), (34, "operator")] {
-            assert_eq!(
-                m.event(&event(seq, "setting_changed", "", json!({"key": key}))),
-                [Effect::Arrivals, Effect::Flows],
-                "{key}"
-            );
-        }
+        // The parked beads' list is the yard's own for the call and not the
+        // board's: a route set moves them, and a session cap does not.
+        assert!(
+            m.event(&event(39, "route_set", "", json!({})))
+                .contains(&Effect::Waiting)
+        );
+        assert_eq!(
+            m.event(&event(
+                33,
+                "setting_changed",
+                "",
+                json!({"key": "max_sessions"})
+            )),
+            [Effect::Arrivals, Effect::Flows]
+        );
+        assert_eq!(
+            m.event(&event(
+                34,
+                "setting_changed",
+                "",
+                json!({"key": "operator"})
+            )),
+            [Effect::Arrivals, Effect::Flows, Effect::Waiting]
+        );
         // A setting of any other name, a crew status and whatever else
-        // names no bead move nothing of the board or the flows view.
+        // names no bead move nothing of the board, the flows view or the
+        // parked beads.
         assert_eq!(
             m.event(&event(
                 35,
@@ -10572,7 +10750,7 @@ mod tests {
     #[test]
     fn the_panel_counts_what_is_worked_held_and_waiting() {
         use crate::api::{Flow, FlowStage};
-        let (mut m, _) = Model::new(yard(&[]), Mode::Timetable, None);
+        let (mut m, _) = Model::new(yard_without_waiting(), Mode::Timetable, None);
         let mut flows = flow_view();
         flows.depots[0].flows[0].stages[0].beads[0].working = true;
         flows.depots[0].elsewhere[0].remark = "waits for jo".into();
@@ -10721,7 +10899,7 @@ mod tests {
     /// an open ask on that bead, so `yd-f` stands out until asked.
     #[test]
     fn the_banner_s_beads_are_the_board_s_rows_that_wait_on_you() {
-        let (mut m, _) = Model::new(yard(&[]), Mode::Timetable, None);
+        let (mut m, _) = Model::new(yard_without_waiting(), Mode::Timetable, None);
         let mut flows = flow_view();
         flows.depots[0].flows[0].stages[0].beads.push(flowed(
             "yd-a",
@@ -10816,7 +10994,7 @@ mod tests {
     /// whose remark waits on no one.
     #[test]
     fn a_bead_waits_on_you_alone_or_asked() {
-        let (mut m, _) = Model::new(yard(&[]), Mode::Timetable, None);
+        let (mut m, _) = Model::new(yard_without_waiting(), Mode::Timetable, None);
         m.arrivals(board(vec![
             arrival("yd-alone", "new", "yardr", "1h–2h", "waits for jo", "amber"),
             arrival(
@@ -10872,6 +11050,29 @@ mod tests {
             .map(|(bead, _)| (*bead).to_string())
             .collect::<Vec<_>>();
         assert_eq!(waiting, ["yd-alone", "yd-multi", "yd-plain"]);
+
+        // A yard that serves Waiting says whose move it is, and the
+        // remarks stand for nothing: the beads with an open ask, then the
+        // beads parked for the reader, a wait for several included. A wait
+        // for them alone that the yard does not park (a backlog bead, say)
+        // counts no more, and a bead with an ask and a row counts once.
+        m.waiting(vec![
+            parked("yd-multi", "Both wait", "2026-10-10T08:00:00Z"),
+            parked("yd-other", "Not named alone", "2026-10-10T09:00:00Z"),
+        ]);
+        assert!(!m.waiting_too_old());
+        assert_eq!(
+            m.waiting_on_you(),
+            [
+                ("yd-multi", "Both wait"),
+                ("yd-plain", "Plain moves"),
+                ("yd-other", "Not named alone")
+            ]
+        );
+        assert_eq!(
+            m.waiting_on_you().len(),
+            m.decisions_count() + m.parked_count()
+        );
     }
 
     /// A bead the board no longer serves — beyond its cap — is detailed
@@ -12074,6 +12275,113 @@ mod tests {
             assert_eq!(m.notice, format!("the flows could not be read: {err}"));
             m.notice.clear();
         }
+    }
+
+    /// The beads parked for the reader's move are held beside the asks and
+    /// counted with them. The yard lists a bead in one queue only, but the
+    /// two are read apart and one may be older than the other: a bead with
+    /// an open ask stands among the decisions alone, and is parked when its
+    /// ask is dealt with. The queue read again replaces it whole, and a
+    /// state read again says it afresh.
+    #[test]
+    fn the_parked_beads_are_held_beside_the_asks_and_none_is_counted_twice() {
+        let beads = |m: &Model| m.parked().map(|row| row.bead.clone()).collect::<Vec<_>>();
+        let mut state = yard(&[]);
+        state.parked = vec![
+            parked("yd-old", "The oldest", "2026-11-01T09:00:00Z"),
+            parked("yd-asked", "Asked as well", "2026-11-02T09:00:00Z"),
+            parked("yd-new", "The newest", "2026-11-03T09:00:00Z"),
+        ];
+        state.asks.open = vec![open_ask(
+            "yd-asked",
+            "Asked as well",
+            "",
+            3,
+            "Which first?",
+            "yardmaster",
+            "2026-11-04T09:00:00Z",
+        )];
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        assert_eq!(beads(&m), ["yd-old", "yd-new"]);
+        assert_eq!((m.decisions_count(), m.parked_count()), (1, 2));
+        // The ask is dealt with: the bead is parked, where the yard put it.
+        let _ = m.asks(Asks::default());
+        assert_eq!(beads(&m), ["yd-old", "yd-asked", "yd-new"]);
+        assert_eq!((m.decisions_count(), m.parked_count()), (0, 3));
+        // The queue read again replaces it whole, its rows as served.
+        m.waiting(vec![parked("yd-new", "The newest", "2026-11-03T09:00:00Z")]);
+        assert_eq!(beads(&m), ["yd-new"]);
+        let row = m.parked().next().unwrap();
+        assert_eq!(
+            (row.revision.as_str(), row.actions[0].label.as_str()),
+            ("yd-new-rev", "Move to build")
+        );
+        // A state read again, after the yard was lost, is the queue as read
+        // now.
+        let mut again = yard(&[]);
+        again.parked = vec![parked(
+            "yd-after",
+            "Parked meanwhile",
+            "2026-11-05T09:00:00Z",
+        )];
+        let (m, _) = m.resumed(again, Mode::Decisions);
+        assert_eq!(beads(&m), ["yd-after"]);
+    }
+
+    /// A yard from before the parked queue has no Waiting call: its answer
+    /// is no error, so no notice is raised, and nothing of the queue counts.
+    /// Anything else the call fails with is said as a notice, as ever, and
+    /// the queue stays as it was. A queue read again clears it: the yard has
+    /// the call.
+    #[test]
+    fn a_yard_without_the_parked_queue_counts_none_of_it_and_says_nothing() {
+        let refused = |message: &str| api::Error::Refused {
+            code: "error".into(),
+            message: message.into(),
+        };
+        assert!(waiting_too_old(&refused("no such method Waiting")));
+        assert!(!waiting_too_old(&refused("the queue is closed")));
+        assert!(!waiting_too_old(&api::Error::Protocol(
+            "Waiting: invalid type: map, expected a sequence".into()
+        )));
+        assert!(!waiting_too_old(&api::Error::Down(std::io::Error::other(
+            "the yard went away"
+        ))));
+
+        let mut state = yard(&[]);
+        state.parked = vec![parked("yd-a", "A", "2026-11-01T09:00:00Z")];
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        assert!(!m.waiting_too_old());
+        assert_eq!(m.parked_count(), 1);
+        // Any other failure is a notice, as ever, and the queue stays.
+        for err in [
+            refused("the queue is closed"),
+            api::Error::Protocol("Waiting: invalid type: map, expected a sequence".into()),
+            api::Error::Down(std::io::Error::other("the yard went away")),
+        ] {
+            m.waiting_failed(&err);
+            assert!(!m.waiting_too_old());
+            assert_eq!(m.parked_count(), 1);
+            assert_eq!(
+                m.notice,
+                format!("the waiting beads could not be read: {err}")
+            );
+            m.notice.clear();
+        }
+        // A yard without the call has none: the queue is gone, with no
+        // notice.
+        m.waiting_failed(&refused("no such method Waiting"));
+        assert!(m.waiting_too_old());
+        assert_eq!(m.parked_count(), 0);
+        assert!(m.notice.is_empty(), "{}", m.notice);
+        // A queue read again clears it.
+        m.waiting(vec![parked("yd-b", "B", "2026-11-02T09:00:00Z")]);
+        assert!(!m.waiting_too_old());
+        assert_eq!(m.parked_count(), 1);
+        // A state that says so makes a model that is.
+        let (m, _) = Model::new(yard_without_waiting(), Mode::Chat, None);
+        assert!(m.waiting_too_old());
+        assert_eq!(m.parked_count(), 0);
     }
 
     /// A yard from before the grants view has no SourceGrants call: its
@@ -14337,6 +14645,16 @@ mod tests {
         let newest = m.reads().make();
         assert!(m.reads().fresh(Read::Asks, newest));
         assert!(!m.reads().fresh(Read::Crew, crew));
+
+        // The parked beads are a kind of their own, answered in the same
+        // order: the older answer, coming last, leaves the queue as it
+        // is. A read of it that is made again is the call that made it.
+        let (older, newer) = (m.reads().make(), m.reads().make());
+        assert!(m.reads().fresh(Read::Waiting, newer));
+        m.waiting(vec![parked("yd-new", "Newer", "2026-11-01T09:00:00Z")]);
+        assert!(!m.reads().fresh(Read::Waiting, older));
+        assert_eq!(m.parked_count(), 1);
+        assert_eq!(Read::Waiting.effect(), Effect::Waiting);
 
         // Made before the yard was read again, answered after: older than
         // the state read.
@@ -16715,8 +17033,8 @@ mod tests {
         // Back: the bead is here, so nothing is asked.
         assert_eq!(m.select(Selected::Decision("yardr-n8ta".into())), []);
         // An event whose bead is one shown reads it again, with the queue
-        // on a note, and the board and the flows view on every bead's
-        // event.
+        // on a note, and the board, the flows view and the parked beads on
+        // every bead's event.
         assert_eq!(
             m.event(&event(21, "noted", "yardmaster", json!({"note": 1}))),
             [Effect::Asks]
@@ -16731,7 +17049,8 @@ mod tests {
                     bead: "yardr-n8ta".into()
                 },
                 Effect::Arrivals,
-                Effect::Flows
+                Effect::Flows,
+                Effect::Waiting
             ]
         );
         // A bead's other events, whose kinds are yardr's own, read it too.
@@ -16744,16 +17063,23 @@ mod tests {
                     bead: "yardr-n8ta".into()
                 },
                 Effect::Arrivals,
-                Effect::Flows
+                Effect::Flows,
+                Effect::Waiting
             ]
         );
-        // One that is shown nowhere reads no card, but the board and the
-        // flows view move with every bead's event all the same.
+        // One that is shown nowhere reads no card, but the board, the
+        // flows view and the parked beads move with every bead's event all
+        // the same.
         let mut elsewhere = event(24, "noted", "yardmaster", json!({"note": 3}));
         elsewhere.bead = "yd-elsewhere".into();
         assert_eq!(
             m.event(&elsewhere),
-            [Effect::Asks, Effect::Arrivals, Effect::Flows]
+            [
+                Effect::Asks,
+                Effect::Arrivals,
+                Effect::Flows,
+                Effect::Waiting
+            ]
         );
     }
 

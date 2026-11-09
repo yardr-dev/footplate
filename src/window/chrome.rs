@@ -426,6 +426,7 @@ impl Footplate {
                 |waits, yard| Counts {
                     mail: waits.mail + yard.mail,
                     decisions: waits.decisions + yard.decisions,
+                    parked: waits.parked + yard.parked,
                     notices: 0,
                     changed: 0,
                 },
@@ -1019,6 +1020,7 @@ impl Footplate {
                 let head = state.head;
                 let fresh = held.model.is_none();
                 held.said = state.yard.take();
+                let parked_notice = state.parked_notice.take();
                 let arrivals_notice = state.arrivals_notice.take();
                 let flows_notice = state.flows_notice.take();
                 let grants_notice = state.grants_notice.take();
@@ -1029,6 +1031,7 @@ impl Footplate {
                     None => (Model::new_aside(state), Vec::new()),
                 };
                 let notices: Vec<String> = [
+                    parked_notice,
                     arrivals_notice,
                     flows_notice,
                     grants_notice,
@@ -1105,6 +1108,7 @@ impl Footplate {
                 let mut state = *state;
                 let head = state.head;
                 self.said = state.yard.take();
+                let parked_notice = state.parked_notice.take();
                 let arrivals_notice = state.arrivals_notice.take();
                 let flows_notice = state.flows_notice.take();
                 let grants_notice = state.grants_notice.take();
@@ -1164,6 +1168,7 @@ impl Footplate {
                     model.set_departures(true);
                 }
                 let notices: Vec<String> = [
+                    parked_notice,
                     arrivals_notice,
                     flows_notice,
                     grants_notice,
@@ -2923,6 +2928,37 @@ impl Footplate {
                                         format!("the decisions could not be read: {err}"),
                                         cx,
                                     );
+                                }
+                            }
+                        },
+                    )
+                }
+                // A yard too old for the call has none to make again.
+                Effect::Waiting => {
+                    let stamp = self.stamp_in(session);
+                    self.ask_in(
+                        session,
+                        cx,
+                        |client, me| client.waiting(me),
+                        move |this, parked, cx| match parked {
+                            Ok(parked) => {
+                                this.fresh_in(session, Read::Waiting, stamp, cx, |m| {
+                                    m.waiting(parked);
+                                    Vec::new()
+                                });
+                            }
+                            Err(err) => {
+                                if this.read_failed_in(
+                                    session,
+                                    Read::Waiting,
+                                    stamp,
+                                    !model::waiting_too_old(&err),
+                                    cx,
+                                ) {
+                                    this.change_in(session, cx, |m| {
+                                        m.waiting_failed(&err);
+                                        Vec::new()
+                                    });
                                 }
                             }
                         },

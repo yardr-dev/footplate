@@ -306,7 +306,9 @@ impl Footplate {
     /// and counted. One timer waits at a time for a yard; a queue read
     /// since replaces it. The queue is read once for a return: a yard that
     /// still lists the ask as put aside after its time is not asked again
-    /// for it, and what the stream brings says when it is back.
+    /// for it, and what the stream brings says when it is back. The parked
+    /// beads are read with it: an ask that is back takes its bead out of
+    /// them, and tells no event of its own.
     pub(crate) fn schedule_return_in(&mut self, session: u64, cx: &mut Context<Self>) {
         let held = self.held.values_mut().find(|h| h.session == session);
         let (model, asked, read) = match held {
@@ -332,7 +334,7 @@ impl Footplate {
         if wait <= 0 {
             // Every return up to now is read by this one read.
             *read = Some(at.max(now));
-            self.change_in(session, cx, |_| vec![Effect::Asks]);
+            self.change_in(session, cx, |_| vec![Effect::Asks, Effect::Waiting]);
             return;
         }
         let wait = std::time::Duration::from_secs(wait as u64);
@@ -347,7 +349,7 @@ impl Footplate {
                 };
                 if asked == generation {
                     *read = Some(at);
-                    this.change_in(session, cx, |_| vec![Effect::Asks]);
+                    this.change_in(session, cx, |_| vec![Effect::Asks, Effect::Waiting]);
                 }
             })
             .ok();

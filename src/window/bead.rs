@@ -11,9 +11,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, Context, Div, Focusable, FontWeight, Image, ImageFormat, MouseButton,
-    ObjectFit, Pixels, ScrollHandle, SharedString, WeakEntity, Window, div, img, prelude::*, px,
-    rems, rgba, white,
+    AnyElement, App, Context, Corner, Div, Focusable, FontWeight, Image, ImageFormat, MouseButton,
+    MouseDownEvent, ObjectFit, Pixels, Point, ScrollHandle, SharedString, WeakEntity, Window,
+    anchored, deferred, div, img, prelude::*, px, rems, rgba, white,
 };
 
 use super::Expanded;
@@ -25,7 +25,7 @@ use super::metrics::{
     ATTACHMENT, IMAGE_HEIGHT, IMAGE_MARGIN, LETTER_GUTTER, READING_WIDTH, drawer_fits,
 };
 use super::panel::{day_break, reading_column, reading_row};
-use super::rail::{ImageOpen, OpenTip, Picture, RailTip, Unsent, post};
+use super::rail::{ImageOpen, OpenTip, Picture, PictureMenu, RailTip, Unsent, post};
 use super::screen::{screen_control, screen_icon};
 use super::state::{Piece, Talk};
 use super::ui::{keys_hint, send_held, small_button};
@@ -37,6 +37,7 @@ use crate::draft::{self, Attachment, Found};
 use crate::model::{
     self, ArrivalDetail, AskPreview, Entry, Kind, Model, News, Selected, Target, Top,
 };
+use crate::save;
 use crate::select;
 use crate::theme::Palette;
 use crate::voice::{self, Ask, Caption, Speaking, Start, State, Update};
@@ -1072,11 +1073,13 @@ impl Footplate {
     /// there yet. Over one already shown the second shows instead, and
     /// the focus still goes back where the first found it. While one
     /// shows, the window holds the keys: nothing typed goes to a line
-    /// that is not in view.
+    /// that is not in view. `name` is the one its file was sent with, for
+    /// a save.
     pub(crate) fn open_image(
         &mut self,
         hash: String,
         bytes: u64,
+        name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1085,7 +1088,13 @@ impl Footplate {
             .take()
             .and_then(|open| open.back)
             .or_else(|| window.focused(cx));
-        self.image_open = Some(ImageOpen { hash, bytes, back });
+        self.image_open = Some(ImageOpen {
+            hash,
+            bytes,
+            name,
+            said: String::new(),
+            back,
+        });
         window.focus(&self.focus);
         cx.notify();
     }
@@ -1104,17 +1113,22 @@ impl Footplate {
     }
 
     /// The image open over the window: the dark backdrop, the image
-    /// scaled down to fit it with a margin, and the × in a corner. A
-    /// click outside the image or on the × shuts it, as Esc does; a
-    /// click on the image shuts nothing. Drawn from the bytes the
+    /// scaled down to fit it with a margin, and in a corner the Save
+    /// control and the ×. A click outside the image or on the × shuts it,
+    /// as Esc does; a click on the image shuts nothing, and a right
+    /// press on it opens the menu that saves it. Drawn from the bytes the
     /// window holds, with no second fetch; while they are not there
-    /// yet the line, as the thumbnail shows it.
+    /// yet the line, as the thumbnail shows it, and no Save, which has
+    /// nothing to write. What a save said stands at the foot, since the
+    /// panes the window's notice is drawn in are under the backdrop.
     pub(crate) fn image_layer(
         &self,
         open: &ImageOpen,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let palette = Palette::now(window, cx);
+        let saveable = matches!(self.images.get(&open.hash), Some(Picture::Here(_)));
         let hash = open.hash.clone();
         let shown = match self.images.get(&open.hash) {
             Some(Picture::Here(image)) => {
@@ -1163,6 +1177,12 @@ impl Footplate {
                             .into_any_element()
                     })
                     .on_click(|_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(MouseButton::Right, {
+                        let (hash, name) = (hash.clone(), open.name.clone());
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            this.open_picture_menu(hash.clone(), name.clone(), event.position, cx)
+                        })
+                    })
                     .into_any_element()
             }
             Some(Picture::Not(why)) => {
@@ -1204,17 +1224,222 @@ impl Footplate {
             .child(shown)
             .child(
                 div()
-                    .id("image close")
-                    .debug_selector(|| "image close".to_string())
                     .absolute()
                     .top(rems(0.75))
                     .right(rems(1.))
-                    .text_xl()
-                    .text_color(white())
-                    .cursor_pointer()
-                    .child("×")
-                    .on_click(cx.listener(|this, _, window, cx| this.shut_image(window, cx))),
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    // The kit's secondary button: bordered, one verb, 32
+                    // high. A click saves and shuts nothing.
+                    .when(saveable, |row| {
+                        let (hash, name) = (open.hash.clone(), open.name.clone());
+                        row.child(
+                            div()
+                                .id("image save")
+                                .debug_selector(|| "image save".to_string())
+                                .h(px(32.))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(palette.line)
+                                .bg(palette.side)
+                                .text_sm()
+                                .text_color(palette.text)
+                                .cursor_pointer()
+                                .hover(|style| style.bg(palette.hover))
+                                .child("Save")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.save_picture(&hash, &name, cx)
+                                })),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id("image close")
+                            .debug_selector(|| "image close".to_string())
+                            .size(px(32.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_xl()
+                            .text_color(white())
+                            .cursor_pointer()
+                            .child("×")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.shut_image(window, cx)),
+                            ),
+                    ),
             )
+            .when(!open.said.is_empty(), |overlay| {
+                overlay.child(
+                    div()
+                        .absolute()
+                        .bottom(rems(1.))
+                        .left(px(0.))
+                        .right(px(0.))
+                        .px_4()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .id("image said")
+                                .debug_selector(|| "image said".to_string())
+                                .text_sm()
+                                .text_color(white())
+                                .child(open.said.clone()),
+                        ),
+                )
+            })
+    }
+
+    /// A right press on a picture: the menu that offers to save it stands
+    /// where the pointer is. One menu at a time; a press on another picture
+    /// moves it.
+    pub(crate) fn open_picture_menu(
+        &mut self,
+        hash: String,
+        name: String,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.picture_menu = Some(PictureMenu { hash, name, at });
+        cx.notify();
+    }
+
+    /// Shuts the picture's menu, whatever shut it.
+    pub(crate) fn shut_picture_menu(&mut self, cx: &mut Context<Self>) {
+        self.picture_menu = None;
+        cx.notify();
+    }
+
+    /// The menu of a picture: one item, Save image, in the kit's popover
+    /// where the pointer was pressed, held inside the window. A press
+    /// outside it shuts it, and a click meant to dismiss a menu does
+    /// nothing more, as the switcher's list has it; a right press goes on,
+    /// so that one on another picture opens that one's menu. The item saves
+    /// and shuts it.
+    pub(crate) fn picture_menu_layer(
+        &self,
+        menu: &PictureMenu,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let (hash, name) = (menu.hash.clone(), menu.name.clone());
+        deferred(
+            anchored()
+                .position(menu.at)
+                .anchor(Corner::TopLeft)
+                .snap_to_window_with_margin(px(8.))
+                .child(
+                    div()
+                        .id("image menu")
+                        .debug_selector(|| "image menu".to_string())
+                        .occlude()
+                        .flex()
+                        .flex_col()
+                        .p_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(palette.line)
+                        .bg(palette.ground)
+                        // The kit's popover shadow, as the bar of
+                        // reactions has it.
+                        .shadow(vec![gpui::BoxShadow {
+                            color: palette.shadow.into(),
+                            offset: gpui::point(px(0.), px(6.)),
+                            blur_radius: px(20.),
+                            spread_radius: px(0.),
+                        }])
+                        .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.shut_picture_menu(cx);
+                            if event.button != MouseButton::Right {
+                                cx.stop_propagation();
+                            }
+                        }))
+                        .child(
+                            div()
+                                .id("image menu save")
+                                .debug_selector(|| "image menu save".to_string())
+                                .min_h(px(32.))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(palette.hover))
+                                // The press takes no focus: the line keeps
+                                // the keys it had.
+                                .on_mouse_down(MouseButton::Left, |_, window, _| {
+                                    window.prevent_default()
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.picture_menu = None;
+                                    this.save_picture(&hash, &name, cx)
+                                }))
+                                .child("Save image"),
+                        ),
+                ),
+        )
+    }
+
+    /// Saves the picture `hash` into the Downloads folder, under the name
+    /// its file was sent with, else under its hash, and never over a file
+    /// that stands there: a taken name is numbered. The bytes are those the
+    /// window holds, written off its thread. What came of it is the
+    /// window's notice, and the line the full-size view of that picture
+    /// draws, which covers the panes the notice stands in.
+    pub(crate) fn save_picture(&mut self, hash: &str, name: &str, cx: &mut Context<Self>) {
+        let Some(Picture::Here(image)) = self.images.get(hash) else {
+            let short = hash.get(..8).unwrap_or(hash);
+            return self.said(
+                hash,
+                format!("not saved: image {short} is not here to save"),
+                cx,
+            );
+        };
+        let Some(dir) = self.means.downloads.clone() else {
+            return self.said(
+                hash,
+                "not saved: this machine names no Downloads folder".to_string(),
+                cx,
+            );
+        };
+        let image = image.clone();
+        let name = save::file_name(name, hash, save::extension(image.format.mime_type()));
+        let hash = hash.to_string();
+        cx.spawn(async move |this, cx| {
+            let saved = cx
+                .background_executor()
+                .spawn({
+                    let dir = dir.clone();
+                    async move { save::write(&dir, &name, &image.bytes) }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let line = match saved {
+                    Ok(path) => format!("saved to {}", path.display()),
+                    Err(err) => format!("not saved to {}: {err}", dir.display()),
+                };
+                this.said(&hash, line, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Says what a save of the picture `hash` came to: as the window's
+    /// notice, and in the view that shows that picture full size, if one
+    /// does.
+    fn said(&mut self, hash: &str, line: String, cx: &mut Context<Self>) {
+        if let Some(open) = self.image_open.as_mut().filter(|open| open.hash == hash) {
+            open.said = line.clone();
+        }
+        self.notice(line, cx);
     }
 
     /// A file of a mail or of a note: an image, a page's row, a file's
@@ -1255,9 +1480,12 @@ impl Footplate {
                 // bytes the window holds: no second fetch, and no
                 // browser. The press takes no focus: the window holds
                 // the keys once it shows, and the focus goes back where
-                // the click found it when it shuts.
+                // the click found it when it shuts. A right press opens
+                // the menu that saves it, and takes no focus either; it
+                // is no click, so it opens nothing full size.
                 let hash = file.hash.clone();
                 let bytes = file.bytes;
+                let name = file.name.clone();
                 shown
                     .id(SharedString::from(format!("image open {hash}")))
                     .debug_selector({
@@ -1267,8 +1495,15 @@ impl Footplate {
                     .cursor_pointer()
                     .tooltip(|_, cx| cx.new(|_| OpenTip).into())
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                    .on_mouse_down(MouseButton::Right, {
+                        let (hash, name) = (hash.clone(), name.clone());
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            window.prevent_default();
+                            this.open_picture_menu(hash.clone(), name.clone(), event.position, cx)
+                        })
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_image(hash.clone(), bytes, window, cx)
+                        this.open_image(hash.clone(), bytes, name.clone(), window, cx)
                     }))
                     .into_any_element()
             }
@@ -1279,6 +1514,7 @@ impl Footplate {
             Some(Picture::Asked) | None => {
                 let hash = file.hash.clone();
                 let bytes = file.bytes;
+                let name = file.name.clone();
                 let text = format!("image, {}…", model::size(file.bytes));
                 div()
                     .h(px(IMAGE_HEIGHT))
@@ -1291,7 +1527,7 @@ impl Footplate {
                     .tooltip(|_, cx| cx.new(|_| OpenTip).into())
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_image(hash.clone(), bytes, window, cx)
+                        this.open_image(hash.clone(), bytes, name.clone(), window, cx)
                     }))
                     .child(line(text))
                     .into_any_element()

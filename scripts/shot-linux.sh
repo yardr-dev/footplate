@@ -27,7 +27,8 @@
 # card with one of jo's beads changed, so Lines carries its badge), `page` (an
 # open card whose note carries a page, an image and a file), `mail` (a mail with
 # a page and an image), `image` (that mail's image open full size over
-# the window), `run` (an
+# the window), `image-menu` (that mail's picture with the menu a right-click
+# on it opens, where the pointer stood), `run` (an
 # open card of a run ask), `teammates` (an open card of a teammate
 # invite), `teammates-list` (the teammates view open on its row),
 # `stopped` (a stopped yard), `far`
@@ -142,7 +143,7 @@ set -e
 caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered waiting waiting-end lines-waiting lines-waiting-end lines-help keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image image-menu refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered waiting waiting-end lines-waiting lines-waiting-end lines-help keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;
@@ -174,25 +175,21 @@ esac
 cd "$(dirname "$0")/.."
 root=$PWD
 . ./scripts/linux-container.sh
+# SHOT_SIZE is two positive whole numbers joined by an x, as
+# scripts/shot-mac.sh takes it.
 size=${SHOT_SIZE:-1280x800}
 case "$size" in
-    *[!0-9x]*|x*|*x|*x*x*)
+    *[!0123456789x]*)
         echo "shot-linux.sh: SHOT_SIZE must be WIDTHxHEIGHT using positive integers" >&2
         exit 2
         ;;
 esac
+if ! printf '%s\n' "$size" | LC_ALL=C grep -E -q '^[1-9][0-9]*x[1-9][0-9]*$'; then
+    echo "shot-linux.sh: SHOT_SIZE must be WIDTHxHEIGHT using positive integers" >&2
+    exit 2
+fi
 width=${size%x*}
 height=${size#*x}
-case "$width" in *[1-9]*) ;; *)
-    echo "shot-linux.sh: SHOT_SIZE must be WIDTHxHEIGHT using positive integers" >&2
-    exit 2
-    ;;
-esac
-case "$height" in *[1-9]*) ;; *)
-    echo "shot-linux.sh: SHOT_SIZE must be WIDTHxHEIGHT using positive integers" >&2
-    exit 2
-    ;;
-esac
 # SHOT_LOOK draws the window in that look instead of the desktop's: light
 # or dark, as the settings name them. Empty is the desktop's, as ever.
 look=${SHOT_LOOK:-}

@@ -81,8 +81,9 @@ pub type Clock = Rc<dyn Fn() -> Instant>;
 /// minimized.
 pub type Hidden = Rc<dyn Fn() -> bool>;
 
-/// What the first run, the window's top strip, its Feedback form and its
-/// voice session reach outside the window with. A test has a stand-in for each.
+/// What the first run, the window's top strip, its Feedback form, its voice
+/// session and its saved pictures reach outside the window with. A test has
+/// a stand-in for each.
 #[derive(Clone)]
 pub struct Means {
     pub yardr: Finds,
@@ -114,6 +115,9 @@ pub struct Means {
     /// nothing of a window out of view, only that it sends it no frames, and
     /// `hidden` reads this for that.
     pub frame: Rc<Cell<Instant>>,
+    /// The folder a picture is saved into: the person's Downloads, none
+    /// where this machine names no place for one.
+    pub downloads: Option<PathBuf>,
 }
 
 impl Means {
@@ -177,6 +181,12 @@ impl Means {
             #[cfg(test)]
             hidden: Rc::new(|| false),
             frame,
+            // A test saves nowhere on this machine: one that saves stands
+            // in a folder of its own.
+            #[cfg(not(test))]
+            downloads: crate::save::downloads_here(),
+            #[cfg(test)]
+            downloads: None,
         }
     }
 }

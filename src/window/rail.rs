@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{Context, FocusHandle, Image, ImageFormat, Window, div, prelude::*};
+use gpui::{Context, FocusHandle, Image, ImageFormat, Pixels, Point, Window, div, prelude::*};
 
 use super::state::YardIdentity;
 use crate::api::{self, BlobFile, BlobRef, Client};
@@ -42,12 +42,27 @@ impl Picture {
 }
 
 /// The image shown full size over the window: its hash, its bytes for
-/// the line while they are not there yet, and the focus to give back
-/// when it shuts.
+/// the line while they are not there yet, the name its file was sent with
+/// (empty where it had none) for a save, what a save from this view last
+/// said, and the focus to give back when it shuts.
 pub(crate) struct ImageOpen {
     pub(crate) hash: String,
     pub(crate) bytes: u64,
+    pub(crate) name: String,
+    /// The line a save from this view left, which the view draws itself:
+    /// it stands over the panes where the window's `notice` is drawn, and
+    /// dims them past reading. Empty before a save.
+    pub(crate) said: String,
     pub(crate) back: Option<FocusHandle>,
+}
+
+/// The menu a right press on a picture opens, which offers to save it: the
+/// picture's hash and the name its file was sent with, and where the pointer
+/// stood, in the window's pixels.
+pub(crate) struct PictureMenu {
+    pub(crate) hash: String,
+    pub(crate) name: String,
+    pub(crate) at: Point<Pixels>,
 }
 
 /// An image's tooltip: what a click does with it.

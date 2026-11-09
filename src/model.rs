@@ -5645,6 +5645,7 @@ impl Model {
                 "group_set"
                     | "group_removed"
                     | "route_added"
+                    | "route_set"
                     | "route_removed"
                     | "flow_set"
                     | "flow_removed"
@@ -5664,7 +5665,8 @@ impl Model {
         // among them (a stage ask another member answered moves the bead),
         // and with the changes of its inputs that name none; docs/api.md
         // lists them with the call, and it is kept apart from the arrivals'
-        // list: a route set moves it, and a session cap does not.
+        // list: a session cap moves the arrivals and not it, and a removed
+        // depot moves it and not the arrivals.
         let parked = !e.bead.is_empty()
             || matches!(
                 e.kind.as_str(),
@@ -10473,12 +10475,16 @@ mod tests {
             (23, "group_set"),
             (24, "group_removed"),
             (25, "route_added"),
-            (26, "route_removed"),
-            (27, "flow_set"),
-            (28, "flow_removed"),
-            (29, "flow_pointer_set"),
-            (30, "flow_pointer_cleared"),
-            (31, "depot_updated"),
+            // A route changed in place, a stage re-pointed at another
+            // group: yardr tells it as its own event, not as an add and
+            // a remove.
+            (26, "route_set"),
+            (27, "route_removed"),
+            (28, "flow_set"),
+            (29, "flow_removed"),
+            (30, "flow_pointer_set"),
+            (31, "flow_pointer_cleared"),
+            (32, "depot_updated"),
         ] {
             assert_eq!(
                 m.event(&event(seq, kind, "", json!({}))),
@@ -10490,18 +10496,14 @@ mod tests {
         // `depot_removed` says so: the flows view moves for it, and so do
         // the parked beads, whose inputs it is.
         assert_eq!(
-            m.event(&event(32, "depot_removed", "", json!({}))),
+            m.event(&event(33, "depot_removed", "", json!({}))),
             [Effect::Flows, Effect::Waiting]
         );
         // The parked beads' list is the yard's own for the call and not the
-        // board's: a route set moves them, and a session cap does not.
-        assert!(
-            m.event(&event(39, "route_set", "", json!({})))
-                .contains(&Effect::Waiting)
-        );
+        // board's: a session cap moves the board, and not them.
         assert_eq!(
             m.event(&event(
-                33,
+                34,
                 "setting_changed",
                 "",
                 json!({"key": "max_sessions"})
@@ -10510,7 +10512,7 @@ mod tests {
         );
         assert_eq!(
             m.event(&event(
-                34,
+                35,
                 "setting_changed",
                 "",
                 json!({"key": "operator"})
@@ -10522,24 +10524,24 @@ mod tests {
         // parked beads.
         assert_eq!(
             m.event(&event(
-                35,
+                36,
                 "setting_changed",
                 "",
                 json!({"key": "web_addr"})
             )),
             []
         );
-        assert_eq!(m.event(&event(36, "setting_changed", "", json!({}))), []);
+        assert_eq!(m.event(&event(37, "setting_changed", "", json!({}))), []);
         assert_eq!(
             m.event(&event(
-                37,
+                38,
                 "crew_status",
                 "",
                 json!({"crew": "assembly", "status": "blocked", "was": "idle"})
             )),
             []
         );
-        assert_eq!(m.event(&event(38, "timer", "", json!({}))), []);
+        assert_eq!(m.event(&event(39, "timer", "", json!({}))), []);
     }
 
     fn arrival(

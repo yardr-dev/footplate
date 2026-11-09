@@ -46,7 +46,10 @@ The window, its state and the yard:
   - `src/window/bead.rs`: one bead's views: the bead whole (in the reading
     pane it ends with `waiting.rs`'s moves where the bead is parked), the
     conversation thread with its mail, and the pictures and attachments of
-    both.
+    both: a picture's full-size view with its Save, the menu a right press on
+    a picture opens (gpui has none, so `picture_menu_layer` draws one), and
+    the save itself (`save_picture`), which `src/save.rs` writes off the
+    window's thread.
   - `src/window/chrome.rs`: the shell the views stand in: the rail, the list
     and the open conversation, the settings and the keys, the tray and the
     badge. `told` takes in what the yard says, and `Footplate::run_in`
@@ -165,6 +168,14 @@ Text and drawing helpers:
 
 - `src/draft.rs`: what is written and not sent yet, per conversation; neither
   calls nor draws.
+- `src/save.rs`: a picture saved to a file, as plain functions tested with a
+  temp folder: the Downloads folder (`XDG_DOWNLOAD_DIR`, else `~/Downloads`),
+  the name it goes under (the file's own, held to the yard's rule for names
+  that `src/draft.rs` keeps, else its hash and format), and the write, which
+  creates each file or fails, so that no file is overwritten and no link
+  followed, and numbers a taken name (`name (2).png`). The folder is
+  `Means::downloads`; under test it is none, so a test never writes the
+  person's own Downloads, and one that saves points it at a temp folder.
 - `src/input.rs`: the line typed in (gpui has no text field).
 - `src/select.rs`: a message's text with mouse selection, one at a time.
 - `src/markdown.rs`: the light Markdown messages draw with (code, one-level

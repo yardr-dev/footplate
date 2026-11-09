@@ -134,6 +134,22 @@ kept in memory by its hash, for as long as the window runs. One the yard no
 longer has (`yardr store prune` removes a file no mail names) is a line that
 says so. Footplate never opens a file itself.
 
+**Saving an image.** A click on an image shows it full size over the window.
+`esc`, a click outside it or its × shuts it. Save, beside the ×, writes the
+image to your Downloads folder, and so does Save image in the menu that a
+right-click on it opens, in the thread or full size. The bytes are the ones
+the window already holds, so nothing is fetched again. The folder is
+`XDG_DOWNLOAD_DIR` if that holds an absolute path, else `~/Downloads`, made if
+it is missing. The file keeps the name the sender gave it. A linked yard or a
+hook can send a name with a path or a control character in it. Such a name,
+and no name at all, give the hash and the format's extension instead. A name
+that is taken is never written over: the file becomes `fence (2).png`, then
+`fence (3).png`. One line says where it went or why it did not. In the
+full-size view that line stands at the foot of the window. A page or any
+other file has its Open instead. The window does not read the desktop's
+user-dirs file, so another folder is set with the variable. There is no dialog
+to pick one each time.
+
 **Sending files.** Paste a file (`cmd+v`, `ctrl+v` on Linux) or drop files
 on the window, anywhere: each is attached to the draft of the open
 conversation, an image shown small above the line, anything else by its

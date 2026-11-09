@@ -379,6 +379,8 @@ its card under "Decided".
 | `e`, on a card | expands it to the bead whole, or folds it again |
 | `esc`, on a card | leaves a decline asked for words, shuts the bead drawer where one is open, the words for the card's keys, the pick, then the words; in the field of a secret, the field, and what was typed is gone; in the number field, leaves it and keeps the number. On a parked bead's card: the bead drawer, the line, the pick, then the note; on its details in Lines: the line, the pick, then the note |
 | a click on a bead's chip in a mail | opens the bead in the drawer beside what is open, which stays as it was; the drawer's Open shows the bead whole, and `esc` shuts the drawer |
+| a click on an image in a mail or a note | shows it full size over the window; Save, beside the ×, writes it to your Downloads folder ([Saving an image](yards.md#what-it-talks-to)), and `esc`, the × or a click outside it shuts it |
+| a right-click on an image, small or full size | opens a menu with Save image, which does the same; `esc` or a click outside it shuts the menu, and that click does nothing more |
 | `?`, on a card, the yard row, Lines or the switcher; a click on "? all keys" | opens the cheatsheet of the open view's keys; `esc` closes it |
 | a click on an option, on "decide this one" | chooses it; makes the ask current |
 | `cmd+[` · `cmd+]` (`ctrl` on Linux) | the modes back, forth |
@@ -696,4 +698,4 @@ you do not want: footplate's in its settings, the yard's with
 `yardr user set <user> notify=`.
 
 Not in this slice, and in `yardr chat`: a crew member's pane. Nor here:
-saving an image to disk, or resizing one that is over the cap.
+resizing an image that is over the cap.

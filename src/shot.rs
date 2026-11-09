@@ -177,6 +177,7 @@ pub const STATES: &[&str] = &[
     "page",
     "mail",
     "image",
+    "image-menu",
     "refusal",
     "undelivered",
     "answered",
@@ -225,14 +226,20 @@ pub const STATES: &[&str] = &[
     "screen-wide",
 ];
 
-/// The image in the `page`, `mail` and `image` states, and its hash: the
-/// yard serves the bytes, and the note or the mail names them.
+/// The image in the `page`, `mail`, `image` and `image-menu` states, and its
+/// hash: the yard serves the bytes, and the note or the mail names them.
 const IMAGE: &[u8] = include_bytes!("fixtures/shot-page.png");
 const IMAGE_HASH: &str = "ca2421063b23c6ff5739c2000b22125bea109764fff6e643eccea0c00f6fe6c3";
 
 /// The overlay the `image` state opens with: the hash it shows, and its
 /// bytes for the line while they are not there yet.
 pub(crate) const IMAGE_OPEN: (&str, u64) = (IMAGE_HASH, IMAGE.len() as u64);
+
+/// Where the `image-menu` state opens the picture's menu, in the window's
+/// pixels: inside the mail's picture, where a right press on it would have
+/// been. The picture stands at the same place in the thread at any window
+/// size the shots take, since the thread lays out from its top left.
+pub(crate) const IMAGE_MENU_AT: (f32, f32) = (600., 360.);
 
 /// The screen the `screen` state opens with: a real Claude Code pane,
 /// captured with the `SessionScreen` form, served as the call's answer.
@@ -1974,12 +1981,13 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
         }
-        "mail" | "image" => {
+        "mail" | "image" | "image-menu" => {
             // The yardmaster's mail carries a page and an image, as the
             // bead's note does in the page state: the yard holds the
             // image, and the page is never asked for, since Open takes
             // it to the browser, with no run. The image state serves
-            // the same mail, and the window opens its image over it.
+            // the same mail, and the window opens its image over it; the
+            // image-menu state opens the menu of the image in the thread.
             yard.blob(IMAGE_HASH, IMAGE);
             yard.answer(
                 "UserInbox",
@@ -3463,7 +3471,7 @@ mod tests {
                     let assembly = client.conversation("jo", "assembly", 0).unwrap();
                     assert_eq!(assembly.len(), 3, "{state}");
                 }
-                "mail" | "image" => {
+                "mail" | "image" | "image-menu" => {
                     assert!(loaded.asks.open.is_empty(), "{state}");
                     // The mail carries the page and the image; the yard
                     // holds the image, and the page is named only.

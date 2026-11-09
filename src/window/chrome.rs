@@ -1271,7 +1271,23 @@ impl Footplate {
                         self.image_open = Some(super::rail::ImageOpen {
                             hash: hash.to_string(),
                             bytes,
+                            name: String::new(),
+                            said: String::new(),
                             back: None,
+                        });
+                    }
+                    // The image-menu shot opens the menu a right press on
+                    // the mail's picture opens, where the pointer would
+                    // have stood on it, over the thread. A debug build's
+                    // alone, as above, and a unix one's.
+                    #[cfg(all(debug_assertions, unix))]
+                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("image-menu") {
+                        let (hash, _) = crate::shot::IMAGE_OPEN;
+                        let (x, y) = crate::shot::IMAGE_MENU_AT;
+                        self.picture_menu = Some(super::rail::PictureMenu {
+                            hash: hash.to_string(),
+                            name: String::new(),
+                            at: gpui::point(px(x), px(y)),
                         });
                     }
                     // The drawer shot opens the bead beside the
@@ -2123,15 +2139,15 @@ impl Footplate {
             ViewUp::Asked(asked_) | ViewUp::Answered(asked_, _) if asked_ == &asked => return,
             _ => {}
         }
-        // The page shot shows the row with Open and run, and the mail
-        // and image shots the mail's row with Open and its image: the
+        // The page shot shows the row with Open and run, and the mail,
+        // image and image-menu shots the mail's row with Open and its image: the
         // view is taken as answering at its address, so the shot is the
         // row and not the probe. A debug build's alone; where the
         // address reads as none, the probe below says so.
         #[cfg(debug_assertions)]
         if matches!(
             std::env::var("FOOTPLATE_SHOT").as_deref(),
-            Ok("page") | Ok("mail") | Ok("image")
+            Ok("page") | Ok("mail") | Ok("image") | Ok("image-menu")
         ) && api::Address::parse_view(&asked.base).is_ok()
         {
             self.view_up = ViewUp::Answered(asked, true);
@@ -3281,7 +3297,7 @@ impl Footplate {
     }
 
     /// Esc leaves what it can: the cheatsheet, the About card, the Feedback
-    /// form, the image over the window, a decline asked for words, the
+    /// form, a picture's menu, the image over the window, a decline asked for words, the
     /// words for the card's keys, the pick, then the words.
     pub(crate) fn leave(&mut self, _: &Leave, window: &mut Window, cx: &mut Context<Self>) {
         if self.show_keys {
@@ -3297,6 +3313,9 @@ impl Footplate {
         }
         if self.screen_open.is_some() {
             return self.shut_screen(window, cx);
+        }
+        if self.picture_menu.is_some() {
+            return self.shut_picture_menu(cx);
         }
         if self.image_open.is_some() {
             return self.shut_image(window, cx);

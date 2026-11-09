@@ -100,7 +100,7 @@ fn name_valid(name: &str) -> bool {
 /// The stem and the extension of a base name: the extension is what
 /// follows its last dot, the dot with it, and nothing when it has none or
 /// is nothing but it.
-fn split_name(base: &str) -> (&str, &str) {
+pub(crate) fn split_name(base: &str) -> (&str, &str) {
     match base.rsplit_once('.') {
         Some((stem, _)) if !stem.is_empty() => base.split_at(stem.len()),
         _ => (base, ""),
@@ -111,8 +111,10 @@ fn split_name(base: &str) -> (&str, &str) {
 /// `ext` goes under: shortened at a character boundary to the 255 bytes
 /// the yard takes, the suffix and the extension kept whole. A name the
 /// yard takes none of, or one that shortens past nothing, is why it
-/// cannot go instead.
-fn fit_name(stem: &str, suffix: &str, ext: &str) -> Result<String, String> {
+/// cannot go instead. A picture saved to disk (save.rs) is named by it too:
+/// the name of a file from a linked yard or a hook is the source's own
+/// word, and it is held to the yard's rule before it is written under.
+pub(crate) fn fit_name(stem: &str, suffix: &str, ext: &str) -> Result<String, String> {
     let candidate = format!("{stem}{suffix}{ext}");
     if !name_valid(&candidate) {
         return Err(format!(

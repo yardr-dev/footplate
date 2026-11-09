@@ -38,6 +38,7 @@ mod markdown;
 mod model;
 mod notify;
 mod pake;
+mod save;
 mod select;
 mod session;
 mod settings;

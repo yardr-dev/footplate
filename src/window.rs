@@ -52,7 +52,7 @@ use keys::{APPROVE_KEY, CONTEXT, NO_LINE_CONTEXT, SETUP_SECRET_CONTEXT, SWITCH_C
 use metrics::READING_WIDTH;
 // The window's floor, which main.rs sets as the window's minimum.
 pub(crate) use metrics::WINDOW_MIN;
-use rail::{ImageOpen, Picture, ViewUp};
+use rail::{ImageOpen, Picture, PictureMenu, ViewUp};
 use screen::ScreenOpen;
 use state::{
     About, Adding, AgentsBusy, Anchor, Away, Held, Piece, Place, SwitchBusy, SwitchFor, Talk,
@@ -347,6 +347,10 @@ pub struct Footplate {
     /// on a thumbnail opens it, and Esc, a click outside or its × shuts
     /// it again.
     image_open: Option<ImageOpen>,
+    /// The menu a right press on a picture opened, while one stands: it
+    /// offers to save the picture, and Esc, a press outside it or its one
+    /// item shuts it.
+    picture_menu: Option<PictureMenu>,
     /// The session's screen shown over the window, while one is: a
     /// Screen control opens it, and Esc, a click outside or its × shuts
     /// it again.
@@ -909,6 +913,7 @@ impl Footplate {
             selection,
             images: HashMap::new(),
             image_open: None,
+            picture_menu: None,
             screen_open: None,
             screen_read: 0,
             screen_scroll: ScrollHandle::new(),
@@ -1299,6 +1304,12 @@ impl Render for Footplate {
         );
         let shown = match &self.image_open {
             Some(open) => shown.child(self.image_layer(open, window, cx)),
+            None => shown,
+        };
+        // The menu of a picture, in the thread or full size, over that:
+        // Esc shuts it before the image.
+        let shown = match &self.picture_menu {
+            Some(menu) => shown.child(self.picture_menu_layer(menu, palette, cx)),
             None => shown,
         };
         // A session's screen over the image, where one is: Esc shuts
@@ -1892,6 +1903,24 @@ mod tests {
     fn overlay_image(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<String> {
         view.read_with(cx, |v, _| {
             v.image_open.as_ref().map(|open| open.hash.clone())
+        })
+    }
+
+    /// What the full-size view of the image open over the window says of a
+    /// save, if one is open: empty before any. gpui keeps the bounds of a
+    /// selector drawn once, so that what has left the window is read here,
+    /// from the state, and not from `drawn`.
+    fn overlay_said(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<String> {
+        view.read_with(cx, |v, _| {
+            v.image_open.as_ref().map(|open| open.said.clone())
+        })
+    }
+
+    /// The hash of the picture whose menu stands open, if one does: as
+    /// `overlay_image` says what is open, this says what is shut.
+    fn picture_menu_of(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<String> {
+        view.read_with(cx, |v, _| {
+            v.picture_menu.as_ref().map(|menu| menu.hash.clone())
         })
     }
 
@@ -3474,7 +3503,7 @@ mod tests {
         assert!(reacting(&view, cx));
 
         view.update_in(cx, |v, window, cx| {
-            v.open_image("0".repeat(64), 100, window, cx)
+            v.open_image("0".repeat(64), 100, String::new(), window, cx)
         });
         assert!(drawn(cx, "image overlay"));
         assert!(!reacting(&view, cx));
@@ -7428,7 +7457,8 @@ yardr.dev
             &json!({"result": [
                 {"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo",
                  "text": "Like this?", "read": false,
-                 "files": [{"hash": image, "type": "image/png", "bytes": bytes.len()}]}
+                 "files": [{"hash": image, "type": "image/png", "bytes": bytes.len(),
+                            "name": "fence.png"}]}
             ]})
             .to_string(),
         );
@@ -7436,6 +7466,11 @@ yardr.dev
         wait(cx, "the image of the mail", |cx| {
             picture(&view, cx, &image) == "here"
         });
+        // Pictures are saved into a Downloads folder of the test's, which
+        // is not made yet, as a person's may not be.
+        let home = tempfile::tempdir().unwrap();
+        let downloads = home.path().join("Downloads");
+        view.update(cx, |v, _| v.means.downloads = Some(downloads.clone()));
         // A click opens it over the window: the overlay, the image, and
         // the ×, over the thumbnail, which stays 240 points high.
         assert!(!drawn(cx, "image overlay"));
@@ -7469,6 +7504,36 @@ yardr.dev
         assert!((top - (oh - h) / 2.).abs() < 2., "{top} of {oh} and {h}");
         // While it shows, the window holds the keys.
         assert!(!line_focused(&view, cx));
+        // A Save stands beside the ×, left of it and as high as the kit's
+        // controls. A click on it writes the bytes the window holds into
+        // the Downloads folder, under the name the mail's file has, says
+        // where in the window's notice and in the view, which covers the
+        // notice's place, and shuts nothing.
+        assert!(drawn(cx, "image save"));
+        let (save, close) = (bounds_of(cx, "image save"), bounds_of(cx, "image close"));
+        assert!(save.right() <= close.left(), "{save:?} beside {close:?}");
+        assert!((save.size.height - px(32.)).abs() < px(1.), "{save:?}");
+        assert!((save.center().y - close.center().y).abs() < px(1.));
+        assert!(!drawn(cx, "image said"));
+        click_on(cx, "image save");
+        let saved = downloads.join("fence.png");
+        wait(cx, "the saved picture", |_| saved.exists());
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+        wait(cx, "what the save said", |cx| {
+            notice(&view, cx) == format!("saved to {}", saved.display())
+        });
+        assert!(drawn(cx, "image said"));
+        assert_eq!(overlay_image(&view, cx), Some(image.clone()));
+        // The same picture saved again is a file of its own, and the first
+        // is as it was.
+        click_on(cx, "image save");
+        let again = downloads.join("fence (2).png");
+        wait(cx, "the second save", |_| again.exists());
+        assert_eq!(std::fs::read(&again).unwrap(), bytes);
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+        wait(cx, "what the second save said", |cx| {
+            notice(&view, cx) == format!("saved to {}", again.display())
+        });
         // Esc shuts it, and the line has the keys again; a click on the
         // thumbnail reaches through again, and opens it.
         cx.simulate_keystrokes("escape");
@@ -7477,6 +7542,8 @@ yardr.dev
         assert!(line_focused(&view, cx));
         click_on(cx, &format!("image open {image}"));
         assert_eq!(overlay_image(&view, cx), Some(image.clone()));
+        // What a save said belongs to the view it was made in.
+        assert_eq!(overlay_said(&view, cx), Some(String::new()));
         // A click outside shuts it too.
         let over = bounds_of(cx, "image overlay");
         let outside = gpui::point(over.origin.x + px(4.), over.origin.y + px(4.));
@@ -7498,8 +7565,77 @@ yardr.dev
         cx.run_until_parked();
         assert_eq!(overlay_image(&view, cx), None);
         assert!(line_focused(&view, cx));
+        // A right press on the thumbnail in the thread opens a menu that
+        // offers the same save, where the pointer is, and opens nothing
+        // full size. The line keeps the keys it had.
+        assert_eq!(picture_menu_of(&view, cx), None);
+        right_click_on(cx, &format!("image open {image}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(image.clone()));
+        assert!(drawn(cx, "image menu"));
+        assert!(drawn(cx, "image menu save"));
+        assert_eq!(overlay_image(&view, cx), None);
+        assert!(line_focused(&view, cx));
+        // Esc shuts it and nothing else.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(picture_menu_of(&view, cx), None);
+        assert!(line_focused(&view, cx));
+        // The item saves, as the Save does, and the menu goes.
+        right_click_on(cx, &format!("image open {image}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(image.clone()));
+        click_on(cx, "image menu save");
+        let third = downloads.join("fence (3).png");
+        wait(cx, "the saved picture of the menu", |_| third.exists());
+        assert_eq!(std::fs::read(&third).unwrap(), bytes);
+        assert_eq!(picture_menu_of(&view, cx), None);
+        assert_eq!(overlay_image(&view, cx), None);
+        assert!(line_focused(&view, cx));
+        wait(cx, "what the menu's save said", |cx| {
+            notice(&view, cx) == format!("saved to {}", third.display())
+        });
+        // A click outside shuts it and does nothing more: pressed on the
+        // thumbnail's corner to dismiss the menu, it opens nothing, and the
+        // line keeps the keys. The next click there opens the picture full
+        // size, as ever.
+        right_click_on(cx, &format!("image open {image}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(image.clone()));
+        let thumb = bounds_of(cx, &format!("image open {image}"));
+        let corner = gpui::point(thumb.origin.x + px(4.), thumb.origin.y + px(4.));
+        cx.simulate_click(corner, gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(picture_menu_of(&view, cx), None);
+        assert_eq!(overlay_image(&view, cx), None);
+        assert!(line_focused(&view, cx));
+        cx.simulate_click(corner, gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(overlay_image(&view, cx), Some(image.clone()));
+        // A right press on the picture shown full size opens the menu over
+        // the view. Esc shuts the menu and not the view; the item saves
+        // and shuts the menu, and the view stays.
+        right_click_on(cx, &format!("image shown {image}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(image.clone()));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(picture_menu_of(&view, cx), None);
+        assert_eq!(overlay_image(&view, cx), Some(image.clone()));
+        right_click_on(cx, &format!("image shown {image}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(image.clone()));
+        click_on(cx, "image menu save");
+        let fourth = downloads.join("fence (4).png");
+        wait(cx, "the saved picture of the view's menu", |_| {
+            fourth.exists()
+        });
+        assert_eq!(picture_menu_of(&view, cx), None);
+        assert_eq!(overlay_image(&view, cx), Some(image.clone()));
+        wait(cx, "what the view's menu said", |cx| {
+            overlay_said(&view, cx) == Some(format!("saved to {}", fourth.display()))
+        });
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(overlay_image(&view, cx), None);
         // The overlay draws from the bytes the window holds: the yard
-        // was asked for them once, for the thumbnail.
+        // was asked for them once, for the thumbnail. A save wrote the
+        // same bytes four times and asked for none.
         assert_eq!(yard.blobs_asked(), [image]);
     }
 
@@ -7539,12 +7675,25 @@ yardr.dev
         wait(cx, "the note's image", |cx| {
             picture(&view, cx, &image) == "here"
         });
+        let home = tempfile::tempdir().unwrap();
+        view.update(cx, |v, _| {
+            v.means.downloads = Some(home.path().to_path_buf())
+        });
         click_on(cx, &format!("image open {image}"));
         assert!(drawn(cx, "image overlay"));
         assert!(drawn(cx, &format!("image shown {image}")));
         let shown = bounds_of(cx, &format!("image shown {image}"));
         assert!(f32::from(shown.size.width) <= 2.);
         assert!(f32::from(shown.size.height) <= 2.);
+        // The note's file has no name, so a save names it by its hash and
+        // its format's extension.
+        click_on(cx, "image save");
+        let saved = home.path().join(format!("{image}.png"));
+        wait(cx, "the saved picture", |_| saved.exists());
+        assert_eq!(std::fs::read(&saved).unwrap(), png());
+        wait(cx, "what the save said", |cx| {
+            notice(&view, cx) == format!("saved to {}", saved.display())
+        });
         // The × shuts it: a click on the thumbnail reaches through
         // again. The yard was asked for the bytes once.
         click_on(cx, "image close");
@@ -7552,6 +7701,37 @@ yardr.dev
         assert_eq!(overlay_image(&view, cx), None);
         click_on(cx, &format!("image open {image}"));
         assert_eq!(overlay_image(&view, cx), Some(image.clone()));
+        click_on(cx, "image close");
+        cx.run_until_parked();
+        // A right press on the thumbnail in the card offers the save as
+        // well, and the card says where it went: the notice stands in its
+        // pane.
+        right_click_on(cx, &format!("image open {image}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(image.clone()));
+        click_on(cx, "image menu save");
+        let again = home.path().join(format!("{image} (2).png"));
+        wait(cx, "the saved picture of the menu", |_| again.exists());
+        wait(cx, "what the menu's save said", |cx| {
+            notice(&view, cx) == format!("saved to {}", again.display())
+        });
+        // A save that cannot be made says where it tried and why, and
+        // writes nothing: a file stands where the folder should.
+        let blocked = home.path().join("blocked");
+        std::fs::write(&blocked, b"in the way").unwrap();
+        view.update(cx, |v, _| v.means.downloads = Some(blocked.clone()));
+        right_click_on(cx, &format!("image open {image}"));
+        click_on(cx, "image menu save");
+        wait(cx, "the refusal", |cx| {
+            notice(&view, cx).starts_with(&format!("not saved to {}: ", blocked.display()))
+        });
+        assert_eq!(std::fs::read(&blocked).unwrap(), b"in the way");
+        // And a machine that names no Downloads folder says so.
+        view.update(cx, |v, _| v.means.downloads = None);
+        right_click_on(cx, &format!("image open {image}"));
+        click_on(cx, "image menu save");
+        wait(cx, "the word of no folder", |cx| {
+            notice(&view, cx) == "not saved: this machine names no Downloads folder"
+        });
         assert_eq!(yard.blobs_asked(), [image]);
     }
 
@@ -7583,7 +7763,7 @@ yardr.dev
         click_on(cx, &format!("image open {first}"));
         assert!(drawn(cx, &format!("image shown {first}")));
         view.update_in(cx, |v, window, cx| {
-            v.open_image(second.clone(), 70, window, cx)
+            v.open_image(second.clone(), 70, String::new(), window, cx)
         });
         assert!(drawn(cx, &format!("image shown {second}")));
         assert_eq!(overlay_image(&view, cx), Some(second.clone()));
@@ -7594,6 +7774,12 @@ yardr.dev
         assert_eq!(overlay_image(&view, cx), None);
         assert!(line_focused(&view, cx));
         assert_eq!(yard.blobs_asked().len(), 2);
+        // One menu stands at a time: a right press on the other thumbnail
+        // shuts the first's menu, and opens that one's.
+        right_click_on(cx, &format!("image open {first}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(first.clone()));
+        right_click_on(cx, &format!("image open {second}"));
+        assert_eq!(picture_menu_of(&view, cx), Some(second.clone()));
     }
 
     #[gpui::test]
@@ -8010,7 +8196,7 @@ yardr.dev
         // the thumbnail does.
         let image = "ab".repeat(32);
         view.update_in(cx, |v, window, cx| {
-            v.open_image(image.clone(), 70, window, cx)
+            v.open_image(image.clone(), 70, String::new(), window, cx)
         });
         assert!(drawn(cx, "image overlay"));
         assert!(drawn(cx, &format!("image line {image}")));
@@ -8732,6 +8918,20 @@ yardr.dev
             .debug_bounds(at)
             .unwrap_or_else(|| panic!("nothing is drawn for {selector}"));
         cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    }
+
+    /// Presses the right button where `selector` is drawn, and lets it go.
+    fn right_click_on(cx: &mut VisualTestContext, selector: &str) {
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let at: &'static str = Box::leak(selector.to_string().into_boxed_str());
+        let bounds = cx
+            .debug_bounds(at)
+            .unwrap_or_else(|| panic!("nothing is drawn for {selector}"));
+        let none = gpui::Modifiers::default();
+        cx.simulate_mouse_down(bounds.center(), MouseButton::Right, none);
+        cx.simulate_mouse_up(bounds.center(), MouseButton::Right, none);
     }
 
     /// Whether `selector` is drawn.

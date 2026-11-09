@@ -319,7 +319,8 @@ shows no count while the assembly's, not open, shows its three),
 card with one of jo's beads changed, so Lines carries its badge), `page` (an
 open card whose note carries a page, an image and a file), `mail` (a mail with
 a page and an image), `image` (that mail's image open full size over
-the window), `run` (an
+the window, with its Save beside the ×), `image-menu` (that mail's picture
+with the menu a right-click on it opens), `run` (an
 open card of a run ask: the forged one of the run card's test, whose
 question forges the yard's lines), `teammates` (an open card of a
 teammate invite), `teammates-list` (the teammates view open on its row,
@@ -531,6 +532,7 @@ options have no icon, so the program sees to it when it starts
 | `src/session.rs` | following a yard on a thread, one for each yard of the settings: who the window is for, the state it starts from, trying again, or not when the device is not let in |
 | `src/model.rs` | what the window shows, as plain functions: the rows, the open conversation, unread and what is acknowledged |
 | `src/draft.rs` | what is not sent yet, as plain functions: for each yard each conversation's attachments and text, what is refused and why |
+| `src/save.rs` | where a picture is saved and under what name, as plain functions: the Downloads folder, the file's name held to the yard's rule for names, and the write, which never overwrites a file or follows a link and numbers a name that is taken |
 | `src/window.rs` | the window: draws the model and the draft, and makes the calls they ask for |
 | `src/window/firstrun.rs` | "set up a yard here": the steps of the first run, drawn where the yard will be |
 | `src/window/feedback.rs` | the Feedback form over the window: its entry at the rail's foot, its fields, and the send, off the window's thread |

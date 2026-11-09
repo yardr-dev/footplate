@@ -226,6 +226,7 @@ pub fn name(yard: &str, target: &Selected) -> String {
     let row = match target {
         Selected::Conversation(with) => format!("conversation:{with}"),
         Selected::Decision(bead) | Selected::Decided(bead, _) => format!("decision:{bead}"),
+        Selected::Waiting(bead) => format!("waiting:{bead}"),
         Selected::Grants => "grants".to_string(),
         Selected::Teammates => "teammates".to_string(),
         Selected::Pairing => "pairing".to_string(),
@@ -273,6 +274,7 @@ fn row_in_yard(name: &str) -> Option<Selected> {
     match kind {
         "conversation" => Some(Selected::Conversation(of.to_string())),
         "decision" => Some(Selected::Decision(of.to_string())),
+        "waiting" => Some(Selected::Waiting(of.to_string())),
         "line" => Some(Selected::Line(of.to_string())),
         "bead" => Some(Selected::Bead(of.to_string())),
         _ => None,
@@ -859,6 +861,7 @@ mod tests {
             // A name is whatever another yard says it is.
             Selected::Conversation("clerk:of@north".into()),
             Selected::Decision("yardr-n8ta".into()),
+            Selected::Waiting("yardr-n8ta".into()),
             Selected::Grants,
             Selected::Teammates,
             Selected::Pairing,

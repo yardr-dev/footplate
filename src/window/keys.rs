@@ -36,6 +36,7 @@ pub(crate) enum KeysView {
     Settings,
     Conversation,
     Card,
+    Waiting,
     Grants,
     Teammates,
     Pairing,
@@ -52,6 +53,7 @@ impl KeysView {
             KeysView::Settings => "the settings",
             KeysView::Conversation => "this conversation",
             KeysView::Card => "this card",
+            KeysView::Waiting => "this waiting bead",
             KeysView::Grants => "Grants",
             KeysView::Teammates => "Teammates",
             KeysView::Pairing => "Pair a phone",
@@ -116,6 +118,31 @@ pub(crate) fn keys_for(view: KeysView, drawer: bool) -> Vec<(String, String)> {
                 "esc".into(),
                 "leaves the decline, the words, the pick, then the words".into(),
             ),
+            (
+                "tab · shift+tab".into(),
+                "the next, the previous row".into(),
+            ),
+            ("pageup · pagedown".into(), "scroll by a page".into()),
+            (
+                format!("{SECONDARY}+home · {SECONDARY}+end"),
+                "the oldest loaded, the newest".into(),
+            ),
+            ("?".into(), "this list".into()),
+        ],
+        KeysView::Waiting => vec![
+            ("1–9".into(), "pick a move".into()),
+            ("↑↓".into(), "pick, even while a note is typed".into()),
+            (
+                "enter".into(),
+                "makes the move picked, with the note typed".into(),
+            ),
+            ("shift+enter".into(), "breaks the line".into()),
+            ("i".into(), "types the note in".into()),
+            (
+                "/".into(),
+                "in decisions, the history with its filter typed in".into(),
+            ),
+            ("esc".into(), "leaves the line, the pick, then the note".into()),
             (
                 "tab · shift+tab".into(),
                 "the next, the previous row".into(),
@@ -200,6 +227,12 @@ pub(crate) fn keys_for(view: KeysView, drawer: bool) -> Vec<(String, String)> {
             KeysView::Card => {
                 if let Some(esc) = rows.iter_mut().find(|(key, _)| key == "esc") {
                     esc.1 = "leaves the decline and shuts the bead drawer, then the words, the pick, then the words".into();
+                }
+            }
+            KeysView::Waiting => {
+                if let Some(esc) = rows.iter_mut().find(|(key, _)| key == "esc") {
+                    esc.1 = "shuts the bead drawer, then leaves the line, the pick, then the note"
+                        .into();
                 }
             }
             KeysView::Switcher | KeysView::Settings | KeysView::Away => {}

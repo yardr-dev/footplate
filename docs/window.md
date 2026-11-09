@@ -12,7 +12,17 @@ you, oldest first and grouped by topic where a topic has two asks or more
 "Everything else"), each row the question wrapped to two lines, then whose
 it is, what it wants and how long it waits, and the bead's id small at its
 end; a bead with several open asks is one row, with each ask beneath its
-title in the same shape. Under them, folded, "Decided" with the answered,
+title in the same shape. Under them, on a yard that serves `Waiting`, stands
+the Waiting section: the beads parked for your move, longest waiting first,
+one row each. A bead is parked for you when it is open in a stage that a
+manual group works, you are one of that group's members (or the group lists
+none), and no question of yours is open on it. It stands there or among the
+open questions, never in both. A row shows the bead's title, wrapped to two
+lines, then its stage, its group and how long it has waited, with the bead's
+id small at its end. Where the parked beads belong to more than one depot,
+the depot's name joins that line. The section's head counts them (`3
+waiting`, `none waiting`). A yard from before the call has no section and
+says nothing about one. Under them, folded, "Decided" with the answered,
 declined and put-aside asks and the ones taken back, newest first. Open,
 the history stands grouped by the day it was asked, with the outcome's
 icon first on every row, and look-alikes folded into one row with their
@@ -153,6 +163,36 @@ once, and a later pick on it from there replaces the earlier one. The window
 holds the card's keys, `i` types the words in, `esc` holds the keys again.
 What is typed stays with its ask, as a draft stays with its conversation.
 
+A bead parked for your move opens as a card of its own. Its head names the
+yard and the bead's title, and under the title the bead whole in one line:
+id, stage, group, depot and how long it has waited. Where the yard's web view
+answers, the head also carries the bead's route and Open, as the details in
+Lines do. Under the head stand the bead's body and notes, then the moves the
+yard offers, one button each, worded as `yardr review` words them (`done:
+move to build`, `changes: send back to shape (note required)`, `Move to
+build`), then a line for the note that goes with the move.
+
+A number key or the arrows pick a move. The picked move's button ends in the
+key that makes it (`changes: send back to shape (note required) ↵`), and
+Enter makes the move the button names, with the line's words as its note
+where the line holds any. A click on a button makes that move at once. Where
+several moves are offered none is picked until you pick one, so a habit of
+Enter chooses nothing; a lone move stands picked. A move that wants a note,
+as a move back to an earlier stage does, stands faint and says `needs a note`
+until the line holds words.
+
+The yard checks the move in its own write: the bead must still be as the
+card read it, the move must be one the yard offers you, and a note must be
+there where one is required. The card says what the yard refuses in the
+yard's own words, and the waiting beads and the bead are read again. A call
+that ends without an answer is said not to be known to have moved the bead,
+and it is not made again. A bead whose flow does not resolve offers no move:
+the card shows the yard's words where the moves would be, and the bead stays
+readable whole. A move made takes the bead out of the section at once and
+opens the next waiting row. While the yard is reconnecting the moves stand
+faint, and nothing is queued. `i` types in the line, and `esc` leaves it,
+then the pick, then the words. What is typed stays with its bead.
+
 A mapping ask (who an unmapped sender is) is weighty: its card shows the
 yard's line first, in rust, and each pick passes the Mac's unlock first —
 Touch ID, a paired watch or the login password — with `weighed` sent where
@@ -283,7 +323,7 @@ its card under "Decided".
 
 | Key | Does |
 |---|---|
-| `enter` | sends the draft, the line and the files attached, as one mail to the one whose conversation is open (a long text as several: "A long text"), as the Send button does; on a card, the pick with the line's words |
+| `enter` | sends the draft, the line and the files attached, as one mail to the one whose conversation is open (a long text as several: "A long text"), as the Send button does; on a card, the pick with the line's words; on a parked bead's card, the move its button names, with the line's words as its note |
 | `shift+enter` | breaks the line where the cursor is; a text wider than the box goes on in the next row, and the box grows with its rows up to a third of the window, then scrolls |
 | `up`, `down` in a text of several rows | the row above, below, in the same column; `home` and `end` are the row's |
 | `cmd+v` (`ctrl+v` on Linux) | pastes text into the line, with its line breaks; a file is attached to the draft |
@@ -300,15 +340,15 @@ its card under "Decided".
 | a click on "Decided" | folds it open, shut |
 | a click on a folded history row | opens it to show its rows, shut |
 | `/`, in decisions | opens the history with its filter typed in; `esc` leaves the filter, and what is typed stands |
-| `1`–`9`, `up`, `down`, on a card | chooses an option; the arrows choose even while words are typed, from the first row of the words up and from the last down |
-| `i`, on a card | on a weighty card without a system unlock, types the ask's number first, then a secret, a setup account or words; otherwise types words or the secret or account in its field. The window holds the card's keys |
+| `1`–`9`, `up`, `down`, on a card | chooses an option, or on a parked bead's card a move; the arrows choose even while words are typed, from the first row of the words up and from the last down |
+| `i`, on a card | on a weighty card without a system unlock, types the ask's number first, then a secret, a setup account or words; otherwise types words or the secret or account in its field; on a parked bead's card, the note for its move. The window holds the card's keys |
 | `cmd+enter` (`ctrl+enter` on Linux), on a run or setup ask's card | approves it: the yard runs the command the card shows, or applies the setup with the preset pick and the account. On a weighty card it opens the offered system unlock first; where none is offered, the typed number must match the ask. No other card answers to it, and Enter alone approves nothing |
 | `x`, on the open `yard` row | marks one notice read; a notice never needs more than one key |
 | shift-`x`, on the open `yard` row | marks every notice read, as the button in the row's head does, shown with their count while one is unread |
 | `x`, on an open card | puts the ask aside |
 | `d`, on an open card | declines the ask with words; with an empty line the next Enter sends them. A secret ask is declined at once, with none |
 | `e`, on a card | expands it to the bead whole, or folds it again |
-| `esc`, on a card | leaves a decline asked for words, shuts the bead drawer where one is open, the words for the card's keys, the pick, then the words; in the field of a secret, the field, and what was typed is gone; in the number field, leaves it and keeps the number |
+| `esc`, on a card | leaves a decline asked for words, shuts the bead drawer where one is open, the words for the card's keys, the pick, then the words; in the field of a secret, the field, and what was typed is gone; in the number field, leaves it and keeps the number. On a parked bead's card: the bead drawer, the line, the pick, then the note |
 | a click on a bead's chip in a mail | opens the bead in the drawer beside what is open, which stays as it was; the drawer's Open shows the bead whole, and `esc` shuts the drawer |
 | `?`, on a card, the yard row, Lines or the switcher; a click on "? all keys" | opens the cheatsheet of the open view's keys; `esc` closes it |
 | a click on an option, on "decide this one" | chooses it; makes the ask current |

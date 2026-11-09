@@ -19,6 +19,11 @@
 #   binary   default: target/debug/footplate under the checkout
 #   seconds  how long the window stands before the picture (default 4)
 #
+# SHOT_SIZE=<width>x<height> in the environment opens the window at that size
+# in pixels (the window's floor is 624x360; 1200x800 is the other usual one).
+# The window sizes itself, since a shot here drives no pointer to drag it
+# larger; empty is its usual 960x640.
+#
 # The display is woken if it sleeps and held awake for as long as this runs
 # (caffeinate -d -u). On a Mac that asks for no password a sleeping display is
 # what reads as a locked screen: the session says it is locked, with
@@ -36,7 +41,7 @@ caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is. The same
 # list as scripts/shot-linux.sh keeps.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered waiting waiting-end keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;
@@ -61,6 +66,13 @@ case "$look" in light|dark) ;; *)
     exit 2
     ;;
 esac
+# SHOT_SIZE is two positive whole numbers joined by an x, as
+# scripts/shot-linux.sh takes it.
+size=${SHOT_SIZE:-}
+if [ -n "$size" ] && ! printf '%s\n' "$size" | grep -E -q '^[1-9][0-9]*x[1-9][0-9]*$'; then
+    echo "shot-mac.sh: SHOT_SIZE must be WIDTHxHEIGHT using positive integers" >&2
+    exit 2
+fi
 # No hold file: hold leaves the window up, it names no picture.
 case "$out" in
     /*|hold) ;;
@@ -141,6 +153,7 @@ env -i \
     TMPDIR="$T/tmp" \
     PATH="$T/home/.local/bin:/usr/bin:/bin" \
     SHOT_LOOK="$look" \
+    SHOT_SIZE="$size" \
     FOOTPLATE_SHOT="$state" \
     "$bin" > "$T/footplate.log" 2>&1 &
 pid=$!

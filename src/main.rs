@@ -156,10 +156,13 @@ fn main() {
         })
         .detach();
 
+        // A debug build's shot may ask for another size (SHOT_SIZE), as the
+        // floor and 1200 by 800 are shot on the Mac.
+        let (width, height) = usual_size();
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                 None,
-                size(px(960.), px(640.)),
+                size(px(width), px(height)),
                 cx,
             ))),
             titlebar: Some(titlebar::options(cfg!(target_os = "macos"))),
@@ -187,6 +190,16 @@ fn main() {
             }
         }
     });
+}
+
+/// The size the window opens at: 960 by 640, or in a debug build's shot the
+/// size `SHOT_SIZE` names.
+fn usual_size() -> (f32, f32) {
+    #[cfg(all(debug_assertions, unix))]
+    if let Some(asked) = shot::window_size() {
+        return asked;
+    }
+    (960., 640.)
 }
 
 /// gpui's window options have no icon. On macOS a program that is no bundle

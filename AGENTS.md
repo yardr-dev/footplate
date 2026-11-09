@@ -40,9 +40,9 @@ The window, its state and the yard:
   - `src/window/ask.rs`: the words and keys of an ask's card: its heads and
     counts, its buttons, and the texts a run or a setup holds.
   - `src/window/asks.rs`: the decisions' views: the decisions list with its
-    decided history, each open ask's card with its secret, run and setup
-    blocks, and what the cards do (answer, approve, give, decline, put
-    aside).
+    Waiting section (the rows are `waiting.rs`'s) and its decided history,
+    each open ask's card with its secret, run and setup blocks, and what the
+    cards do (answer, approve, give, decline, put aside).
   - `src/window/bead.rs`: one bead's views: the bead whole, the conversation
     thread with its mail, and the pictures and attachments of both.
   - `src/window/chrome.rs`: the shell the views stand in: the rail, the list
@@ -84,6 +84,13 @@ The window, its state and the yard:
     and `ui::shorten`, which ends a string in an ellipsis after a char budget:
     gpui 0.2.2's `truncate()` clips mid-glyph, with no ellipsis, in a flex item
     that shrinks, so a row whose text may outrun it shortens the string too.
+  - `src/window/waiting.rs`: the parked beads' views: a bead's row in the
+    Waiting section of the decisions list, the card that offers the moves
+    the yard serves it (`Waiting`'s actions, one button each, with the line
+    for their note), and what the moves do: pick, note, make (`MoveBead`),
+    with a refusal and an unanswered call said on the card. The pick and the
+    rows are the model's (`src/model.rs`); a card's note is kept under ask 0,
+    which no ask has.
   - `src/window/words.rs`: the window's words for its rows (what its heads
     and counts say) and the colours that say what waits and for whom.
   - `src/window/yards.rs`: the yards' views: the switcher with its rows, each

@@ -103,6 +103,10 @@ use crate::yard::Env;
 /// the yard's machine, with no Screen offered, that card on a yard that
 /// refuses the read in many words, which wrap inside it, and that card on a
 /// pane wider than the window, scrolled to the end of its lines.
+/// the Decide list with three beads parked for jo's move under the open ask
+/// and the history folded, one of the parked beads open on its card with the
+/// moves the yard offers, and that card stood at its end, where the moves and
+/// the line for their note are,
 /// The stopped yard answers nothing, as the refused one answers nowhere:
 /// both open on a yard that is down, as the posed setup does. The yard at
 /// an address is opened from the settings the shot script writes; the
@@ -196,6 +200,8 @@ pub const STATES: &[&str] = &[
     "refs",
     "decisions",
     "decisions-filtered",
+    "waiting",
+    "waiting-end",
     "keys",
     "about",
     "about-missing",
@@ -347,6 +353,23 @@ pub(super) fn start_if_asked(env: Env) -> (Env, Option<ShotYard>) {
         let _ = TALKING.set(stand_voice());
     }
     start_for_state(env, &state)
+}
+
+/// The size a shot's window opens at, in pixels, when `SHOT_SIZE` names one
+/// (`WIDTHxHEIGHT`, as scripts/shot-linux.sh takes it), else none: the window
+/// opens at its usual size. The Mac's window sizes itself, since a shot there
+/// drives no pointer to drag it larger; the floor shot asks for the window's
+/// own minimum.
+pub(super) fn window_size() -> Option<(f32, f32)> {
+    size_from(&std::env::var("SHOT_SIZE").unwrap_or_default())
+}
+
+/// A size as `SHOT_SIZE` words it: two positive whole numbers joined by an
+/// `x`. Anything else is none.
+fn size_from(words: &str) -> Option<(f32, f32)> {
+    let (width, height) = words.split_once('x')?;
+    let (width, height): (u32, u32) = (width.parse().ok()?, height.parse().ok()?);
+    (width > 0 && height > 0).then_some((width as f32, height as f32))
 }
 
 /// The capture the feedback shot sends to, which stands in for PostHog.
@@ -2050,6 +2073,133 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("Bead", &bead_links());
         }
+        "waiting" | "waiting-end" => {
+            // The Decide list: one open ask, and under it three beads
+            // parked for jo's move, the longest waiting first: a bead with
+            // a move forward and a move back that wants a note, one with
+            // the one move a siding offers, and one a person approves
+            // for production, which closes it. Twelve dealt with asks are
+            // folded under them. The first parked bead is open on its card,
+            // with the stage's route under its title.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}]}"#,
+            );
+            let history: Vec<serde_json::Value> = decided_history()
+                .as_array()
+                .unwrap()
+                .iter()
+                .take(12)
+                .cloned()
+                .collect();
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [queued_links()], "decided": history}}).to_string(),
+            );
+            yard.answer("Bead", &bead_links());
+            let midnight = shot_midnight();
+            yard.answer(
+                "Waiting",
+                &json!({"result": [
+                    {"bead": "plantime-4f2a", "title": "Release the autumn timetable",
+                     "depot": "plantime", "stage": "ready", "group": "people",
+                     "since": shot_since(&midnight, 3, 9, 30), "revision": "01KJ8W3C5T0E9XRQ2NAM4PBD7F",
+                     "actions": [
+                        {"kind": "done", "label": "done: move to build",
+                         "outcome": "done", "to": "build"},
+                        {"kind": "done", "label": "changes: send back to shape (note required)",
+                         "outcome": "changes", "to": "shape", "note_required": true}]},
+                    {"bead": "plantime-9c1e", "title": "Fold the October small fixes",
+                     "depot": "plantime", "stage": "siding", "group": "people",
+                     "since": shot_since(&midnight, 1, 14, 10), "revision": "01KJ9",
+                     "actions": [{"kind": "advance", "label": "Move to ready", "to": "ready"}]},
+                    {"bead": "plantime-d3a7", "title": "Take the new fares live",
+                     "depot": "plantime", "stage": "production-approval", "group": "people",
+                     "since": shot_since(&midnight, 0, 8, 45), "revision": "01KJA",
+                     "actions": [
+                        {"kind": "done", "label": "approved: finish as live (closes the bead)",
+                         "outcome": "approved", "to": "live", "terminal": true},
+                        {"kind": "done", "label": "changes: send back to ready (note required)",
+                         "outcome": "changes", "to": "ready", "note_required": true}]}
+                ]})
+                .to_string(),
+            );
+            for (bead, title, stage, note) in [
+                (
+                    "plantime-4f2a",
+                    "Release the autumn timetable",
+                    "ready",
+                    "assembly: folded 6 beads, tests pass",
+                ),
+                (
+                    "plantime-9c1e",
+                    "Fold the October small fixes",
+                    "siding",
+                    "assembly: 4 small beads wait for company",
+                ),
+                (
+                    "plantime-d3a7",
+                    "Take the new fares live",
+                    "production-approval",
+                    "assembly: the fares check passes on staging",
+                ),
+            ] {
+                yard.answer_for(
+                    "Bead",
+                    "bead",
+                    bead,
+                    &json!({"result": {
+                        "id": bead, "title": title,
+                        "body": "The folded carriers are printed and checked; the branch is green.",
+                        "stage": stage, "labels": [],
+                        "notes": [{"seq": 4, "kind": "note", "author": "assembly",
+                                   "text": note.trim_start_matches("assembly: "),
+                                   "at": shot_since(&midnight, 3, 9, 0)}],
+                        "asks": []
+                    }})
+                    .to_string(),
+                );
+            }
+            yard.answer(
+                "Flows",
+                &json!({"result": {"travelling": 3, "depots": [
+                    {"name": "plantime", "kind": "git", "travelling": 3, "flows": [
+                        {"name": "default", "type": "", "source": "store", "stages": [
+                            {"stage": "shape", "group": "people", "human": true,
+                             "lamp": "none", "terminal": false, "beads": []},
+                            {"stage": "build", "group": "builders", "human": false,
+                             "lamp": "none", "terminal": false, "limit": 2, "taken": 0,
+                             "beads": []},
+                            {"stage": "ready", "group": "people", "human": true,
+                             "lamp": "turn", "terminal": false,
+                             "beads": [{"bead": "plantime-4f2a",
+                                        "title": "Release the autumn timetable",
+                                        "expected": "—", "remark": "waits for jo",
+                                        "tone": "amber", "working": false}]},
+                            {"stage": "siding", "group": "people", "human": true,
+                             "lamp": "turn", "terminal": false,
+                             "beads": [{"bead": "plantime-9c1e",
+                                        "title": "Fold the October small fixes",
+                                        "expected": "—", "remark": "waits for jo",
+                                        "tone": "amber", "working": false}]},
+                            {"stage": "production-approval", "group": "people", "human": true,
+                             "lamp": "turn", "terminal": false,
+                             "beads": [{"bead": "plantime-d3a7",
+                                        "title": "Take the new fares live",
+                                        "expected": "—", "remark": "waits for jo",
+                                        "tone": "amber", "working": false}]},
+                            {"stage": "live", "group": "shippers", "human": false,
+                             "lamp": "none", "terminal": true, "beads": []}
+                        ]}
+                    ], "elsewhere": []}
+                ], "unassigned": []}})
+                .to_string(),
+            );
+        }
         "weighty" => {
             // A weighty run ask's card beside a routine one's: the
             // weighty card shows its classes' lines first, and where
@@ -2808,6 +2958,7 @@ mod tests {
                 "decisions" | "decisions-filtered" => {
                     assert_eq!(loaded.asks.decided.len(), 156, "{state}")
                 }
+                "waiting" | "waiting-end" => assert_eq!(loaded.asks.decided.len(), 12, "{state}"),
                 _ => assert_eq!(loaded.asks.decided.len(), 0, "{state}"),
             }
             match *state {
@@ -3389,6 +3540,27 @@ mod tests {
                     assert_eq!(telling.number("limit"), 30, "{state}");
                     assert!(!telling.text("until").is_empty(), "{state}");
                 }
+                "waiting" | "waiting-end" => {
+                    // One open ask, and three beads parked for jo's move,
+                    // the longest waiting first, with the moves the yard
+                    // offers each: the first open on its card, where the
+                    // flow places it, and the last one's closing the bead.
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    assert!(!loaded.waiting_too_old, "{state}");
+                    let parked: Vec<&str> = loaded.parked.iter().map(|p| p.bead.as_str()).collect();
+                    assert_eq!(
+                        parked,
+                        ["plantime-4f2a", "plantime-9c1e", "plantime-d3a7"],
+                        "{state}"
+                    );
+                    assert_eq!(loaded.parked[0].actions.len(), 2, "{state}");
+                    assert!(loaded.parked[0].actions[1].note_required, "{state}");
+                    assert!(loaded.parked[2].actions[0].terminal, "{state}");
+                    let bead = yard.client().bead("plantime-4f2a").unwrap();
+                    assert_eq!(bead.stage, "ready", "{state}");
+                    assert_eq!(bead.notes.len(), 1, "{state}");
+                    assert_eq!(loaded.flows.depots[0].flows[0].stages.len(), 6, "{state}");
+                }
                 "decisions" | "decisions-filtered" => {
                     // One open ask with four options on its card.
                     assert_eq!(loaded.asks.open.len(), 1, "{state}");
@@ -3596,6 +3768,28 @@ mod tests {
                 }
                 _ => unreachable!("a state with no coverage: {state}"),
             }
+        }
+    }
+
+    /// `SHOT_SIZE` names a size as the Linux script takes it: two positive
+    /// whole numbers joined by an `x`. Anything else opens the window at its
+    /// usual size.
+    #[test]
+    fn a_shot_s_window_size_is_two_positive_numbers_joined_by_an_x() {
+        assert_eq!(size_from("1200x800"), Some((1200., 800.)));
+        assert_eq!(size_from("624x360"), Some((624., 360.)));
+        for none in [
+            "",
+            "1200",
+            "x800",
+            "1200x",
+            "0x800",
+            "1200x0",
+            "1200x800x2",
+            "wide",
+            "-1x5",
+        ] {
+            assert_eq!(size_from(none), None, "{none:?}");
         }
     }
 

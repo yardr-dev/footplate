@@ -76,6 +76,7 @@ impl Footplate {
                 }
             }
             Some(Selected::Decided(_, _)) => "Words with the pick".to_string(),
+            Some(Selected::Waiting(_)) => "Note with the move (i)".to_string(),
             _ => String::new(),
         };
         self.line
@@ -1216,6 +1217,10 @@ impl Footplate {
         if self.reconnecting() {
             return;
         }
+        // On a parked bead's card Enter makes the move its button names.
+        if let Some(bead) = self.waiting_card() {
+            return self.make_picked_move(bead, cx);
+        }
         let Some((bead, ask)) = self.card() else {
             return;
         };
@@ -1580,6 +1585,14 @@ impl Footplate {
 
     /// A number key chooses an option of the open card.
     pub(crate) fn pick(&mut self, option: u64, cx: &mut Context<Self>) {
+        // On a parked bead's card the number is a move's place.
+        if let Some(bead) = self.waiting_card() {
+            self.change(cx, |m| {
+                m.choose_move(&bead, option);
+                Vec::new()
+            });
+            return;
+        }
         let Some((bead, ask)) = self.card() else {
             return;
         };
@@ -1598,6 +1611,14 @@ impl Footplate {
             let last = self.settings.yards.len().saturating_sub(1);
             self.switching = Some(at.saturating_add_signed(by).min(last));
             return cx.notify();
+        }
+        // On a parked bead's card the arrows move the pick among its moves.
+        if let Some(bead) = self.waiting_card() {
+            self.change(cx, |m| {
+                m.step_move(&bead, by);
+                Vec::new()
+            });
+            return;
         }
         let Some((bead, ask)) = self.card() else {
             return;
@@ -1713,6 +1734,14 @@ impl Footplate {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A parked bead's card has the line for its move's note, where it
+        // offers a move.
+        if self.waiting_card().is_some() {
+            if self.waiting_moves() > 0 {
+                window.focus(&self.line.focus_handle(cx));
+            }
+            return;
+        }
         let Some((bead, ask)) = self.card() else {
             return;
         };
@@ -2038,11 +2067,22 @@ impl Footplate {
                 body = body.child(self.decision_row(row, palette, cx));
             }
         }
+        // The beads parked for the person's move stand under the asks: a
+        // question asks for words, a parked bead for a move. A yard from
+        // before the call has no section, and nothing said of it.
+        if !model.waiting_too_old() {
+            let rows = model.waiting_rows(&now);
+            body = body.child(section_head("Waiting", waiting_words(rows.len()), palette));
+            for row in rows {
+                body = body.child(self.waiting_row(row, palette, cx));
+            }
+        }
         if decided > 0 {
             let open = model.decided_expanded();
             body = body.child(
                 div()
                     .id("decided")
+                    .debug_selector(|| "decided toggle".to_string())
                     .mx_1()
                     .px_2()
                     .py_1()

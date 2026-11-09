@@ -84,6 +84,12 @@ pub(crate) const SELECT_CHOICE: usize = 32;
 /// whole.
 pub(crate) const INPUT_KEPT: usize = SELECT_CHOICE - 14;
 
+/// How many chars of a Waiting row's meta line stand before its ellipsis
+/// (`ui::shorten`). At the narrowest list width, this keeps the longest
+/// stage name (`production-approval`), its group and the wait together as
+/// they fit in the row; longer stage or group names end cleanly.
+pub(crate) const WAITING_SUB: usize = 33;
+
 /// The rail's width in pixels, fixed: room for a label under each
 /// icon, as the review has it.
 pub(crate) const RAIL: f32 = 64.;

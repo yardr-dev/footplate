@@ -35,6 +35,7 @@ make_footplate() {
 {
     printf 'FOOTPLATE_SHOT=%s\n' "$FOOTPLATE_SHOT"
     printf 'SHOT_LOOK=%s\n' "$SHOT_LOOK"
+    printf 'SHOT_SIZE=%s\n' "$SHOT_SIZE"
     printf 'settings: '
     cat "$XDG_CONFIG_HOME/footplate/settings.json" 2>/dev/null || printf '(none)\n'
     printf 'PATH=%s\n' "$PATH"
@@ -195,6 +196,24 @@ esac
 [ ! -e "$tmp/bin/footplate-hold.log" ] || fail "a bad look launched the binary"
 [ ! -e "$MOCK_LOG" ] || fail "a bad look started something: $(cat "$MOCK_LOG")"
 
+# A size that is not two positive whole numbers joined by an x is refused the
+# same way, and one that is reaches the window as the size to open at.
+export MOCK_LOG="$tmp/log-bogus-size"
+for bogus in 1200 x800 1200x 1200x800x2 0x800 1200x0 wide; do
+    set +e
+    err=$(SHOT_SIZE=$bogus run_script yardmaster dark "$tmp/shot-size.png" "$tmp/bin/footplate-hold" 2>&1)
+    code=$?
+    set -e
+    [ "$code" = 2 ] || fail "a size of $bogus exited $code: $err"
+    case "$err" in
+        *"SHOT_SIZE must be WIDTHxHEIGHT"*) ;;
+        *) fail "a size of $bogus said: $err" ;;
+    esac
+    [ ! -e "$tmp/shot-size.png" ] || fail "a size of $bogus wrote its file"
+    [ ! -e "$tmp/bin/footplate-hold.log" ] || fail "a size of $bogus launched the binary"
+    [ ! -e "$MOCK_LOG" ] || fail "a size of $bogus started something: $(cat "$MOCK_LOG")"
+done
+
 # What a launched window must have seen: its state, its look, in the
 # settings it is to open from, and none of the caller's world. A yard at an
 # address opens from the settings the script writes, with the look in the
@@ -294,6 +313,11 @@ grep -F -q -- "-l7 -o $tmp/shot-mac.png" "$MOCK_LOG" \
 grep -F -q 'sleep 1' "$MOCK_LOG" \
     || fail "a shot did not wait its second: $(cat "$MOCK_LOG")"
 expect_launch "a shot" "$tmp/bin/footplate-shoot.log" "yardmaster" "dark"
+grep -F -q 'SHOT_SIZE=' "$tmp/bin/footplate-shoot.log" \
+    || fail "a shot did not pass SHOT_SIZE on: $(cat "$tmp/bin/footplate-shoot.log")"
+if grep -F -q 'SHOT_SIZE=1' "$tmp/bin/footplate-shoot.log"; then
+    fail "a shot with no size named one: $(cat "$tmp/bin/footplate-shoot.log")"
+fi
 expect_display_held "a shot"
 [ "$(grep -n '^caffeinate ' "$MOCK_LOG" | cut -d: -f1)" = 1 ] \
     || fail "a shot did something before it held the display awake: $(cat "$MOCK_LOG")"

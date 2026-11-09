@@ -272,7 +272,9 @@ worktree, after the last commit:
 
     scripts/shot-mac.sh <state> <light|dark> "$shot"
 
-It opens the real window on this Mac against a fake yard serving the
+It opens the real window on this Mac, at its usual 960 by 640 or at
+`SHOT_SIZE=<width>x<height>` (the window's floor is 624 by 360), against a
+fake yard serving the
 state, isolated from the session it is run from (its own home and temp,
 the canned yardr), takes the picture with `screencapture` and quits it;
 the states are the same ones below. `hold` in place of the file leaves
@@ -386,7 +388,11 @@ yardmaster, naming an ask and two bead ids: the ask's chip with its
 preview under the mail), `decisions` (the decisions list with one
 open ask and the 156-item history open: day groups and a folded
 look-alike row), `decisions-filtered` (that history with `docs`
-in its filter), `keys` (the cheatsheet open over an open card),
+in its filter), `waiting` (the Decide list with three beads parked for
+jo's move under the open ask, one of them open on its card with the moves
+the yard offers), `waiting-end` (that card at its end, where the moves and
+the line for their note are), `keys` (the cheatsheet open over an open
+card),
 `about` (the About card open over the yardmaster's conversation,
 naming footplate's version and the yardr's, with its path), `about-missing`
 (that card with no yardr on the machine), `feedback` (the Feedback form open over

@@ -1241,6 +1241,22 @@ impl Footplate {
                         self.returning =
                             Some(((Selected::Decision(bead.clone()), px(1_000_000.)), false));
                     }
+                    // The waiting-end shot stands the parked bead's card at its
+                    // end, where its moves and the line for their note are:
+                    // as above, past its end, where the layout stops. The
+                    // move back is picked, with its note typed, as a number
+                    // key and the words would leave it. A debug build's
+                    // alone.
+                    #[cfg(debug_assertions)]
+                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("waiting-end")
+                        && let Some(Selected::Waiting(bead)) = model.selected().cloned()
+                    {
+                        model.choose_move(&bead, 2);
+                        self.line.update(cx, |line, cx| {
+                            line.set_text("the printed fares fail the check on page 2", cx)
+                        });
+                        self.returning = Some(((Selected::Waiting(bead), px(1_000_000.)), false));
+                    }
                     // The image shot opens the mail's image over the
                     // window, as a click on its thumbnail does: the yard
                     // holds the shot's bytes, and they show when they
@@ -1809,6 +1825,7 @@ impl Footplate {
             // The board, the lines, No line, the grants, the teammates,
             // the pairing and the bead read from the top, as a card does.
             Selected::Decision(_)
+            | Selected::Waiting(_)
             | Selected::Decided(_, _)
             | Selected::Grants
             | Selected::Teammates
@@ -1847,9 +1864,10 @@ impl Footplate {
         };
         let here = match &row {
             Selected::Conversation(_) | Selected::Yard => model.answered(),
-            Selected::Decision(bead) | Selected::Decided(bead, _) | Selected::Bead(bead) => {
-                model.has_bead(bead)
-            }
+            Selected::Decision(bead)
+            | Selected::Waiting(bead)
+            | Selected::Decided(bead, _)
+            | Selected::Bead(bead) => model.has_bead(bead),
             // The board's, a line's, No line's, the grants', the
             // teammates' and the pairing's rows came with the state:
             // they are whole at once.
@@ -1893,6 +1911,7 @@ impl Footplate {
             }
             // Where the card is shorter now, the layout stops at its end.
             Selected::Decision(_)
+            | Selected::Waiting(_)
             | Selected::Decided(_, _)
             | Selected::Grants
             | Selected::Teammates
@@ -1978,6 +1997,7 @@ impl Footplate {
             Some(Selected::Conversation(_) | Selected::Yard) => Some(&self.conversation),
             Some(
                 Selected::Decision(_)
+                | Selected::Waiting(_)
                 | Selected::Decided(_, _)
                 | Selected::Grants
                 | Selected::Teammates
@@ -2326,6 +2346,11 @@ impl Footplate {
             Selected::Decided(bead, ask) => {
                 self.ask_words.insert((bead.clone(), *ask), typed);
             }
+            // The note for a parked bead's move stays with the bead, under
+            // no ask: none has the number 0.
+            Selected::Waiting(bead) => {
+                self.ask_words.insert((bead.clone(), 0), typed);
+            }
             // Nothing is typed on the yard row, the grants, the
             // teammates, the pairing, the board, a line, No line or the
             // bead.
@@ -2353,6 +2378,10 @@ impl Footplate {
             Some(Selected::Decided(bead, ask)) => self
                 .ask_words
                 .remove(&(bead.clone(), *ask))
+                .unwrap_or_default(),
+            Some(Selected::Waiting(bead)) => self
+                .ask_words
+                .remove(&(bead.clone(), 0))
                 .unwrap_or_default(),
             _ => String::new(),
         }
@@ -2943,8 +2972,7 @@ impl Footplate {
                         move |this, parked, cx| match parked {
                             Ok(parked) => {
                                 this.fresh_in(session, Read::Waiting, stamp, cx, |m| {
-                                    m.waiting(parked);
-                                    Vec::new()
+                                    m.waiting(parked)
                                 });
                             }
                             Err(err) => {
@@ -2955,10 +2983,7 @@ impl Footplate {
                                     !model::waiting_too_old(&err),
                                     cx,
                                 ) {
-                                    this.change_in(session, cx, |m| {
-                                        m.waiting_failed(&err);
-                                        Vec::new()
-                                    });
+                                    this.change_in(session, cx, |m| m.waiting_failed(&err));
                                 }
                             }
                         },
@@ -3311,6 +3336,11 @@ impl Footplate {
         if self.drawer.take().is_some() {
             cx.notify();
             return;
+        }
+        // A parked bead's card leaves its line, then the pick, then the
+        // words.
+        if let Some(bead) = self.waiting_card() {
+            return self.leave_waiting(bead, window, cx);
         }
         let Some((bead, ask)) = self.card() else {
             return;
@@ -3775,6 +3805,7 @@ impl Footplate {
         match self.model.as_ref().and_then(|m| m.selected().cloned()) {
             Some(Selected::Conversation(_)) => KeysView::Conversation,
             Some(Selected::Decision(_) | Selected::Decided(_, _)) => KeysView::Card,
+            Some(Selected::Waiting(_)) => KeysView::Waiting,
             Some(Selected::Grants) => KeysView::Grants,
             Some(Selected::Teammates) => KeysView::Teammates,
             Some(Selected::Pairing) => KeysView::Pairing,
@@ -6534,6 +6565,9 @@ impl Footplate {
             Some(Selected::Decision(bead)) => self
                 .talk_decision(model, bead, palette, cx)
                 .into_any_element(),
+            Some(Selected::Waiting(bead)) => self
+                .talk_waiting(model, bead, palette, cx)
+                .into_any_element(),
             Some(Selected::Decided(bead, ask)) => self
                 .talk_decided(model, bead, *ask, palette, cx)
                 .into_any_element(),
@@ -6716,8 +6750,9 @@ fn shot_section() -> Option<Section> {
 /// for the plain, plain-select, page, run, teammates, weighty-mapping
 /// and secret shots (the refused shot's with its refusal), the board for the
 /// arrivals and departures shots, one arrival's bead for the arrival
-/// shot, yardr's line for the flow shot and the yard row for the
-/// delivery shot, else none. A debug build's alone.
+/// shot, yardr's line for the flow shot, the first parked bead's card for
+/// the waiting shots and the yard row for the delivery shot, else none. A
+/// debug build's alone.
 fn shot_selected() -> Option<Selected> {
     // The card shots open their cards, in decisions: a debug build's
     // alone, as the settings and the draft of Footplate::opened.
@@ -6729,6 +6764,9 @@ fn shot_selected() -> Option<Selected> {
         }
         Ok("decisions") | Ok("decisions-filtered") => {
             return Some(Selected::Decision("bead-a".into()));
+        }
+        Ok("waiting") | Ok("waiting-end") => {
+            return Some(Selected::Waiting("plantime-4f2a".into()));
         }
         Ok("run")
         | Ok("teammates")

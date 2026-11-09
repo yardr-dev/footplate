@@ -425,14 +425,18 @@ pub enum Target {
     Peer { name: String, peer: String },
 }
 
-/// What the left list has open: a bead with open asks, one dealt with,
-/// the grants, the teammates, the pairing, a conversation, what the yard
-/// reports, the arrivals board, a line's flows, the beads with no line,
-/// or one travelling bead whole.
+/// What the left list has open: a bead with open asks, a bead parked for
+/// the person's move, one dealt with, the grants, the teammates, the
+/// pairing, a conversation, what the yard reports, the arrivals board, a
+/// line's flows, the beads with no line, or one travelling bead whole.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Selected {
     /// A bead with open asks, by its id. A bead with several is one row.
     Decision(String),
+    /// A bead parked for the person's move, by its id: it has a row in the
+    /// Waiting section of decisions, under the open asks, and its card
+    /// offers the moves the yard serves.
+    Waiting(String),
     /// One dealt with, by bead and ask note seq.
     Decided(String, u64),
     /// The grants: every source × holder × call, for the operator's
@@ -466,13 +470,14 @@ pub enum Selected {
 
 impl Selected {
     /// The mode whose list holds the row: the conversations and the yard
-    /// row are chat's, the beads with open asks, the dealt with, the
-    /// grants, the teammates and the pairing are decisions', the
-    /// timetable's rows and a travelling bead timetable's.
+    /// row are chat's, the beads with open asks, the parked beads, the
+    /// dealt with, the grants, the teammates and the pairing are
+    /// decisions', the timetable's rows and a travelling bead timetable's.
     pub fn mode(&self) -> Mode {
         match self {
             Selected::Conversation(_) | Selected::Yard => Mode::Chat,
             Selected::Decision(_)
+            | Selected::Waiting(_)
             | Selected::Decided(_, _)
             | Selected::Grants
             | Selected::Teammates
@@ -575,6 +580,53 @@ pub struct DecisionRowAsk {
     pub head: String,
     /// `<asker> · <wants> · <waits>`.
     pub meta: String,
+}
+
+/// One bead's row in the Waiting section: the bead has no question, so its
+/// title leads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaitingRow {
+    /// The bead's id, whole; `short` is what the row ends with.
+    pub bead: String,
+    /// The bead's title.
+    pub head: String,
+    /// `<stage> · <group> · <waits>`, with the depot after the group where
+    /// the parked beads are of several depots.
+    pub sub: String,
+    /// The bead's id small, at the row's end: past its last `-`.
+    pub short: String,
+    pub selected: bool,
+}
+
+/// A parked bead's card above the bead whole: what names it, and the moves
+/// the yard offers it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaitingDetail {
+    pub bead: String,
+    pub title: String,
+    /// `<bead> · <stage> · <group> · depot <depot> · waiting <waits>`.
+    pub line: String,
+    /// The moves in the yard's order, each in the yard's words. None where
+    /// `flow_error` stands.
+    pub moves: Vec<WaitingMove>,
+    /// Why the bead's flow does not resolve, where it does not.
+    pub flow_error: String,
+    /// Why entering the stage put no ask for its people, where that ask
+    /// would stand; the moves stand all the same.
+    pub template_error: String,
+}
+
+/// One move of a parked bead's card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaitingMove {
+    /// Its place among the moves from 1: the key that picks it.
+    pub number: usize,
+    /// The move as the yard words it, shown as it is.
+    pub label: String,
+    /// Enter makes this one: the pick, else the only move offered.
+    pub chosen: bool,
+    /// The move waits for words in the line.
+    pub note_required: bool,
 }
 
 /// One topic's beads, in the order their oldest ask waits.
@@ -1473,12 +1525,14 @@ impl Model {
                     .or_else(|| order.into_iter().next()),
                 // A kept expansion makes dealt-with rows visible, but a
                 // saved row that disappeared falls back as it did before
-                // that list was kept: to an open decision, or none. The
-                // grants stand in the list, but never take a card's place:
-                // an answer must come back to its card, not jump aside.
+                // that list was kept: to an open decision, else the first
+                // bead parked for a move, or none. The grants stand in the
+                // list, but never take a card's place: an answer must come
+                // back to its card, not jump aside.
                 Mode::Decisions => order
                     .iter()
                     .find(|s| matches!(s, Selected::Decision(_)))
+                    .or_else(|| order.iter().find(|s| matches!(s, Selected::Waiting(_))))
                     .cloned(),
                 Mode::Timetable => Some(Selected::Arrivals),
             })
@@ -1826,8 +1880,9 @@ impl Model {
     }
 
     /// Every row of one mode's list from the top: the conversations and
-    /// the yard row in chat, the beads with open asks with the dealt with
-    /// when "Decided" stands open and the grants with the teammates last
+    /// the yard row in chat, the beads with open asks, then the beads
+    /// parked for the person's move, with the dealt with when "Decided"
+    /// stands open and the grants with the teammates last
     /// where the window is the operator's in decisions, with the pairing
     /// after them where the yard is near too, the arrivals row, the
     /// lines in the served order and No line last in timetable, while
@@ -1848,6 +1903,9 @@ impl Model {
                 for (bead, _) in self.decision_beads() {
                     out.push(Selected::Decision(bead));
                 }
+                // The parked beads stand under the asks and above the
+                // dealt with, as the list draws them.
+                out.extend(self.parked().map(|row| Selected::Waiting(row.bead.clone())));
                 if self.decided_expanded {
                     for ask in self.visible_decided() {
                         out.push(Selected::Decided(ask.bead.clone(), ask.ask));
@@ -2043,18 +2101,20 @@ impl Model {
     }
 
     /// The parked queue as read again. The yard has the call, so it is not
-    /// too old for it.
-    pub fn waiting(&mut self, parked: Vec<Parked>) {
+    /// too old for it. A bead the yard parks no more (another member moved
+    /// it, or a question of the person's stands on it now) leaves the list,
+    /// and when its card was open the row falls back as a gone one does.
+    pub fn waiting(&mut self, parked: Vec<Parked>) -> Vec<Effect> {
         self.parked = parked;
         self.waiting_too_old = false;
+        self.reselect()
     }
 
     /// Whether the yard has no Waiting call: one from before the parked
-    /// queue. Lines' number of what waits on the reader then goes by the
-    /// remarks of the beads it shows ([`Model::waiting_on_you`]), and the
-    /// bead details' stage-help line keys on it, which lands next: until
-    /// then only the tests ask.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// queue. Decisions then has no Waiting section, and no words about
+    /// one; Lines' number of what waits on the reader goes by the remarks
+    /// of the beads it shows ([`Model::waiting_on_you`]), and the bead
+    /// details' stage-help line keys on it, which lands next.
     pub fn waiting_too_old(&self) -> bool {
         self.waiting_too_old
     }
@@ -2063,16 +2123,194 @@ impl Model {
     /// has none to show: it is too old for it, and no notice is raised.
     /// Anything else is said as a notice, as ever, and the queue stays as
     /// it was.
-    pub fn waiting_failed(&mut self, err: &api::Error) {
+    pub fn waiting_failed(&mut self, err: &api::Error) -> Vec<Effect> {
         match waiting_too_old(err) {
             true => {
                 self.parked.clear();
                 self.waiting_too_old = true;
+                self.reselect()
             }
             false => {
                 self.notice = format!("the waiting beads could not be read: {err}");
+                Vec::new()
             }
         }
+    }
+
+    /// The Waiting section's rows, longest waiting first as the yard
+    /// listed them: a bead has no question, so its title leads, then the
+    /// stage it stands at, the group whose stage it is and how long it has
+    /// waited. The depot stands in the line where the parked beads are of
+    /// more than one, as it tells them apart.
+    pub fn waiting_rows<Tz: TimeZone>(&self, now: &DateTime<Tz>) -> Vec<WaitingRow>
+    where
+        Tz::Offset: std::fmt::Display,
+    {
+        let depots: HashSet<&str> = self
+            .parked()
+            .map(|row| row.depot.as_str())
+            .filter(|depot| !depot.is_empty())
+            .collect();
+        self.parked()
+            .map(|row| {
+                let depot = (depots.len() > 1).then_some(row.depot.as_str());
+                let sub = [
+                    Some(row.stage.as_str()),
+                    Some(row.group.as_str()),
+                    depot,
+                    Some(waits(&row.since, now).as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+                WaitingRow {
+                    bead: row.bead.clone(),
+                    head: plain(&row.title),
+                    sub,
+                    short: short_bead(&row.bead),
+                    selected: self.selected.as_ref() == Some(&Selected::Waiting(row.bead.clone())),
+                }
+            })
+            .collect()
+    }
+
+    /// A parked bead as its card shows it above the bead whole: the title,
+    /// the one line that names it, and the moves the yard offers, each in
+    /// its words. None where the yard parks no such bead for the person.
+    pub fn waiting_detail<Tz: TimeZone>(
+        &self,
+        bead: &str,
+        now: &DateTime<Tz>,
+    ) -> Option<WaitingDetail>
+    where
+        Tz::Offset: std::fmt::Display,
+    {
+        let row = self.parked().find(|row| row.bead == bead)?;
+        let picked = self.picked_move(bead);
+        let waited = waits(&row.since, now);
+        let depot = (!row.depot.is_empty()).then(|| format!("depot {}", row.depot));
+        let line = [
+            Some(row.bead.clone()),
+            Some(row.stage.clone()),
+            Some(row.group.clone()),
+            depot,
+            (!waited.is_empty()).then(|| format!("waiting {waited}")),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+        Some(WaitingDetail {
+            bead: row.bead.clone(),
+            title: plain(&row.title),
+            line,
+            moves: row
+                .actions
+                .iter()
+                .enumerate()
+                .map(|(at, how)| WaitingMove {
+                    number: at + 1,
+                    label: plain(&how.label),
+                    chosen: picked == Some(at + 1),
+                    note_required: how.note_required,
+                })
+                .collect(),
+            flow_error: plain(&row.flow_error),
+            template_error: plain(&row.template_error),
+        })
+    }
+
+    /// The move Enter makes for the parked bead, by its place among the
+    /// moves its row offers, from 1: the pick of a number key or the
+    /// arrows, else the one move a row offers. Where several are offered
+    /// and none is picked, Enter makes none: a move sends a bead on, and
+    /// a habit of Enter must not choose which.
+    pub fn picked_move(&self, bead: &str) -> Option<usize> {
+        let row = self.parked().find(|row| row.bead == bead)?;
+        match self.chosen.get(&(bead.to_string(), 0)) {
+            Some(n) if (1..=row.actions.len() as u64).contains(n) => Some(*n as usize),
+            _ => (row.actions.len() == 1).then_some(1),
+        }
+    }
+
+    /// Picks a move of the parked bead with a number key. A number past
+    /// the last move changes nothing.
+    pub fn choose_move(&mut self, bead: &str, number: u64) {
+        let last = match self.parked().find(|row| row.bead == bead) {
+            Some(row) => row.actions.len() as u64,
+            None => return,
+        };
+        if (1..=last).contains(&number) {
+            self.chosen.insert((bead.to_string(), 0), number);
+        }
+    }
+
+    /// Moves the pick with the arrows, around the ends: down from none
+    /// picks the first, up from none the last.
+    pub fn step_move(&mut self, bead: &str, by: isize) {
+        let last = match self.parked().find(|row| row.bead == bead) {
+            Some(row) => row.actions.len() as isize,
+            None => return,
+        };
+        if last == 0 {
+            return;
+        }
+        let at = self.picked_move(bead).unwrap_or(0) as isize;
+        let next = if at == 0 {
+            if by >= 0 { 1 } else { last }
+        } else {
+            (at - 1 + by).rem_euclid(last) + 1
+        };
+        self.chosen.insert((bead.to_string(), 0), next as u64);
+    }
+
+    /// Leaves the pick of a parked bead's move. Whether there was one: a
+    /// lone move stands picked all the same.
+    pub fn clear_move(&mut self, bead: &str) -> bool {
+        self.chosen.remove(&(bead.to_string(), 0)).is_some()
+    }
+
+    /// The move Enter makes for the open parked bead, with the revision of
+    /// the row it is made from. None where nothing is open, no move is
+    /// picked, or the row offers none.
+    pub fn move_to_make(&self, bead: &str) -> Option<(api::Move, String)> {
+        let row = self.parked().find(|row| row.bead == bead)?;
+        let how = row.actions.get(self.picked_move(bead)? - 1)?;
+        Some((how.clone(), row.revision.clone()))
+    }
+
+    /// A move is made: the bead leaves the parked beads at once, as an
+    /// answered ask leaves the decisions, and when its card was open the
+    /// next waiting row opens in its place. The parked beads are read again
+    /// for what the yard says; the stream's `advanced` event reads the
+    /// board and the flows.
+    pub fn moved(&mut self, bead: &str) -> Vec<Effect> {
+        let before: Vec<String> = self.parked().map(|row| row.bead.clone()).collect();
+        let Some(at) = before.iter().position(|b| b == bead) else {
+            return Vec::new();
+        };
+        self.parked.retain(|row| row.bead != bead);
+        self.chosen.remove(&(bead.to_string(), 0));
+        let open = self.selected == Some(Selected::Waiting(bead.to_string()));
+        let mut effects = Vec::new();
+        if open {
+            // The row that took its place, else the last, else whatever
+            // the list falls back to.
+            let next = before
+                .get(at + 1)
+                .or_else(|| at.checked_sub(1).and_then(|i| before.get(i)));
+            self.selected = next.map(|next| Selected::Waiting(next.clone()));
+            effects.extend(self.reselect());
+            if self.selected.is_some() {
+                self.opened();
+                effects.extend(self.open());
+            }
+        }
+        effects.push(Effect::Waiting);
+        effects
     }
 
     /// The open asks above the conversations, grouped by topic, each group
@@ -4611,7 +4849,9 @@ impl Model {
             {
                 Some(bead)
             }
-            Some(Selected::Bead(bead)) => Some(bead),
+            // A parked bead's card shows the notes whole, as an arrival's
+            // details do.
+            Some(Selected::Bead(bead) | Selected::Waiting(bead)) => Some(bead),
             _ => None,
         };
         bead.and_then(|bead| self.beads.get(bead))
@@ -4847,6 +5087,7 @@ impl Model {
                 effects
             }
             Some(Selected::Decision(bead))
+            | Some(Selected::Waiting(bead))
             | Some(Selected::Decided(bead, _))
             | Some(Selected::Bead(bead)) => {
                 if self.beads.contains_key(&bead) {
@@ -5758,12 +5999,19 @@ impl Model {
         // The open travelling bead is none of the queue's, and stays
         // what the details show. So does the drawer's, a closed bead
         // among them.
-        if let Some(Selected::Bead(bead)) = self.selected.as_ref() {
+        // The open parked bead stays so too: its card shows what the Bead
+        // call returned, and the pick of its moves.
+        if let Some(Selected::Bead(bead) | Selected::Waiting(bead)) = self.selected.as_ref() {
             keep.insert(bead.clone());
         }
         keep.extend(self.drawn.iter().cloned());
         self.beads.retain(|bead, _| keep.contains(bead));
-        self.chosen.retain(|(bead, _), _| keep.contains(bead));
+        // A parked bead's pick stays with the bead while it is parked, open
+        // or not, as its note does.
+        let parked: HashSet<&str> = self.parked.iter().map(|row| row.bead.as_str()).collect();
+        self.chosen.retain(|(bead, ask), _| {
+            keep.contains(bead) || (*ask == 0 && parked.contains(bead.as_str()))
+        });
         self.expanded.retain(|(bead, _)| keep.contains(bead));
         self.current.retain(|bead, _| keep.contains(bead));
         let mut effects = self.reselect();
@@ -5775,8 +6023,12 @@ impl Model {
         if effects.is_empty() {
             // The open bead stayed: it is newly in the queue, or newly without
             // a read bead. It is read when it is not yet.
-            if let Some(Selected::Decision(_) | Selected::Decided(_, _) | Selected::Bead(_)) =
-                self.selected.as_ref()
+            if let Some(
+                Selected::Decision(_)
+                | Selected::Waiting(_)
+                | Selected::Decided(_, _)
+                | Selected::Bead(_),
+            ) = self.selected.as_ref()
             {
                 effects.extend(self.open());
             }
@@ -5789,9 +6041,12 @@ impl Model {
             return effects;
         }
         let open_bead = match selected {
-            Some(Selected::Decision(bead) | Selected::Decided(bead, _) | Selected::Bead(bead)) => {
-                Some(bead)
-            }
+            Some(
+                Selected::Decision(bead)
+                | Selected::Waiting(bead)
+                | Selected::Decided(bead, _)
+                | Selected::Bead(bead),
+            ) => Some(bead),
             _ => None,
         };
         let mut read: HashSet<&str> = HashSet::new();
@@ -5850,7 +6105,17 @@ impl Model {
                 .map(Selected::Conversation)
                 .filter(|s| order.contains(s))
                 .or_else(|| order.into_iter().next()),
-            Mode::Decisions | Mode::Timetable => self.row_in(self.mode, None),
+            // A parked bead that a question of the person's stands on now is
+            // where its question is, not the first of the others.
+            Mode::Decisions => match &self.selected {
+                Some(Selected::Waiting(bead))
+                    if order.contains(&Selected::Decision(bead.clone())) =>
+                {
+                    Some(Selected::Decision(bead.clone()))
+                }
+                _ => self.row_in(self.mode, None),
+            },
+            Mode::Timetable => self.row_in(self.mode, None),
         };
         self.opened();
         self.open()
@@ -7161,6 +7426,28 @@ pub fn not_approved(err: &api::Error) -> String {
         } => "the yard did not answer; read the card again".to_string(),
         err if err.may_have_run() => "the yard did not answer; read the card again".to_string(),
         _ => format!("not approved: {err}"),
+    }
+}
+
+/// Why a move was not made, for the parked bead's card. A call that ended
+/// without an answer may have moved the bead all the same, so it is never
+/// said to have moved or not, unless the connect gave up, which sent
+/// nothing: the parked beads and the bead are read again, and the card
+/// says which. A refusal is the yard's words, whole.
+pub fn not_moved(err: &api::Error) -> String {
+    match err {
+        api::Error::Slow {
+            idempotent: false,
+            sent: false,
+        } => "the yard did not answer; nothing was moved. Move it again.".to_string(),
+        api::Error::Down(_)
+        | api::Error::Protocol(_)
+        | api::Error::Slow {
+            idempotent: false,
+            sent: true,
+        } => "the yard did not answer; read the card again".to_string(),
+        err if err.may_have_run() => "the yard did not answer; read the card again".to_string(),
+        _ => format!("not moved: {err}"),
     }
 }
 
@@ -12326,6 +12613,408 @@ mod tests {
         )];
         let (m, _) = m.resumed(again, Mode::Decisions);
         assert_eq!(beads(&m), ["yd-after"]);
+    }
+
+    /// A parked row with two moves: the done outcome the flow names, and a
+    /// move back that wants a note.
+    fn parked_with_moves(bead: &str, title: &str, since: &str) -> Parked {
+        Parked {
+            actions: vec![
+                api::Move {
+                    kind: "done".into(),
+                    label: "done: move to build".into(),
+                    outcome: "done".into(),
+                    to: "build".into(),
+                    ..api::Move::default()
+                },
+                api::Move {
+                    kind: "done".into(),
+                    label: "changes: send back to shape (note required)".into(),
+                    outcome: "changes".into(),
+                    to: "shape".into(),
+                    note_required: true,
+                    ..api::Move::default()
+                },
+            ],
+            ..parked(bead, title, since)
+        }
+    }
+
+    /// The parked beads stand under the asks and above the dealt with, as
+    /// the list draws them, and the arrows walk them in that order. A row
+    /// is the bead's title, then its stage, its group and how long it
+    /// waits; the depot joins the line where the parked beads are of
+    /// several. Opening a row reads the bead whole.
+    #[test]
+    fn the_parked_beads_are_rows_under_the_asks_and_above_the_dealt_with() {
+        let now = DateTime::parse_from_rfc3339("2026-11-09T09:00:00Z").unwrap();
+        let mut state = yard(&[]);
+        state.parked = vec![
+            parked(
+                "yd-old",
+                "Release the autumn timetable",
+                "2026-11-06T09:00:00Z",
+            ),
+            parked("yd-new", "Take the new fares live", "2026-11-08T09:00:00Z"),
+        ];
+        state.asks.open = vec![open_ask(
+            "yd-ask",
+            "Asked",
+            "",
+            3,
+            "Which first?",
+            "yardmaster",
+            "2026-11-04T09:00:00Z",
+        )];
+        state.asks.decided = vec![decided_ask(
+            "yd-done", 7, "Done?", "answered", "Yes", "", "",
+        )];
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        assert!(!m.waiting_too_old());
+        let rows = m.waiting_rows(&now);
+        assert_eq!(
+            rows.iter()
+                .map(|r| (
+                    r.bead.as_str(),
+                    r.head.as_str(),
+                    r.sub.as_str(),
+                    r.short.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "yd-old",
+                    "Release the autumn timetable",
+                    "ready · people · 3d",
+                    "old"
+                ),
+                (
+                    "yd-new",
+                    "Take the new fares live",
+                    "ready · people · 1d",
+                    "new"
+                )
+            ]
+        );
+        assert!(rows.iter().all(|r| !r.selected));
+        // The asks first, the parked beads after them, the dealt with last
+        // when it stands open.
+        assert_eq!(m.selected(), Some(&Selected::Decision("yd-ask".into())));
+        m.toggle_decided();
+        let walk = |m: &mut Model| {
+            let mut seen = Vec::new();
+            for _ in 0..4 {
+                m.step_in(Mode::Decisions, 1);
+                seen.push(m.selected().cloned().unwrap());
+            }
+            seen
+        };
+        assert_eq!(
+            walk(&mut m),
+            [
+                Selected::Waiting("yd-old".into()),
+                Selected::Waiting("yd-new".into()),
+                Selected::Decided("yd-done".into(), 7),
+                Selected::Decision("yd-ask".into()),
+            ]
+        );
+        // Opening a row reads the bead whole, once.
+        m.select(Selected::Decision("yd-ask".into()));
+        assert_eq!(
+            m.select(Selected::Waiting("yd-old".into())),
+            [Effect::Bead {
+                bead: "yd-old".into()
+            }]
+        );
+        assert!(m.waiting_rows(&now)[0].selected);
+        m.bead_loaded(Bead {
+            id: "yd-old".into(),
+            ..Bead::default()
+        });
+        assert_eq!(m.select(Selected::Waiting("yd-old".into())), []);
+        // The queue read again keeps what the open card shows of its bead.
+        let _ = m.asks(Asks {
+            open: vec![open_ask(
+                "yd-ask",
+                "Asked",
+                "",
+                3,
+                "Which first?",
+                "yardmaster",
+                "2026-11-04T09:00:00Z",
+            )],
+            decided: Vec::new(),
+        });
+        assert!(m.has_bead("yd-old"));
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-old".into())));
+
+        // A depot tells the rows apart where the parked beads are of
+        // several.
+        let mut other = parked("yd-fares", "Fares", "2026-11-08T09:00:00Z");
+        other.depot = "plantime".into();
+        m.waiting(vec![
+            parked("yd-old", "Release", "2026-11-06T09:00:00Z"),
+            other,
+        ]);
+        assert_eq!(
+            m.waiting_rows(&now)
+                .iter()
+                .map(|r| r.sub.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "ready · people · yardr · 3d",
+                "ready · people · plantime · 1d"
+            ]
+        );
+        // A yard from before the call has no section.
+        let (m, _) = Model::new(yard_without_waiting(), Mode::Decisions, None);
+        assert!(m.waiting_too_old());
+        assert_eq!(m.waiting_rows(&now), []);
+    }
+
+    /// A parked bead's card: the line that names it, the moves in the
+    /// yard's words and order, and the pick Enter makes. Several moves
+    /// stand unpicked until a number or the arrows pick one; a lone move
+    /// stands picked. A flow that does not resolve offers none.
+    #[test]
+    fn a_parked_bead_s_card_names_it_and_picks_among_its_moves() {
+        let now = DateTime::parse_from_rfc3339("2026-11-09T09:00:00Z").unwrap();
+        let mut state = yard(&[]);
+        state.parked = vec![
+            parked_with_moves("yd-two", "Two moves", "2026-11-06T09:00:00Z"),
+            parked("yd-one", "One move", "2026-11-08T09:00:00Z"),
+            Parked {
+                actions: Vec::new(),
+                flow_error: "flow default: stage odd is not in it".into(),
+                ..parked("yd-broken", "No flow", "2026-11-08T10:00:00Z")
+            },
+            Parked {
+                template_error: "the stage's ask template does not parse".into(),
+                ..parked("yd-template", "Template", "2026-11-08T11:00:00Z")
+            },
+        ];
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        let two = m.waiting_detail("yd-two", &now).unwrap();
+        assert_eq!(two.title, "Two moves");
+        assert_eq!(
+            two.line,
+            "yd-two · ready · people · depot yardr · waiting 3d"
+        );
+        assert_eq!(
+            two.moves
+                .iter()
+                .map(|h| (h.number, h.label.as_str(), h.chosen, h.note_required))
+                .collect::<Vec<_>>(),
+            [
+                (1, "done: move to build", false, false),
+                (
+                    2,
+                    "changes: send back to shape (note required)",
+                    false,
+                    true
+                )
+            ]
+        );
+        // None is picked of several, so Enter makes none.
+        assert_eq!(m.picked_move("yd-two"), None);
+        assert_eq!(m.move_to_make("yd-two"), None);
+        // A number past the last changes nothing; one within it picks.
+        m.choose_move("yd-two", 3);
+        m.choose_move("yd-two", 0);
+        assert_eq!(m.picked_move("yd-two"), None);
+        m.choose_move("yd-two", 2);
+        assert_eq!(m.picked_move("yd-two"), Some(2));
+        let (how, revision) = m.move_to_make("yd-two").unwrap();
+        assert_eq!(
+            (how.outcome.as_str(), how.to.as_str()),
+            ("changes", "shape")
+        );
+        assert_eq!(revision, "yd-two-rev");
+        assert!(m.waiting_detail("yd-two", &now).unwrap().moves[1].chosen);
+        // The arrows go around the ends: down from none picks the first, up
+        // from none the last.
+        assert!(m.clear_move("yd-two"));
+        assert!(!m.clear_move("yd-two"));
+        m.step_move("yd-two", 1);
+        assert_eq!(m.picked_move("yd-two"), Some(1));
+        m.step_move("yd-two", 1);
+        m.step_move("yd-two", 1);
+        assert_eq!(m.picked_move("yd-two"), Some(1));
+        m.step_move("yd-two", -1);
+        assert_eq!(m.picked_move("yd-two"), Some(2));
+        m.clear_move("yd-two");
+        m.step_move("yd-two", -1);
+        assert_eq!(m.picked_move("yd-two"), Some(2));
+        // A lone move stands picked, with nothing chosen; a bead the yard
+        // does not park has no pick.
+        assert_eq!(m.picked_move("yd-one"), Some(1));
+        assert!(m.waiting_detail("yd-one", &now).unwrap().moves[0].chosen);
+        assert_eq!(m.picked_move("yd-gone"), None);
+        assert_eq!(m.waiting_detail("yd-gone", &now), None);
+        // A flow that does not resolve offers no move, with the yard's
+        // words; a template that broke offers the moves all the same.
+        let broken = m.waiting_detail("yd-broken", &now).unwrap();
+        assert_eq!(broken.flow_error, "flow default: stage odd is not in it");
+        assert_eq!(broken.moves, []);
+        assert_eq!(m.picked_move("yd-broken"), None);
+        let template = m.waiting_detail("yd-template", &now).unwrap();
+        assert_eq!(
+            template.template_error,
+            "the stage's ask template does not parse"
+        );
+        assert_eq!(template.moves.len(), 1);
+    }
+
+    /// A move made takes the bead out of the parked beads at once, with its
+    /// pick, and the row that took its place opens: the next, else the one
+    /// before, else the list's fall-back. The parked beads are read again.
+    /// A queue read again that no longer parks the open bead (another
+    /// member moved it) falls back the same way.
+    #[test]
+    fn a_move_made_leaves_the_section_and_the_next_waiting_row_opens() {
+        let rows = |m: &Model| m.parked().map(|r| r.bead.clone()).collect::<Vec<_>>();
+        let mut state = yard(&[]);
+        state.parked = vec![
+            parked("yd-a", "A", "2026-11-01T09:00:00Z"),
+            parked("yd-b", "B", "2026-11-02T09:00:00Z"),
+            parked("yd-c", "C", "2026-11-03T09:00:00Z"),
+        ];
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        // With no ask the first parked bead is what opens.
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-a".into())));
+        m.select(Selected::Waiting("yd-b".into()));
+        m.choose_move("yd-b", 1);
+        let effects = m.moved("yd-b");
+        assert_eq!(rows(&m), ["yd-a", "yd-c"]);
+        assert_eq!(m.parked_count(), 2);
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-c".into())));
+        assert!(effects.contains(&Effect::Waiting));
+        assert!(effects.contains(&Effect::Bead {
+            bead: "yd-c".into()
+        }));
+        // Its pick went with it: the bead, back in the queue, is unpicked.
+        m.waiting(vec![
+            parked_with_moves("yd-b", "B", "2026-11-02T09:00:00Z"),
+            parked("yd-c", "C", "2026-11-03T09:00:00Z"),
+        ]);
+        assert_eq!(m.picked_move("yd-b"), None);
+        // A pick stays with the bead while it is parked, though another
+        // card is open and the queue of asks is read again.
+        m.choose_move("yd-b", 1);
+        m.select(Selected::Waiting("yd-c".into()));
+        let _ = m.asks(Asks::default());
+        assert_eq!(m.picked_move("yd-b"), Some(1));
+        // The last row moved, the one before it opens.
+        m.select(Selected::Waiting("yd-c".into()));
+        m.moved("yd-c");
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-b".into())));
+        // A bead moved that was not open leaves the open row where it is.
+        m.waiting(vec![
+            parked("yd-a", "A", "2026-11-01T09:00:00Z"),
+            parked("yd-b", "B", "2026-11-02T09:00:00Z"),
+        ]);
+        m.moved("yd-a");
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-b".into())));
+        // A bead the yard does not park is no move to make.
+        assert_eq!(m.moved("yd-gone"), []);
+        // The last of them moved, the open row is none: nothing to decide.
+        m.moved("yd-b");
+        assert_eq!(m.selected(), None);
+        assert_eq!(m.parked_count(), 0);
+
+        // A queue read again that no longer parks the open bead: another
+        // member moved it. The first row of the section opens, and an open
+        // ask comes before it.
+        m.waiting(vec![
+            parked("yd-a", "A", "2026-11-01T09:00:00Z"),
+            parked("yd-b", "B", "2026-11-02T09:00:00Z"),
+        ]);
+        m.select(Selected::Waiting("yd-b".into()));
+        let effects = m.waiting(vec![parked("yd-a", "A", "2026-11-01T09:00:00Z")]);
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-a".into())));
+        assert!(effects.contains(&Effect::Bead {
+            bead: "yd-a".into()
+        }));
+        // A question put on the open bead takes its card from the section:
+        // the bead stands among the decisions alone, and opens there, not
+        // on the first of the others.
+        let _ = m.asks(Asks {
+            open: vec![
+                open_ask(
+                    "yd-first",
+                    "First",
+                    "",
+                    8,
+                    "Which first?",
+                    "yardmaster",
+                    "2026-11-04T09:00:00Z",
+                ),
+                open_ask(
+                    "yd-a",
+                    "A",
+                    "",
+                    9,
+                    "Which?",
+                    "yardmaster",
+                    "2026-11-05T09:00:00Z",
+                ),
+            ],
+            decided: Vec::new(),
+        });
+        assert_eq!(m.selected(), Some(&Selected::Decision("yd-a".into())));
+        assert_eq!(m.parked_count(), 0);
+        // A yard that turns out to have no such call: no section, and no
+        // row open in it.
+        let mut state = yard(&[]);
+        state.parked = vec![parked("yd-a", "A", "2026-11-01T09:00:00Z")];
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-a".into())));
+        m.waiting_failed(&api::Error::Refused {
+            code: "error".into(),
+            message: "no such method Waiting".into(),
+        });
+        assert_eq!(m.selected(), None);
+        assert!(m.waiting_too_old());
+    }
+
+    /// Why a move was not made, for the card: a call that ended without an
+    /// answer may have moved the bead, so it is never said to have, unless
+    /// the connect gave up and sent nothing; a refusal is the yard's words.
+    #[test]
+    fn a_move_that_was_not_made_is_never_said_to_have_moved_the_bead() {
+        let stale = "bead yd-fares is at revision 01KJB, not 01KJ9; read it again";
+        assert_eq!(
+            not_moved(&api::Error::Refused {
+                code: "conflict".into(),
+                message: stale.into()
+            }),
+            format!("not moved: {stale}")
+        );
+        assert_eq!(
+            not_moved(&api::Error::Slow {
+                idempotent: false,
+                sent: false
+            }),
+            "the yard did not answer; nothing was moved. Move it again."
+        );
+        for err in [
+            api::Error::Down(std::io::Error::other("the yard went away")),
+            api::Error::Protocol("MoveBead: not a result".into()),
+            api::Error::Slow {
+                idempotent: false,
+                sent: true,
+            },
+            api::Error::Refused {
+                code: "no_answer".into(),
+                message: "no answer".into(),
+            },
+        ] {
+            assert_eq!(
+                not_moved(&err),
+                "the yard did not answer; read the card again",
+                "{err}"
+            );
+        }
     }
 
     /// A yard from before the parked queue has no Waiting call: its answer

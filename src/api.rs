@@ -1458,6 +1458,15 @@ pub struct Move {
     pub terminal: bool,
 }
 
+impl Move {
+    /// Whether this build can make the move: a kind it knows, `done` or
+    /// `advance`. [`Client::move_bead`] refuses any other before a call, so
+    /// the card says so instead of asking.
+    pub fn makeable(&self) -> bool {
+        matches!(self.kind.as_str(), "done" | "advance")
+    }
+}
+
 /// One bead parked for the person, as `Waiting` lists it: open in a stage a
 /// manual group works, the person one of its members, and nothing asked of
 /// them that would move it. A bead that carries an open ask to the person
@@ -9415,6 +9424,8 @@ mod tests {
 
         // A move of a kind this build does not know is not made: the yard
         // takes exactly one of an outcome and a stage, and none is known.
+        assert!(done.makeable() && advance.makeable());
+        assert!(!offered("close", "", "closed").makeable());
         let before = yard.asked("MoveBead").len();
         let err = client
             .move_bead(

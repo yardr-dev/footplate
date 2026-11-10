@@ -33,6 +33,11 @@ const YOU_DECIDE: &str = "You decide";
 /// Where asks with no topic stand.
 pub const EVERYTHING_ELSE: &str = "Everything else";
 
+/// How many dealt with asks the opened history draws at first, and as many
+/// more each time its more row is pressed. Counted over the asks the chip
+/// and the filter leave, so what they search is still the whole history.
+pub const DECIDED_PAGE: usize = 50;
+
 /// The row below the conversations: what the yard reports.
 pub const YARD: &str = "yard";
 
@@ -1334,6 +1339,13 @@ pub struct Model {
     decided: Vec<DecidedAsk>,
     /// Whether the folded "Decided" stands open.
     decided_expanded: bool,
+    /// How many pages past the first the opened history draws: each press
+    /// of its more row adds one. Closing or opening "Decided" and choosing
+    /// another chip or filter start at the first page again.
+    decided_more: usize,
+    /// Whether the Waiting section's rows are folded away: it stands open
+    /// at first, and folded keeps its head with its count.
+    waiting_folded: bool,
     /// The history's chip: `None` shows every outcome.
     decided_chip: Option<Outcome>,
     /// The history's filter, as typed: matches question, asker and outcome.
@@ -1513,7 +1525,8 @@ impl Model {
         let order = self.order_in(mode);
         selected
             .filter(|s| {
-                (mode == Mode::Timetable && matches!(s, Selected::Bead(_))) || order.contains(s)
+                (mode == Mode::Timetable && matches!(s, Selected::Bead(_)))
+                    || self.stands(mode, &order, s)
             })
             .or_else(|| match mode {
                 Mode::Chat => order
@@ -1597,6 +1610,9 @@ impl Model {
         if m.bead_from.is_none() {
             m.bead_from = self.bead_from.clone();
         }
+        // A folded Waiting stays folded: a yard found again must not spring
+        // open the list the person tidied.
+        m.waiting_folded = self.waiting_folded;
         // A read made before the state was read again is older than it.
         m.reads = self.reads.clone();
         m.reads.restarted();
@@ -1881,8 +1897,9 @@ impl Model {
 
     /// Every row of one mode's list from the top: the conversations and
     /// the yard row in chat, the beads with open asks, then the beads
-    /// parked for the person's move, with the dealt with when "Decided"
-    /// stands open and the grants with the teammates last
+    /// parked for the person's move unless their section is folded, with
+    /// the dealt with the history draws when "Decided" stands open and the
+    /// grants with the teammates last
     /// where the window is the operator's in decisions, with the pairing
     /// after them where the yard is near too, the arrivals row, the
     /// lines in the served order and No line last in timetable, while
@@ -1904,10 +1921,13 @@ impl Model {
                     out.push(Selected::Decision(bead));
                 }
                 // The parked beads stand under the asks and above the
-                // dealt with, as the list draws them.
-                out.extend(self.parked().map(|row| Selected::Waiting(row.bead.clone())));
+                // dealt with, as the list draws them: not while their
+                // section is folded, which draws none.
+                if !self.waiting_folded {
+                    out.extend(self.parked().map(|row| Selected::Waiting(row.bead.clone())));
+                }
                 if self.decided_expanded {
-                    for ask in self.visible_decided() {
+                    for ask in self.drawn_decided() {
                         out.push(Selected::Decided(ask.bead.clone(), ask.ask));
                     }
                 }
@@ -2406,8 +2426,29 @@ impl Model {
         self.decided_expanded
     }
 
+    /// Opens the folded "Decided", or folds it shut. Either way the history
+    /// starts at its first page when it is opened again.
     pub fn toggle_decided(&mut self) {
         self.decided_expanded = !self.decided_expanded;
+        self.decided_more = 0;
+    }
+
+    /// Whether the Waiting section's rows are folded away.
+    pub fn waiting_folded(&self) -> bool {
+        self.waiting_folded
+    }
+
+    /// Folds the Waiting section's rows away, or stands them again. The
+    /// open row stays open, as it does when "Decided" is folded: only the
+    /// list's rows go, and the keys step past them.
+    pub fn toggle_waiting(&mut self) {
+        self.waiting_folded = !self.waiting_folded;
+    }
+
+    /// The Waiting section stands folded too where it did before the yard
+    /// was left for another.
+    pub fn fold_waiting(&mut self, folded: bool) {
+        self.waiting_folded |= folded;
     }
 
     /// Whether the timetable's quiet lines stand unfolded.
@@ -3275,17 +3316,23 @@ impl Model {
         self.decided_chip
     }
 
+    /// Chooses the chip. Another one starts the history at its first page.
     pub fn set_decided_chip(&mut self, chip: Option<Outcome>) {
+        if self.decided_chip != chip {
+            self.decided_more = 0;
+        }
         self.decided_chip = chip;
     }
 
     /// Types the history's filter. Whether it changed: the window draws
-    /// again only then.
+    /// again only then. Another filter starts the history at its first
+    /// page.
     pub fn set_decided_filter(&mut self, filter: &str) -> bool {
         if self.decided_filter == filter {
             return false;
         }
         self.decided_filter = filter.to_string();
+        self.decided_more = 0;
         true
     }
 
@@ -3327,9 +3374,9 @@ impl Model {
         counts
     }
 
-    /// The dealt with asks matching the chip, in the order the rows step
-    /// through them. The text counts too; folds do not: every member
-    /// stays in reach of the keys, and opening one opens its fold.
+    /// The dealt with asks matching the chip and the filter: all the
+    /// history that is found, whatever of it is drawn, newest first as the
+    /// yard serves it.
     fn visible_decided(&self) -> Vec<&DecidedAsk> {
         self.decided
             .iter()
@@ -3337,10 +3384,59 @@ impl Model {
             .collect()
     }
 
+    /// How many of the asks found the history draws: its first page, and a
+    /// page more for each press of its more row.
+    fn decided_limit(&self) -> usize {
+        DECIDED_PAGE * (1 + self.decided_more)
+    }
+
+    /// The dealt with asks the history draws, in the order the rows step
+    /// through them: the newest of those found, a page of them at a time.
+    /// The text counts too, since it narrows what is found before the page
+    /// is cut; folds do not: every member stays in reach of the keys, and
+    /// opening one opens its fold.
+    fn drawn_decided(&self) -> Vec<&DecidedAsk> {
+        let mut found = self.visible_decided();
+        found.truncate(self.decided_limit());
+        found
+    }
+
+    /// How many of the asks found the history does not draw yet: what its
+    /// more row says is left.
+    pub fn decided_left(&self) -> usize {
+        self.visible_decided()
+            .len()
+            .saturating_sub(self.decided_limit())
+    }
+
+    /// The history draws a page more: the more row's press.
+    pub fn show_more_decided(&mut self) {
+        if self.decided_left() > 0 {
+            self.decided_more += 1;
+        }
+    }
+
+    /// Stands the history open on `ask` of `bead`: unfolded, and drawn as
+    /// far down as the ask stands, where the chip and the filter find it.
+    /// What a mail's chip for an old ask does before it opens the row: an
+    /// ask past the first page has no row until its page is drawn.
+    pub fn show_decided(&mut self, bead: &str, ask: u64) {
+        if !self.decided_expanded {
+            self.toggle_decided();
+        }
+        let at = self
+            .visible_decided()
+            .iter()
+            .position(|found| found.bead == bead && found.ask == ask);
+        if let Some(at) = at {
+            self.decided_more = self.decided_more.max(at / DECIDED_PAGE);
+        }
+    }
+
     /// The dealt with asks as the history shows them: matching the chip
-    /// and the filter, grouped by the day they were asked — the yard
-    /// serves no decided-at time — newest day first, look-alikes folded.
-    /// A fold with the open ask in it stands open.
+    /// and the filter, the newest page of them, grouped by the day they
+    /// were asked — the yard serves no decided-at time — newest day first,
+    /// look-alikes folded. A fold with the open ask in it stands open.
     pub fn decided_groups<Tz: TimeZone>(&self, now: &DateTime<Tz>) -> Vec<DecidedGroup>
     where
         Tz::Offset: std::fmt::Display,
@@ -3350,7 +3446,7 @@ impl Model {
         // First-appearance order is the served one, newest first; the sort
         // below keeps it within each day.
         let mut days: Vec<(Option<NaiveDate>, Vec<&DecidedAsk>)> = Vec::new();
-        for ask in self.visible_decided() {
+        for ask in self.drawn_decided() {
             let day = day_of(&ask.since, &zone);
             match days.iter_mut().find(|(d, _)| d == &day) {
                 Some((_, asks)) => asks.push(ask),
@@ -5011,6 +5107,24 @@ impl Model {
             return Vec::new();
         }
         let n = order.len() as isize;
+        if mode == Mode::Decisions
+            && self.waiting_folded
+            && matches!(self.selected.as_ref(), Some(Selected::Waiting(_)))
+        {
+            if by == 0 {
+                return Vec::new();
+            }
+            // The open card stays while its row is folded out of the list.
+            // Treat it as the gap between the decisions and what follows
+            // Waiting, so either key reaches the nearest row that is drawn.
+            let boundary = order
+                .iter()
+                .position(|row| !matches!(row, Selected::Decision(_)))
+                .unwrap_or(order.len());
+            let offset = if by > 0 { by - 1 } else { by };
+            let next = (boundary as i128 + offset as i128).rem_euclid(n as i128) as usize;
+            return self.select(order[next].clone());
+        }
         let at = self
             .selected
             .as_ref()
@@ -6119,6 +6233,17 @@ impl Model {
             .min()
     }
 
+    /// Whether the open row `sel` is still there in `mode`: a row of the
+    /// list as it stands (`order`), or the card of a parked bead whose
+    /// section is folded. A fold takes rows from the list and from the
+    /// keys, and no open card away: it stays through the queue being read
+    /// again and through a move, until its bead is not parked any more.
+    fn stands(&self, mode: Mode, order: &[Selected], sel: &Selected) -> bool {
+        order.contains(sel)
+            || matches!(sel, Selected::Waiting(bead)
+                if mode == Mode::Decisions && self.waiting_folded && self.is_parked(bead))
+    }
+
     /// When the open row is gone, falls back within its mode. In chat, a
     /// decision opened from a conversation leads back there; decisions
     /// stay among their own rows, and the timetable keeps its board,
@@ -6132,7 +6257,8 @@ impl Model {
         }
         let order = self.order_in(self.mode);
         if self.selected.as_ref().is_some_and(|s| {
-            (self.mode == Mode::Timetable && matches!(s, Selected::Bead(_))) || order.contains(s)
+            (self.mode == Mode::Timetable && matches!(s, Selected::Bead(_)))
+                || self.stands(self.mode, &order, s)
         }) {
             return Vec::new();
         }
@@ -12642,15 +12768,18 @@ mod tests {
             ("yd-new-rev", "Move to build")
         );
         // A state read again, after the yard was lost, is the queue as read
-        // now.
+        // now, and a section folded stays folded: the yard found again must
+        // not spring open the list the person tidied.
         let mut again = yard(&[]);
         again.parked = vec![parked(
             "yd-after",
             "Parked meanwhile",
             "2026-11-05T09:00:00Z",
         )];
+        m.toggle_waiting();
         let (m, _) = m.resumed(again, Mode::Decisions);
         assert_eq!(beads(&m), ["yd-after"]);
+        assert!(m.waiting_folded());
     }
 
     /// A parked row with two moves: the done outcome the flow names, and a
@@ -12756,6 +12885,66 @@ mod tests {
                 Selected::Decision("yd-ask".into()),
             ]
         );
+        // The section stands open at first. Folded, the rows go and the
+        // keys step past them, while the beads are still parked and counted:
+        // only the list is tidied.
+        assert!(!m.waiting_folded());
+        m.toggle_waiting();
+        assert!(m.waiting_folded());
+        assert_eq!((m.parked_count(), m.waiting_rows(&now).len()), (2, 2));
+        assert!(m.is_parked("yd-old"));
+        assert!(!m.has_row(&Selected::Waiting("yd-old".into())));
+        assert!(m.has_row(&Selected::Decided("yd-done".into(), 7)));
+        assert_eq!(
+            walk(&mut m),
+            [
+                Selected::Decided("yd-done".into(), 7),
+                Selected::Decision("yd-ask".into()),
+                Selected::Decided("yd-done".into(), 7),
+                Selected::Decision("yd-ask".into()),
+            ]
+        );
+        // The open card can still be a folded Waiting bead. From that
+        // missing row, either key reaches the nearest row at the section's
+        // boundary instead of starting from the beginning of the list.
+        m.toggle_waiting();
+        m.select(Selected::Waiting("yd-new".into()));
+        m.toggle_waiting();
+        m.step_in(Mode::Decisions, 1);
+        assert_eq!(m.selected(), Some(&Selected::Decided("yd-done".into(), 7)));
+        m.toggle_waiting();
+        m.select(Selected::Waiting("yd-new".into()));
+        m.toggle_waiting();
+        m.step_in(Mode::Decisions, -1);
+        assert_eq!(m.selected(), Some(&Selected::Decision("yd-ask".into())));
+        // A card open when the section is folded stays open, as one of the
+        // history does when it is folded; a fold only hides rows. It stays
+        // through the queue being read again, while its bead is parked.
+        m.toggle_waiting();
+        m.select(Selected::Waiting("yd-new".into()));
+        m.toggle_waiting();
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-new".into())));
+        let queue = || {
+            vec![
+                parked(
+                    "yd-old",
+                    "Release the autumn timetable",
+                    "2026-11-06T09:00:00Z",
+                ),
+                parked("yd-new", "Take the new fares live", "2026-11-08T09:00:00Z"),
+            ]
+        };
+        m.waiting(queue());
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-new".into())));
+        // A queue that parks the open bead no more takes the card, as it
+        // does with the rows standing: to the first open ask.
+        m.waiting(queue()[..1].to_vec());
+        assert_eq!(m.selected(), Some(&Selected::Decision("yd-ask".into())));
+        m.waiting(queue());
+        // Unfolded, the rows stand again, in the same order.
+        m.toggle_waiting();
+        assert!(!m.waiting_folded());
+        assert!(m.has_row(&Selected::Waiting("yd-old".into())));
         // Opening a row reads the bead whole, once.
         m.select(Selected::Decision("yd-ask".into()));
         assert_eq!(
@@ -13013,6 +13202,35 @@ mod tests {
         });
         assert_eq!(m.selected(), None);
         assert!(m.waiting_too_old());
+
+        // A section folded takes no open card away: the yard left and come
+        // back to keeps it, and a move made opens the next bead's card,
+        // though its row is folded away, as it does with the rows standing.
+        let mut state = yard(&[]);
+        state.parked = vec![
+            parked("yd-a", "A", "2026-11-01T09:00:00Z"),
+            parked("yd-b", "B", "2026-11-02T09:00:00Z"),
+            parked("yd-c", "C", "2026-11-03T09:00:00Z"),
+        ];
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        m.select(Selected::Waiting("yd-b".into()));
+        m.toggle_waiting();
+        m.leave();
+        m.back_to(
+            Mode::Decisions,
+            Some(Selected::Waiting("yd-b".into())),
+            false,
+            false,
+            false,
+        );
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-b".into())));
+        m.moved("yd-b");
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-c".into())));
+        m.moved("yd-c");
+        assert_eq!(m.selected(), Some(&Selected::Waiting("yd-a".into())));
+        // The last of them moved: no row is left to open, folded or not.
+        m.moved("yd-a");
+        assert_eq!(m.selected(), None);
     }
 
     /// Why a move was not made, for the card: a call that ended without an
@@ -15417,6 +15635,118 @@ mod tests {
         assert!(m.set_decided_filter(""));
         assert!(m.has_row(&Selected::Decided("yd-cal".into(), 2)));
         assert!(m.has_row(&Selected::Decided("yd-cal".into(), 3)));
+    }
+
+    /// A history of `n` asks, newest first: the asks numbered `n` down to
+    /// 1, each with a word of its own to search for, and two askers in turn
+    /// so that no ask folds into its neighbour.
+    fn long_history(n: u64) -> Vec<DecidedAsk> {
+        (1..=n)
+            .rev()
+            .map(|ask| {
+                decided_when(
+                    "yd-past",
+                    ask,
+                    &format!("Approve deploy-{ask:03}?"),
+                    if ask % 2 == 0 { "mayor" } else { "assembly" },
+                    "2026-10-09T09:00:00Z",
+                    "answered",
+                    "Approve it",
+                    "",
+                    "",
+                )
+            })
+            .collect()
+    }
+
+    /// The opened history draws its newest page and says how many are left;
+    /// a press of its more row draws the next, and the keys step through
+    /// what is drawn only. The chip's and the filter's search is the whole
+    /// history, not the page, and starts a page again, as closing and
+    /// opening "Decided" does; an ask a mail names is drawn down to.
+    #[test]
+    fn the_history_draws_a_page_at_a_time_and_a_search_reaches_past_it() {
+        let mut state = yard(&[]);
+        state.asks.decided = long_history(120);
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        let asks = |m: &Model| {
+            decided_all(m)
+                .into_iter()
+                .map(|row| row.ask)
+                .collect::<Vec<_>>()
+        };
+        let ask = |n: u64| Selected::Decided("yd-past".into(), n);
+        // Folded, nothing is drawn or reached; the history's count is its
+        // own, the whole of it.
+        assert_eq!(m.decided_count(), 120);
+        assert!(!m.has_row(&ask(120)));
+        m.toggle_decided();
+        // The newest page, and what is left of the rest.
+        assert_eq!(asks(&m), (71..=120).rev().collect::<Vec<_>>());
+        assert_eq!(m.decided_left(), 70);
+        // The keys reach what is drawn and no more, and go around its ends.
+        assert!(m.has_row(&ask(71)) && !m.has_row(&ask(70)));
+        m.select(ask(71));
+        m.step_in(Mode::Decisions, 1);
+        assert_eq!(m.selected(), Some(&ask(120)));
+        // The more row draws the next page, and the last what is left; none
+        // is left to press for after that.
+        m.show_more_decided();
+        assert_eq!(asks(&m), (21..=120).rev().collect::<Vec<_>>());
+        assert_eq!(m.decided_left(), 20);
+        assert!(m.has_row(&ask(21)) && !m.has_row(&ask(20)));
+        m.show_more_decided();
+        assert_eq!(asks(&m).len(), 120);
+        assert_eq!(m.decided_left(), 0);
+        m.show_more_decided();
+        assert_eq!((asks(&m).len(), m.decided_left()), (120, 0));
+        // Closing and opening starts at the first page again.
+        m.toggle_decided();
+        m.toggle_decided();
+        assert_eq!((asks(&m).len(), m.decided_left()), (50, 70));
+
+        // The filter searches all of the history: ask 3 stands far past the
+        // page, and the filter finds it, with none left to draw.
+        assert!(m.set_decided_filter("deploy-003"));
+        assert_eq!(asks(&m), [3]);
+        assert_eq!(m.decided_left(), 0);
+        assert!(m.has_row(&ask(3)));
+        // The text leaves the chips counting over the whole of what it
+        // finds, not the page.
+        assert!(m.set_decided_filter("mayor"));
+        assert_eq!(m.decided_chip_counts()[0], (None, 60));
+        assert_eq!((asks(&m).len(), m.decided_left()), (50, 10));
+        // A filter that finds more than a page draws one, with the rest
+        // left; the same filter typed again changes nothing, the page kept.
+        m.show_more_decided();
+        assert_eq!((asks(&m).len(), m.decided_left()), (60, 0));
+        assert!(!m.set_decided_filter("mayor"));
+        assert_eq!(asks(&m).len(), 60);
+        // Another filter, or another chip, starts a page again; the same
+        // chip chosen again does not.
+        assert!(m.set_decided_filter(""));
+        assert_eq!((asks(&m).len(), m.decided_left()), (50, 70));
+        m.show_more_decided();
+        m.set_decided_chip(None);
+        assert_eq!(asks(&m).len(), 100);
+        m.set_decided_chip(Some(Outcome::Approved));
+        assert_eq!((asks(&m).len(), m.decided_chip_counts()[1].1), (50, 120));
+        m.set_decided_chip(None);
+
+        // A mail's chip for an ask past the page draws the page down to it,
+        // and unfolds a folded history first.
+        m.show_decided("yd-past", 3);
+        assert_eq!((asks(&m).len(), m.decided_left()), (120, 0));
+        assert!(m.has_row(&ask(3)));
+        m.toggle_decided();
+        assert!(!m.decided_expanded());
+        m.show_decided("yd-past", 60);
+        assert!(m.decided_expanded());
+        assert_eq!((asks(&m).len(), m.decided_left()), (100, 20));
+        assert!(m.has_row(&ask(60)));
+        // An ask the history does not hold draws no further than it was.
+        m.show_decided("yd-gone", 1);
+        assert_eq!(asks(&m).len(), 100);
     }
 
     /// Two reads of the queue answer out of the order they were made in:

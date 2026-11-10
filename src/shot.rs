@@ -204,7 +204,9 @@ pub const STATES: &[&str] = &[
     "refs",
     "decisions",
     "decisions-filtered",
+    "decisions-more",
     "waiting",
+    "waiting-folded",
     "waiting-end",
     "lines-waiting",
     "lines-waiting-end",
@@ -2062,13 +2064,16 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("Bead", &bead_secret(unconcealed));
         }
-        "decisions" | "decisions-filtered" => {
+        "decisions" | "decisions-filtered" | "decisions-more" => {
             // One open ask with a question that wraps, and a history of
             // 156 decided: three outcomes asked today, a folded look-alike
             // run of four with a put-aside, a decline and a secret given
-            // yesterday, and the older weeks behind them. The filtered
+            // yesterday, and the older weeks behind them. The history draws
+            // its first page of fifty and a row for the rest. The filtered
             // state poses the filter with `docs`, which matches today
-            // above the fold and yesterday below it.
+            // above the fold and yesterday below it; the more state
+            // stands the list at its end, under the page's last rows,
+            // where that row is.
             yard.answer(
                 "UserInbox",
                 r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
@@ -2087,14 +2092,16 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("Bead", &bead_links());
         }
-        "waiting" | "waiting-end" | "lines-waiting" | "lines-waiting-end" | "lines-help" => {
+        "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting" | "lines-waiting-end"
+        | "lines-help" => {
             // The Decide list: one open ask, and under it three beads
             // parked for jo's move, the longest waiting first: a bead with
             // a move forward and a move back that wants a note, one with
             // the one move a siding offers, and one a person approves
             // for production, which closes it. Twelve dealt with asks are
             // folded under them. The first parked bead is open on its card,
-            // with the stage's route under its title. The Lines shots open
+            // with the stage's route under its title. The folded state
+            // folds the section to its head, its card still open. The Lines shots open
             // that bead's details instead, from the board: the same moves
             // under its body, and on a yard from before the call, which
             // serves no `Waiting`, the one line that says who moves its
@@ -2976,11 +2983,11 @@ mod tests {
             let loaded = session::load(&yard.client(), "shot").unwrap();
             assert_eq!(loaded.me, "jo", "{state}");
             match *state {
-                "decisions" | "decisions-filtered" => {
+                "decisions" | "decisions-filtered" | "decisions-more" => {
                     assert_eq!(loaded.asks.decided.len(), 156, "{state}")
                 }
-                "waiting" | "waiting-end" | "lines-waiting" | "lines-waiting-end"
-                | "lines-help" => {
+                "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting"
+                | "lines-waiting-end" | "lines-help" => {
                     assert_eq!(loaded.asks.decided.len(), 12, "{state}")
                 }
                 _ => assert_eq!(loaded.asks.decided.len(), 0, "{state}"),
@@ -3564,7 +3571,8 @@ mod tests {
                     assert_eq!(telling.number("limit"), 30, "{state}");
                     assert!(!telling.text("until").is_empty(), "{state}");
                 }
-                "waiting" | "waiting-end" | "lines-waiting" | "lines-waiting-end" => {
+                "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting"
+                | "lines-waiting-end" => {
                     // One open ask, and three beads parked for jo's move,
                     // the longest waiting first, with the moves the yard
                     // offers each: the first open on its card, where the
@@ -3602,7 +3610,7 @@ mod tests {
                     assert!(!stage.beads[0].working, "{state}");
                     assert_eq!(stage.beads[0].bead, "plantime-4f2a", "{state}");
                 }
-                "decisions" | "decisions-filtered" => {
+                "decisions" | "decisions-filtered" | "decisions-more" => {
                     // One open ask with four options on its card.
                     assert_eq!(loaded.asks.open.len(), 1, "{state}");
                     let bead = yard.client().bead("bead-a").unwrap();
@@ -3640,6 +3648,13 @@ mod tests {
                         }
                         entry => panic!("the run folds: {entry:?}"),
                     }
+                    // A history of more than a page: it draws the first
+                    // page, and the rest is left for the more row.
+                    assert_eq!(
+                        model.decided_left(),
+                        156 - crate::model::DECIDED_PAGE,
+                        "{state}"
+                    );
                 }
                 "old-lines" => {
                     // The yard serves neither Lines call, as one from

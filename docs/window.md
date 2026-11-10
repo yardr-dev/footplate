@@ -21,13 +21,22 @@ open questions, never in both. A row shows the bead's title, wrapped to two
 lines, then its stage, its group and how long it has waited, with the bead's
 id small at its end. Where the parked beads belong to more than one depot,
 the depot's name joins that line. The section's head counts them (`3
-waiting`, `none waiting`). A yard from before the call has no section and
-says nothing about one. Under them, folded, "Decided" with the answered,
-declined and put-aside asks and the ones taken back, newest first. Open,
-the history stands grouped by the day it was asked, with the outcome's
-icon first on every row, and look-alikes folded into one row with their
-count; `/` types in its filter, over question, asker and outcome, with the
-chips All, Approved, Words, Taken back and Put aside above the days. Last
+waiting`, `none waiting`); a click on it folds the rows away and leaves the
+head with its count, and another click stands them again. The section
+stands open at first, and a fold lasts until the window is closed. The keys
+that step through the list skip the rows of a folded section, and a parked
+bead's card that is open stays open. A yard from before the call has no
+section and says nothing about one. Under them, folded, "Decided" with the
+answered, declined and put-aside asks and the ones taken back, newest
+first. Open, the history stands grouped by the day it was asked, with the
+outcome's icon first on every row, and look-alikes folded into one row with
+their count. It draws the newest fifty asks, and under them one quiet row,
+"Show more", with how many are left (`106 left`); a click on it draws the
+next fifty. `/` types in its filter, over question, asker and outcome, with
+the chips All, Approved, Words, Taken back and Put aside above the days.
+The filter and the chips search the whole history, not only the fifty
+drawn; choosing another, like closing "Decided" and opening it again,
+starts at the first fifty. Last
 of them, where the window runs as the yard's operator, the Grants row:
 every source × holder × call, by source, with each call's own time and
 approver, the weighty words for update and `--as` rows in rust as on a
@@ -367,6 +376,8 @@ its card under "Decided".
 | `pageup`, `pagedown` | scroll the open conversation, card or yard row by a page, with the focus anywhere |
 | `cmd+home` (`ctrl+home` on Linux) | the oldest loaded message; the newest is `cmd+end`, on a card or the yard row too |
 | a click on "Decided" | folds it open, shut |
+| a click on the Waiting head | folds the rows of the section away, leaving the head with its count, or stands them again |
+| a click on "Show more", under the opened history | draws the next fifty of its asks |
 | a click on a folded history row | opens it to show its rows, shut |
 | `/`, in decisions | opens the history with its filter typed in; `esc` leaves the filter, and what is typed stands |
 | `1`–`9`, `up`, `down`, on a card | chooses an option, or on a parked bead's card or the details of one in Lines a move; the arrows choose even while words are typed, from the first row of the words up and from the last down |

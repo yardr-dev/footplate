@@ -109,7 +109,7 @@ At 616 by 360 a person in chat sees the rail (mark, three icons, yard tile, gear
 
 **Clickable options in the decisions list.** Answering stays in the right card, so the keys 1–9 keep one meaning and there is one place a pick happens. The list triages; the card decides.
 
-**Collapsing anything but Decided history.** mckean: already expanded, no need to collapse. Stages, groups and rows stand open; only the unbounded decided past keeps its toggle.
+**Collapsing anything but Decided history.** mckean: already expanded, no need to collapse. Stages, groups and rows stand open; only the unbounded decided past keeps its toggle. (The Waiting section that came after this note folds too, as of footplate-c34r, 10 Nov 2026: a long queue of parked beads pushed the open decisions away. The open decisions, their topic groups, stages and groups still stand open.)
 
 **A per-depot Flows call.** One call serves the whole yard, as Arrivals does: one re-read, one invalidating set, no call per line and no partial states.
 

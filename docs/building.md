@@ -389,10 +389,14 @@ the yard's own screen), `refs` (the conversation with the
 yardmaster, naming an ask and two bead ids: the ask's chip with its
 preview under the mail), `decisions` (the decisions list with one
 open ask and the 156-item history open: day groups and a folded
-look-alike row), `decisions-filtered` (that history with `docs`
-in its filter), `waiting` (the Decide list with three beads parked for
-jo's move under the open ask, one of them open on its card with the moves
-the yard offers), `waiting-end` (that card at its end, where the moves and
+look-alike row, its first page of fifty and a row for the rest),
+`decisions-filtered` (that history with `docs` in its filter),
+`decisions-more` (that history with the list at its end, under the
+page's last rows, where the more row is), `waiting` (the Decide list
+with three beads parked for jo's move under the open ask, one of them open
+on its card with the moves the yard offers), `waiting-folded` (that list
+with the Waiting section folded to its head and count, the card still
+open), `waiting-end` (that card at its end, where the moves and
 the line for their note are), `lines-waiting` (the same bead's Lines
 details, with the same moves under its body), `lines-waiting-end` (those
 details at their end, the move back picked and its note typed),

@@ -281,6 +281,12 @@ pub(crate) fn decided_words(decided: usize) -> String {
     plural(decided, "", "decided", "decided")
 }
 
+/// What the history's more row says is not drawn yet: the number with
+/// "left".
+pub(crate) fn left_words(left: usize) -> String {
+    plural(left, "", "left", "left")
+}
+
 /// The colour of a timetable remark with the yard's `tone` and
 /// holder, for the person `me` reads as: a stalled bead reads the
 /// error red, and a held bead only where they hold it; a wait that

@@ -928,6 +928,7 @@ impl Footplate {
         );
         model.expand(&kept.expanded);
         model.show_texts(&kept.texts);
+        model.fold_waiting(kept.waiting_folded);
         model.set_decided_chip(kept.decided_chip);
         model.show_folds(&kept.decided_folds);
         // The filter's field is the window's, not the yard's: what is
@@ -1161,6 +1162,7 @@ impl Footplate {
                         kept.departures,
                     ),
                 };
+                model.fold_waiting(kept.waiting_folded);
                 // The departures shot opens the arrivals pane under the
                 // toggle: a debug build's alone, as the row above.
                 #[cfg(debug_assertions)]
@@ -1300,13 +1302,20 @@ impl Footplate {
                         self.drawer = Some("yd-zulu".into());
                         effects.extend(model.read_bead("yd-zulu"));
                     }
+                    // The waiting-folded shot stands with its section folded
+                    // to the head, and its card still open. A debug build's
+                    // alone.
+                    #[cfg(debug_assertions)]
+                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("waiting-folded") {
+                        model.toggle_waiting();
+                    }
                     // The decisions shots stand with the history open; the
                     // filtered one with `docs` typed in its filter, as a
                     // `/` and the word would. A debug build's alone.
                     #[cfg(debug_assertions)]
                     if matches!(
                         std::env::var("FOOTPLATE_SHOT").as_deref(),
-                        Ok("decisions") | Ok("decisions-filtered")
+                        Ok("decisions") | Ok("decisions-filtered") | Ok("decisions-more")
                     ) {
                         model.toggle_decided();
                         if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("decisions-filtered") {
@@ -1782,14 +1791,15 @@ impl Footplate {
         }
         self.reach_top(cx);
         // The arrivals shots show the list's end, where the arrivals row
-        // stands: a debug build's alone, as the page shot's stand at its
-        // card's end. The layout says how far the end is, so the frame
+        // stands, and the decisions-more shot the same, where the history's
+        // more row is: a debug build's alone, as the page shot's stand at
+        // its card's end. The layout says how far the end is, so the frame
         // that first has it whole stands there; past that the list is
         // the reader's.
         #[cfg(debug_assertions)]
         if matches!(
             std::env::var("FOOTPLATE_SHOT").as_deref(),
-            Ok("yardmaster") | Ok("arrivals") | Ok("arrival")
+            Ok("yardmaster") | Ok("arrivals") | Ok("arrival") | Ok("decisions-more")
         ) {
             let max = self.rows.max_offset().height;
             if max > px(0.) && self.rows.offset().y == px(0.) {
@@ -1862,6 +1872,7 @@ impl Footplate {
         kept.expanded = model.map(|m| m.expanded().clone()).unwrap_or_default();
         kept.texts = model.map(|m| m.texts().clone()).unwrap_or_default();
         kept.decided_expanded = model.is_some_and(Model::decided_expanded);
+        kept.waiting_folded = model.is_some_and(Model::waiting_folded);
         kept.quiet_expanded = model.is_some_and(Model::quiet_expanded);
         kept.departures = model.is_some_and(Model::departures);
         kept.decided_chip = model.and_then(|m| m.decided_chip());
@@ -3194,10 +3205,12 @@ impl Footplate {
                 open: false,
             } => {
                 // A folded "Decided" has no row to select: unfold it, as
-                // opening the row from the list does.
-                if self.model.as_ref().is_some_and(|m| !m.decided_expanded()) {
-                    self.toggle_decided(cx);
-                }
+                // opening the row from the list does. So has an ask past
+                // the page the history draws: draw down to it.
+                self.change(cx, |m| {
+                    m.show_decided(&bead, ask);
+                    Vec::new()
+                });
                 self.select(Selected::Decided(bead, ask), window, cx);
             }
             select::RefTarget::Bead { bead } => {
@@ -6803,10 +6816,10 @@ fn shot_selected() -> Option<Selected> {
         Ok("plain") | Ok("plain-select") | Ok("page") | Ok("lines") | Ok("keys") => {
             return Some(Selected::Decision("bead-a".into()));
         }
-        Ok("decisions") | Ok("decisions-filtered") => {
+        Ok("decisions") | Ok("decisions-filtered") | Ok("decisions-more") => {
             return Some(Selected::Decision("bead-a".into()));
         }
-        Ok("waiting") | Ok("waiting-end") => {
+        Ok("waiting") | Ok("waiting-folded") | Ok("waiting-end") => {
             return Some(Selected::Waiting("plantime-4f2a".into()));
         }
         // The same bead's Lines details, from the board.

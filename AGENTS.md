@@ -39,9 +39,11 @@ The window, its state and the yard:
     its panel of tracks and departures board, the lines' flows, and the
     beads that travel with no line.
   - `src/window/ask.rs`: the words and keys of an ask's card: its heads and
-    counts, its buttons, and the texts a run or a setup holds.
+    counts (a section head, and the one that folds its rows), its buttons,
+    and the texts a run or a setup holds.
   - `src/window/asks.rs`: the decisions' views: the decisions list with its
-    Waiting section (the rows are `waiting.rs`'s) and its decided history,
+    Waiting section (the rows are `waiting.rs`'s; its head folds them away)
+    and its decided history (a page at a time, a row for more),
     each open ask's card with its secret, run and setup blocks, and what the
     cards do (answer, approve, give, decline, put aside).
   - `src/window/bead.rs`: one bead's views: the bead whole (in the reading

@@ -15,7 +15,7 @@ use super::ask::{
     ANSWER_WORDS, APPROVE_ELSEWHERE, Approval, DECLINE_IS_NO_PICK, RUN_PROPOSED, RunText,
     SECRET_GOES, SEND_WORDS, SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate,
     answer_label, approval, approve_button, ask_line, asked_age, candidate_choice_line, card_head,
-    carried_texts, decided_keys, decision_head, description_line, fenced, give_label,
+    carried_texts, decided_keys, decision_head, description_line, fenced, fold_head, give_label,
     give_unlock_label, recommended_line, run_keys, run_runs, run_texts, secret_keys, section_head,
     send_button, setup_keys, setup_runs, show_button, take_back_label, teammate_email,
     teammate_kind, teammate_of, teammate_role, teammate_user, texts_label, typeback_line,
@@ -26,7 +26,7 @@ use super::keys::{APPROVE_KEY, SETUP_SECRET_CONTEXT};
 use super::rail::{RailTip, UnsentNote, post_note};
 use super::state::Adding;
 use super::ui::{keys_hint, send_held, small_button};
-use super::words::{decided_words, waiting_words};
+use super::words::{decided_words, left_words, waiting_words};
 use super::{AskAbout, Decline, Expand, FocusFilter, FocusWords};
 use crate::api::{self};
 use crate::draft::{self, Attachment};
@@ -2029,12 +2029,28 @@ impl Footplate {
         });
     }
 
+    pub(crate) fn toggle_waiting(&mut self, cx: &mut Context<Self>) {
+        self.change(cx, |m| {
+            m.toggle_waiting();
+            Vec::new()
+        });
+    }
+
+    pub(crate) fn show_more_decided(&mut self, cx: &mut Context<Self>) {
+        self.change(cx, |m| {
+            m.show_more_decided();
+            Vec::new()
+        });
+    }
+
     /// Decisions' list: the open questions, each with what it wants,
     /// grouped by topic where a topic has two asks or more, with the
+    /// Waiting section under them, which folds to its head, and the
     /// Decided toggle at the list's end: decided asks are unbounded
     /// history, and without the toggle they would push open decisions
     /// off a short list. Open, the history has its filter with its chips,
-    /// and its days with their rows, look-alikes folded.
+    /// and its days with their rows, look-alikes folded, a page of them
+    /// and a row for the rest.
     pub(crate) fn list_decisions(
         &self,
         model: &Model,
@@ -2072,12 +2088,24 @@ impl Footplate {
         }
         // The beads parked for the person's move stand under the asks: a
         // question asks for words, a parked bead for a move. A yard from
-        // before the call has no section, and nothing said of it.
+        // before the call has no section, and nothing said of it. Folded,
+        // the head stands with its count, and the rows go.
         if !model.waiting_too_old() {
-            let rows = model.waiting_rows(&now);
-            body = body.child(section_head("Waiting", waiting_words(rows.len()), palette));
-            for row in rows {
-                body = body.child(self.waiting_row(row, palette, cx));
+            let folded = model.waiting_folded();
+            body = body.child(
+                fold_head(
+                    "waiting",
+                    "Waiting",
+                    waiting_words(model.parked_count()),
+                    !folded,
+                    palette,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_waiting(cx))),
+            );
+            if !folded {
+                for row in model.waiting_rows(&now) {
+                    body = body.child(self.waiting_row(row, palette, cx));
+                }
             }
         }
         if decided > 0 {
@@ -2158,6 +2186,10 @@ impl Footplate {
                         }
                     }
                 }
+                let left = model.decided_left();
+                if left > 0 {
+                    body = body.child(self.decided_more(left, palette, cx));
+                }
             }
         }
         if model.is_operator() {
@@ -2168,6 +2200,41 @@ impl Footplate {
             body = body.child(self.pairing_row(model, palette, cx));
         }
         self.column(body, palette, top, cx)
+    }
+
+    /// The history's last row while asks it finds are not drawn: it says
+    /// how many are left, quiet, in the Decided toggle's shape, and a press
+    /// draws the next page. It is no row of the keys' list, as the toggle
+    /// is none.
+    pub(crate) fn decided_more(
+        &self,
+        left: usize,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id("decided more")
+            .debug_selector(|| "decided more".to_string())
+            .mx_1()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .cursor_pointer()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .hover(|style| style.bg(palette.hover))
+            .on_click(cx.listener(|this, _, _, cx| this.show_more_decided(cx)))
+            .child(div().text_sm().text_color(palette.faint).child("Show more"))
+            .child(
+                div()
+                    .flex_none()
+                    .text_sm()
+                    .text_color(palette.faint)
+                    .debug_selector(|| "decided more count".to_string())
+                    .child(left_words(left)),
+            )
     }
 
     /// The history's filter field: `/` types in it, and every word typed

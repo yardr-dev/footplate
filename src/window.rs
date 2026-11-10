@@ -9433,6 +9433,121 @@ yardr.dev
         });
     }
 
+    /// A history longer than a page draws its newest fifty when it is
+    /// opened, and under them one quiet row with how many are left: a press
+    /// on it draws the next page. The filter searches the whole history, so
+    /// it finds an ask past the page. Closing and opening starts at the
+    /// first page again, and a mail's chip for an ask past the page draws
+    /// down to it. The test's frame keeps the bounds of what it drew once,
+    /// so each row is looked for before it has been drawn, and what is gone
+    /// is read from the model.
+    #[gpui::test]
+    fn the_opened_history_draws_a_page_and_its_more_row_draws_the_next(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        let decided: Vec<Value> = (1..=120u64)
+            .rev()
+            .map(|n| {
+                json!({"bead": "bead-l", "bead_title": "Deploys", "topic": "", "ask": n,
+                       "question": format!("Approve deploy-{n:03}?"),
+                       "asker": if n % 2 == 0 { "mayor" } else { "assembly" },
+                       "since": "2026-10-12T11:07:00Z", "state": "answered",
+                       "option": 1, "option_label": "Approve it"})
+            })
+            .collect();
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [], "decided": decided}}).to_string(),
+        );
+        yard.answer("Bead", &bead_decided());
+        cx.update(|cx| {
+            input::bind_keys(cx);
+            bind_keys(cx);
+        });
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let view = Footplate::new(yard.client(), "jo".into(), window, cx);
+            window.focus(&view.line.focus_handle(cx));
+            view
+        });
+        wait(cx, "the history", |cx| {
+            view.read_with(cx, |v, _| {
+                v.model.as_ref().is_some_and(|m| m.decided_count() == 120)
+            })
+        });
+        // Tall enough that every row of the longest page is on the screen to
+        // press the more row under.
+        cx.simulate_resize(gpui::size(px(1280.), px(8000.)));
+        to_decisions(&view, cx);
+        let head = |n: u64| format!("decided head bead-l {n}");
+        let left = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
+            view.read_with(cx, |v, _| v.model.as_ref().unwrap().decided_left())
+        };
+
+        // Folded, the history draws no row and no more row.
+        assert!(!drawn(cx, &head(120)) && !drawn(cx, "decided more"));
+        click_on(cx, "decided toggle");
+        // The newest fifty, then the row for the other seventy, standing
+        // right under the last of them with its count in words at its right.
+        assert!(drawn(cx, &head(120)) && drawn(cx, &head(71)));
+        assert!(!drawn(cx, &head(70)) && !drawn(cx, &head(3)));
+        assert_eq!(left(&view, cx), 70);
+        let (last, more) = (bounds_of(cx, &head(71)), bounds_of(cx, "decided more"));
+        let first = bounds_of(cx, &head(120));
+        let step = bounds_of(cx, &head(119)).top() - first.top();
+        assert!(last.bottom() <= more.top() && more.top() - last.top() < step * 2.);
+        let count = bounds_of(cx, "decided more count");
+        assert!(more.left() < count.left() && count.right() <= more.right());
+        assert_eq!(words::left_words(70), "70 left");
+        assert_eq!(words::left_words(1), "1 left");
+
+        // The filter finds ask 3, which stands past the page, with none left
+        // to draw; clearing it stands the first page again.
+        cx.simulate_keystrokes("escape");
+        cx.simulate_keystrokes("/");
+        cx.simulate_input("deploy-003");
+        cx.run_until_parked();
+        assert!(drawn(cx, &head(3)));
+        assert_eq!(left(&view, cx), 0);
+        cx.simulate_keystrokes(
+            "backspace backspace backspace backspace backspace backspace backspace backspace backspace backspace",
+        );
+        cx.run_until_parked();
+        assert_eq!(left(&view, cx), 70);
+
+        // A press draws the next page; another the last, and none is left.
+        click_on(cx, "decided more");
+        assert!(drawn(cx, &head(21)) && !drawn(cx, &head(20)));
+        assert_eq!(left(&view, cx), 20);
+        click_on(cx, "decided more");
+        assert!(drawn(cx, &head(1)));
+        assert_eq!(left(&view, cx), 0);
+
+        // Closed and opened again, it starts at the first page.
+        click_on(cx, "decided toggle");
+        click_on(cx, "decided toggle");
+        assert_eq!(left(&view, cx), 70);
+
+        // A mail's chip for ask 3, which stands past that page: the history
+        // draws down to it, and its row is the open one.
+        view.update_in(cx, |v, window, cx| {
+            v.open_reference(
+                select::RefTarget::Ask {
+                    bead: "bead-l".into(),
+                    ask: 3,
+                    open: false,
+                },
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert_eq!(left(&view, cx), 0);
+        assert_eq!(
+            open_row(&view, cx),
+            Some(Selected::Decided("bead-l".into(), 3))
+        );
+    }
+
     /// A topic's head stands only where two asks or more share the topic: a
     /// topic above a single ask is not drawn.
     #[gpui::test]
@@ -33729,6 +33844,34 @@ yardr.dev
         assert!(head.right() < id.left() && id.right() <= first.right());
         assert!(first.top() <= head.top() && sub.bottom() <= first.bottom());
 
+        // A press on the head folds the rows away: the head stays with its
+        // count, and the decided toggle comes up against it, where the two
+        // rows stood; the beads are parked and counted still. The test's
+        // frame keeps the bounds of what it drew once, so that the rows are
+        // gone is read from where what follows stands. Another press stands
+        // them again.
+        let before = bounds_of(cx, "decided toggle");
+        click_on(cx, "waiting toggle");
+        let folded = bounds_of(cx, "waiting toggle");
+        assert!(bounds_of(cx, "decided toggle").top() <= folded.bottom() + slack);
+        assert!(bounds_of(cx, "decided toggle").top() < before.top());
+        let (title, count) = (
+            bounds_of(cx, "section Waiting"),
+            bounds_of(cx, "section Waiting count"),
+        );
+        assert!(folded.left() <= title.left() && title.right() <= count.left());
+        assert!(count.right() <= folded.right() && count.top() >= folded.top());
+        view.read_with(cx, |v, _| {
+            let m = v.model.as_ref().unwrap();
+            assert!(m.waiting_folded());
+            assert_eq!(m.parked_count(), 2);
+        });
+        click_on(cx, "waiting toggle");
+        assert_eq!(bounds_of(cx, "decided toggle"), before);
+        view.read_with(cx, |v, _| {
+            assert!(!v.model.as_ref().unwrap().waiting_folded())
+        });
+
         // Opening one reads the bead whole, and its row stands open.
         click_on(cx, "waiting row bead-q");
         assert_eq!(
@@ -34808,6 +34951,65 @@ yardr.dev
         });
         assert!(decided_detail_of(&view, cx, "bead-a", 3).expanded);
         view.read_with(cx, |v, _| assert!(v.returning.is_none()));
+    }
+
+    /// The Waiting section stays folded where the person folded it while
+    /// another yard is open and when this one is opened again, as the
+    /// history stays open: it is part of where the yard stood, and what
+    /// the window keeps of it for a model it makes anew.
+    #[gpui::test]
+    fn a_yard_opened_again_keeps_its_waiting_section_folded(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let near = Yard::start();
+        a_yard_with_parked_beads(&near);
+        // One dealt with ask, for the decided toggle to stand under the
+        // section: what the rows' going is read from.
+        let mut asks: Value = serde_json::from_str(&asks_three()).unwrap();
+        asks["result"]["decided"] = json!([
+            {"bead": "bead-d", "bead_title": "Old business", "ask": 2,
+             "question": "Done?", "asker": "yardmaster", "state": "answered",
+             "option": 1, "option_label": "Yes", "since": "2026-10-01T09:00:00Z"}
+        ]);
+        near.answer("UserAsks", &asks.to_string());
+        let second = Yard::start();
+        a_second_yard_of_jo(&second);
+        let far = Yard::start_tcp();
+        let file = three_yards(dir.path(), &second, &far);
+        let env = env_on(&near, &file);
+        let (view, cx) = opened_at(env, &file, cx);
+        wait(cx, "the yard's conversation", |cx| {
+            texts(&view, cx) == ["Shall I land it?"]
+        });
+        cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+        to_decisions(&view, cx);
+        wait(cx, "the section", |cx| drawn(cx, "waiting row bead-p"));
+        click_on(cx, "waiting toggle");
+        view.read_with(cx, |v, _| {
+            assert!(v.model.as_ref().unwrap().waiting_folded());
+            // What the window keeps of the yard it is left for, as a model
+            // made anew is given it back.
+            let kept = v.place(
+                Mode::Decisions,
+                Selected::Decision("bead-a".into()),
+                Default::default(),
+            );
+            assert!(kept.waiting_folded);
+        });
+
+        cx.simulate_keystrokes("secondary-2");
+        wait(cx, "the second home's yard", |cx| {
+            texts(&view, cx) == ["From the second home."]
+        });
+        cx.simulate_keystrokes("secondary-1");
+        wait(cx, "this machine's yard again, on its card", |cx| {
+            open_row(&view, cx) == Some(Selected::Decision("bead-a".into()))
+        });
+        view.read_with(cx, |v, _| {
+            assert!(v.model.as_ref().unwrap().waiting_folded())
+        });
+        // The head stands with the decided toggle against it, as folded.
+        let head = bounds_of(cx, "waiting toggle");
+        assert!(bounds_of(cx, "decided toggle").top() <= head.bottom() + px(1.));
     }
 
     /// A saved conversation position can be older than the newest page

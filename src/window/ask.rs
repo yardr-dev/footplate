@@ -1,7 +1,9 @@
 //! What an ask's card says and takes: its heads and counts, its keys,
 //! its buttons, and the texts a run or a setup holds.
 
-use gpui::{App, ClickEvent, Context, FontWeight, SharedString, Window, div, prelude::*};
+use gpui::{
+    App, ClickEvent, Context, Div, FontWeight, SharedString, Stateful, Window, div, prelude::*,
+};
 
 use super::{APPROVE_KEY, Footplate, small_button};
 use crate::api;
@@ -24,21 +26,61 @@ pub(crate) fn section_head(
         .items_center()
         .justify_between()
         .gap_2()
-        .child(
-            div()
-                .debug_selector(move || format!("section {title}"))
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
-        )
-        .child(
-            div()
-                .debug_selector(move || format!("section {title} count"))
-                .text_sm()
-                .text_color(palette.faint)
-                .flex_none()
-                .child(count),
-        )
+        .child(head_title(title, title.to_string()))
+        .child(head_count(title, count, palette))
+}
+
+/// A section's head that folds its rows: [`section_head`]'s title and
+/// count with ▾ or ▸ before the title, in the shape of the Decided toggle,
+/// with a hover and a pointer to say it takes a press, which the caller
+/// gives it. The margin and padding come to the plain head's offsets, so
+/// the title stands where it would without the fold.
+pub(crate) fn fold_head(
+    id: &'static str,
+    title: &'static str,
+    count: String,
+    open: bool,
+    palette: Palette,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || format!("{id} toggle"))
+        .mx_1()
+        .mt_1()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .hover(|style| style.bg(palette.hover))
+        .child(head_title(
+            title,
+            format!("{} {title}", if open { "▾" } else { "▸" }),
+        ))
+        .child(head_count(title, count, palette))
+}
+
+/// The title of a section's head: `shown` is what it says, and `title` what
+/// the window's tests find it by.
+fn head_title(title: &'static str, shown: String) -> Div {
+    div()
+        .debug_selector(move || format!("section {title}"))
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(shown)
+}
+
+/// The count of a section's head, quiet at its right.
+fn head_count(title: &'static str, count: String, palette: Palette) -> Div {
+    div()
+        .debug_selector(move || format!("section {title} count"))
+        .text_sm()
+        .text_color(palette.faint)
+        .flex_none()
+        .child(count)
 }
 
 /// One of chat's groups: its title in the section heads' style, with no

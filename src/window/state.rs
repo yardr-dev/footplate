@@ -128,6 +128,8 @@ pub(crate) struct Place {
     pub(crate) expanded: HashSet<(String, u64)>,
     pub(crate) texts: HashSet<(String, u64)>,
     pub(crate) decided_expanded: bool,
+    /// Whether the Waiting section stood folded.
+    pub(crate) waiting_folded: bool,
     pub(crate) quiet_expanded: bool,
     /// Which arrivals view stood: the departures board where true, the
     /// panel where false, as the head's toggle sets it.

@@ -542,7 +542,7 @@ options have no icon, so the program sees to it when it starts
 | `src/session.rs` | following a yard on a thread, one for each yard of the settings: who the window is for, the state it starts from, trying again, or not when the device is not let in |
 | `src/model.rs` | what the window shows, as plain functions: the rows, the open conversation, unread and what is acknowledged |
 | `src/draft.rs` | what is not sent yet, as plain functions: for each yard each conversation's attachments and text, what is refused and why |
-| `src/save.rs` | where a picture is saved and under what name, as plain functions: the Downloads folder, the file's name held to the yard's rule for names, and the write, which never overwrites a file or follows a link and numbers a name that is taken |
+| `src/save.rs` | where a picture is saved and under what name, as plain functions: the Downloads folder, the file's name held to the yard's rule for names (and, on Windows, to what Windows keeps a file under: no device's name, colon or `< > " \| ? *`), and the write, which never overwrites a file or follows a link and numbers a name that is taken |
 | `src/window.rs` | the window: draws the model and the draft, and makes the calls they ask for |
 | `src/window/firstrun.rs` | "set up a yard here": the steps of the first run, drawn where the yard will be |
 | `src/window/feedback.rs` | the Feedback form over the window: its entry at the rail's foot, its fields, and the send, off the window's thread |
@@ -562,8 +562,10 @@ with is the fake's socket, and on Windows, which has none, its TCP port, so
 a test that needs no socket runs on both. On Windows the ones that are about
 the socket, make a symlink, read a file mode, run the shell stand-in for
 yardr below or check what the window offers on a Mac or Linux alone are left
-out (`#[cfg(unix)]`), and the rest run in the Windows job. The client is
-tried against the
+out (`#[cfg(unix)]`), and the rest run in the Windows job. Where only Windows
+can say (a junction at the name a picture is saved under, a device's name),
+a test has a `#[cfg(windows)]` block that the Windows job alone runs. The
+client is tried against the
 fake yard for each call, and through a stand-in edge for Kratos sign-in,
 including wrong passwords and expired flows; an image and the stream, by
 its socket and at an address, with a pairing, a wrong code and a removed

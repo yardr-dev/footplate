@@ -51,11 +51,13 @@ pub fn extension(mime: &str) -> &'static str {
 }
 
 /// The name the picture `hash` is saved under: the name its file was sent
-/// with, where that is one the yard's rule takes (draft.rs), else the hash
-/// with the extension `ext` of its format. A name from a linked yard or a
-/// hook is the source's own word, and one with a path in it or a control
-/// character is no reason to write elsewhere or to write nothing: the hash
-/// names the file instead.
+/// with, where that is one the yard's rule takes (draft.rs) and, on Windows,
+/// one that system keeps a file under, else the hash with the extension `ext`
+/// of its format. A name from a linked yard or a hook is the source's own
+/// word, and one with a path in it or a control character is no reason to
+/// write elsewhere or to write nothing: the hash names the file instead. So
+/// does a name that Windows would read as a device (`NUL.png`), a stream
+/// (`chart-12:30.png`) or a drive (`C:x.png`).
 pub fn file_name(given: &str, hash: &str, ext: &str) -> String {
     let hashed = format!("{hash}.{ext}");
     [given.trim(), hashed.as_str()]
@@ -66,9 +68,11 @@ pub fn file_name(given: &str, hash: &str, ext: &str) -> String {
 
 /// `name` as the `n`th file of its name: itself for the first, then with
 /// ` (2)`, ` (3)` and so on before its extension, shortened to fit a name if
-/// it is long. None where it is no name a file can have. A draft may carry a
-/// file with no name (what was pasted), which the yard's rule takes; a file
-/// on disk cannot.
+/// it is long. None where it is no name a file can have: to the yard's rule
+/// (draft.rs), and on Windows to what that system keeps a file under
+/// (`windows_keeps`), so that `write` never opens what the name would reach
+/// there. A draft may carry a file with no name (what was pasted), which the
+/// yard's rule takes; a file on disk cannot.
 fn numbered(name: &str, n: usize) -> Option<String> {
     if name.is_empty() {
         return None;
@@ -78,16 +82,65 @@ fn numbered(name: &str, n: usize) -> Option<String> {
         0 | 1 => String::new(),
         n => format!(" ({n})"),
     };
-    draft::fit_name(stem, &suffix, ext).ok()
+    draft::fit_name(stem, &suffix, ext)
+        .ok()
+        // On any other system these are names like the rest.
+        .filter(|fitted| !cfg!(windows) || windows_keeps(fitted))
+}
+
+/// Whether Windows keeps a file under exactly `name`. It keeps none under:
+/// - a device's name (`NUL`, `CON`, `COM1`, `LPT1` and the rest of
+///   `device`'s), in any case and with any extension, which the part before
+///   the first dot decides, spaces trimmed: the open reaches the device, so a
+///   picture saved there is thrown away (NUL) or sent to the console or a
+///   port, and the window says it was saved. Which of these the system still
+///   reads so depends on its build (a bare `NUL` on all, `NUL.png` and
+///   `CON` on the older), and a list for the older is no worse for the newer.
+/// - a name with a `:`: what follows it names a stream of another file
+///   (`chart-12:30.png` is a stream of an empty `chart-12`) or a drive
+///   (`C:x.png` is a file of that drive's current directory, outside the
+///   folder `Path::join` was given).
+/// - a name with one of `< > " | ? *`, which the open refuses, so that the
+///   picture could never be saved.
+///
+/// A trailing dot or space is none of these: Windows strips it and keeps the
+/// file.
+fn windows_keeps(name: &str) -> bool {
+    if name.contains([':', '<', '>', '"', '|', '?', '*']) {
+        return false;
+    }
+    let stem = name
+        .split_once('.')
+        .map_or(name, |(stem, _)| stem)
+        .trim_end_matches(' ');
+    !device(stem)
+}
+
+/// Whether `stem` is the name of a device of Windows, in any case: the
+/// console, the printer and the serial ports, NUL, and the console's two
+/// buffers. COM and LPT take a number from 1 to 9, or a superscript one to
+/// three, and no more: `COM0` and `COM10` are files.
+fn device(stem: &str) -> bool {
+    const NAMES: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
+    if NAMES.iter().any(|name| stem.eq_ignore_ascii_case(name)) {
+        return true;
+    }
+    let mut chars = stem.chars();
+    let letters: String = chars.by_ref().take(3).collect();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('1'..='9' | '¹' | '²' | '³'), None)
+    ) && (letters.eq_ignore_ascii_case("COM") || letters.eq_ignore_ascii_case("LPT"))
 }
 
 /// Writes `bytes` into the folder `dir` under `name`, or under the first of
-/// `name (2)`, `name (3)` and so on that no file stands at, and returns the
-/// path it wrote. The folder is made where it is not there. A file that
-/// stands at a name is never opened for writing, nor is a link followed:
-/// each try creates its file or fails, so another program's file made
-/// between two tries is passed over, not written into. Half a picture is not
-/// kept.
+/// `name (2)`, `name (3)` and so on that nothing stands at (no file, folder
+/// or link), and returns the path it wrote. The folder is made where it is not
+/// there. A file that stands at a name is never opened for writing, nor is a
+/// link followed: each try creates its file or fails, so another program's
+/// file made between two tries is passed over, not written into. A name that
+/// is no name a file can have (`numbered`) writes nothing and is
+/// `InvalidInput`. Half a picture is not kept.
 pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     for n in 1..=TRIES {
@@ -98,12 +151,15 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
             ));
         };
         let path = dir.join(file_name);
-        // A directory at the name is a taken name. It is told here and not by
-        // the open: Windows opens no directory for writing and answers with
-        // "access denied", which is no "exists", so the write would end on
-        // it. The check follows no link; a link at the name is the open's to
-        // refuse, as it is on every system.
-        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+        // Whatever stands at the name is a taken name: a file, a folder, a
+        // link. A folder is told here and not by the open: Windows opens no
+        // folder for writing, nor a link to one (a junction or a symlink to a
+        // folder, to nothing as well), and answers with "access denied",
+        // which is no "exists", so the write would end on it. The check
+        // follows no link, so a link is seen as itself and nothing is opened
+        // through it. The open is still the only step that creates a file,
+        // and numbers past one made after this look.
+        if fs::symlink_metadata(&path).is_ok() {
             continue;
         }
         let mut options = OpenOptions::new();
@@ -203,8 +259,65 @@ mod tests {
         ] {
             assert_eq!(file_name(given, &hash, "png"), want, "{given:?}");
         }
+        // Windows reads some names as devices, streams or drives, or refuses
+        // them. Those fall back to the hash there and stay the given name on
+        // other systems. Similar names and trailing dots or spaces stay as
+        // files on Windows too.
+        for (given, hash_on_windows) in [
+            ("NUL", true),
+            ("nul", true),
+            ("NUL.png", true),
+            ("Nul.PNG", true),
+            ("NUL.tar.gz", true),
+            ("NUL .png", true),
+            ("NUL ", true),
+            ("NUL.", true),
+            ("CON", true),
+            ("con.png", true),
+            ("PRN.txt", true),
+            ("AUX", true),
+            ("CONIN$", true),
+            ("CONOUT$.png", true),
+            ("COM1", true),
+            ("com9.jpg", true),
+            ("LPT1", true),
+            ("lpt9.png", true),
+            ("COM¹", true),
+            ("LPT³.png", true),
+            ("fence.png:s", true),
+            ("chart-12:30.png", true),
+            ("C:x.png", true),
+            ("NUL:", true),
+            ("a<b", true),
+            ("a>b", true),
+            ("a\"b", true),
+            ("a|b", true),
+            ("a?b.png", true),
+            ("a*b.png", true),
+            ("NULL.png", false),
+            ("NULx", false),
+            ("xNUL.png", false),
+            ("CONSOLE.png", false),
+            ("COM0", false),
+            ("LPT0.png", false),
+            ("COM10", false),
+            ("COM", false),
+            ("NUL (2).png", false),
+            (".NUL", false),
+            ("fence.png.", false),
+        ] {
+            let want = if cfg!(windows) && hash_on_windows {
+                hashed.as_str()
+            } else {
+                given.trim()
+            };
+            assert_eq!(file_name(given, &hash, "png"), want, "{given:?}");
+        }
         // A hash that is no name either is a name of its own.
         assert_eq!(file_name("", "../x", "png"), "picture.png");
+        if cfg!(windows) {
+            assert_eq!(file_name("", "a:b", "png"), "picture.png");
+        }
         // A long name is shortened to the 255 bytes a name holds, its
         // extension kept.
         let long = file_name(&format!("{}.png", "a".repeat(300)), &hash, "png");
@@ -251,6 +364,40 @@ mod tests {
         fs::create_dir(dir.path().join("pics")).unwrap();
         let path = write(dir.path(), "pics", b"z").unwrap();
         assert_eq!(path, dir.path().join("pics (2)"));
+        // So is a link to one. Windows answers a junction or a symlink to a
+        // folder, to nothing as well, "access denied" when it is opened for
+        // writing, as it does a folder, so the open does not tell it taken.
+        #[cfg(windows)]
+        {
+            let elsewhere = dir.path().join("elsewhere");
+            fs::create_dir(&elsewhere).unwrap();
+            // A junction wants no privilege, and std's call for one is not
+            // stable yet.
+            let junction = dir.path().join("junction");
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&junction)
+                .arg(&elsewhere)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "mklink /J: {made:?}");
+            // A symlink wants one that an administrator's account has and a
+            // person's may lack (Developer Mode gives it): the junction
+            // stands for the kind where the system refuses it.
+            let mut links = vec!["junction"];
+            for (name, target) in [("linked", "elsewhere"), ("dangling", "nowhere")] {
+                let link = dir.path().join(name);
+                if std::os::windows::fs::symlink_dir(dir.path().join(target), link).is_ok() {
+                    links.push(name);
+                }
+            }
+            for name in links {
+                let path = write(dir.path(), name, b"z").unwrap();
+                assert_eq!(path, dir.path().join(format!("{name} (2)")), "{name}");
+            }
+            // Nothing went through any of them.
+            assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+        }
         // A long name keeps its number and its extension whole.
         let long = format!("{}.png", "a".repeat(300));
         write(dir.path(), &long, b"x").unwrap();
@@ -277,6 +424,28 @@ mod tests {
     #[test]
     fn a_name_that_is_no_name_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
+        // On Windows, too, the names that system keeps no file under: the
+        // open would reach a device, a stream of another file or another
+        // folder than this one.
+        let windows: &[&str] = if cfg!(windows) {
+            &[
+                "NUL",
+                "nul.png",
+                "CON.png",
+                "COM1.jpg",
+                "LPT9",
+                "chart-12:30.png",
+                "C:x.png",
+                "a<b",
+                "a>b",
+                "a\"b",
+                "a|b",
+                "a?b.png",
+                "a*b.png",
+            ]
+        } else {
+            &[]
+        };
         for bad in [
             "../escape.png",
             "a/b.png",
@@ -285,7 +454,10 @@ mod tests {
             ".",
             "",
             "a\nb",
-        ] {
+        ]
+        .iter()
+        .chain(windows)
+        {
             let err = write(dir.path(), bad, b"x").unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
         }

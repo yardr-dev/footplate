@@ -177,9 +177,11 @@ Text and drawing helpers:
 - `src/save.rs`: a picture saved to a file, as plain functions tested with a
   temp folder: the Downloads folder (`XDG_DOWNLOAD_DIR`, else `~/Downloads`),
   the name it goes under (the file's own, held to the yard's rule for names
-  that `src/draft.rs` keeps, else its hash and format), and the write, which
-  creates each file or fails, so that no file is overwritten and no link
-  followed, and numbers a taken name (`name (2).png`). The folder is
+  that `src/draft.rs` keeps and, on Windows, to what that system keeps a file
+  under: no device's name, `:` or `< > " | ? *`, else its hash and format),
+  and the write, which creates each file or fails, so that no file is
+  overwritten and no link followed, and numbers a taken name (`name (2).png`:
+  a file, a folder or a link to one stands there). The folder is
   `Means::downloads`; under test it is none, so a test never writes the
   person's own Downloads, and one that saves points it at a temp folder.
 - `src/input.rs`: the line typed in (gpui has no text field).

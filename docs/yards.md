@@ -142,9 +142,12 @@ the window already holds, so nothing is fetched again. The folder is
 `XDG_DOWNLOAD_DIR` if that holds an absolute path, else `~/Downloads`, made if
 it is missing. The file keeps the name the sender gave it. A linked yard or a
 hook can send a name with a path or a control character in it. Such a name,
-and no name at all, give the hash and the format's extension instead. A name
-that is taken is never written over: the file becomes `fence (2).png`, then
-`fence (3).png`. One line says where it went or why it did not. In the
+and no name at all, give the hash and the format's extension instead. On
+Windows so does a name that system keeps no file under: a device's
+(`NUL.png`, `COM1`), one with a `:` (`chart-12:30.png`) or one with any of
+`< > " | ? *`. A name that is taken, by a file, a folder or a link, is never
+written over: the file becomes `fence (2).png`, then `fence (3).png`. One line
+says where it went or why it did not. In the
 full-size view that line stands at the foot of the window. A page or any
 other file has its Open instead. The window does not read the desktop's
 user-dirs file, so another folder is set with the variable. There is no dialog

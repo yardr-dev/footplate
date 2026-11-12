@@ -46,6 +46,8 @@ use super::metrics::{
     VOICE_LABEL, VOICE_NOTE, grown,
 };
 use super::rail::{PROBE_AGAIN, Picture, Probe, RailTip, Unsent, ViewUp, reaches, run_address_of};
+#[cfg(debug_assertions)]
+use super::state::ApprovalPairing;
 use super::state::{
     About, Adding, Anchor, Away, Counts, Held, NOT_OPENED, Place, SwitchBusy, rail_counts, waiting,
 };
@@ -845,6 +847,13 @@ impl Footplate {
         }
         self.note_files = self.kept_note_files.remove(to).unwrap_or_default();
         self.drafts.turn_to(to);
+        // The approval's code and QR are for the screen the person is
+        // leaving, not a yard to hold for later. A selected code is part
+        // of the same sitting and goes with it.
+        if self.approval_pairing.take().is_some() {
+            self.selection
+                .update(cx, |selection, cx| selection.clear(cx));
+        }
         // A yard that answered under a way's fields is held as up: it
         // answered, and goes on being followed.
         if self.answered_while_adding {
@@ -1339,6 +1348,46 @@ impl Footplate {
                             model.set_decided_filter("docs");
                             self.filter.update(cx, |line, cx| line.set_text("docs", cx));
                         }
+                    }
+                    // The pair-qr shot stands on the decided pairing card
+                    // with the transient posed as the approval answered
+                    // it, so the screen draws its QR, code and minutes
+                    // with End; the pair-ended shot with the sitting
+                    // posed ended, as End leaves it. A debug build's
+                    // alone.
+                    #[cfg(debug_assertions)]
+                    if matches!(
+                        std::env::var("FOOTPLATE_SHOT").as_deref(),
+                        Ok("pair-qr") | Ok("pair-ended")
+                    ) {
+                        model.show_decided("bead-s", 7);
+                        effects.extend(model.select(Selected::Decided("bead-s".into(), 7)));
+                        let ends = chrono::Utc::now() + chrono::TimeDelta::minutes(10);
+                        let posed = match std::env::var("FOOTPLATE_SHOT").as_deref() {
+                            Ok("pair-ended") => ApprovalPairing::Ended {
+                                bead: "bead-s".into(),
+                                ask: 7,
+                                device: "watch".into(),
+                                user: "jo".into(),
+                                expired: false,
+                            },
+                            _ => ApprovalPairing::Shown {
+                                bead: "bead-s".into(),
+                                ask: 7,
+                                pairing: crate::api::AskPairing {
+                                    user: "jo".into(),
+                                    device: "watch".into(),
+                                    code: "K7QM-2XPD".into(),
+                                    address: "https://mac.example.net".into(),
+                                    expires: ends.to_rfc3339(),
+                                    qr: "https://mac.example.net#K7QM-2XPD".into(),
+                                    ..crate::api::AskPairing::default()
+                                },
+                                ending: false,
+                                end_refused: String::new(),
+                            },
+                        };
+                        self.approval_pairing = Some(posed);
                     }
                 }
                 self.model = Some(model);
@@ -6818,8 +6867,9 @@ fn shot_section() -> Option<Section> {
 
 /// The row a screenshot state opens on instead of the yard's own: the
 /// refused mail's conversation for the undelivered shot, the open card
-/// for the plain, plain-select, page, run, teammates, weighty-mapping
-/// and secret shots (the refused shot's with its refusal), the board for the
+/// for the plain, plain-select, page, run, teammates, weighty-mapping,
+/// secret and pair-ask shots (the refused shot's with its refusal), the
+/// decided pairing card for the pair-qr and pair-ended shots, the board for the
 /// arrivals and departures shots, one arrival's bead for the arrival
 /// shot, yardr's line for the flow shot, the first parked bead's card for
 /// the waiting shots, the many-move bead's card for the waiting-many shots
@@ -6853,8 +6903,12 @@ fn shot_selected() -> Option<Selected> {
         | Ok("weighty-mapping")
         | Ok("secret")
         | Ok("secret-shown")
-        | Ok("secret-refused") => {
+        | Ok("secret-refused")
+        | Ok("pair-ask") => {
             return Some(Selected::Decision("bead-s".into()));
+        }
+        Ok("pair-qr") | Ok("pair-ended") => {
+            return Some(Selected::Decided("bead-s".into(), 7));
         }
         Ok("arrivals") | Ok("departures") | Ok("old-lines") => return Some(Selected::Arrivals),
         Ok("arrival") => return Some(Selected::Bead("yd-zulu".into())),

@@ -55,7 +55,8 @@ pub(crate) use metrics::WINDOW_MIN;
 use rail::{ImageOpen, Picture, PictureMenu, ViewUp};
 use screen::ScreenOpen;
 use state::{
-    About, Adding, AgentsBusy, Anchor, Away, Held, Piece, Place, SwitchBusy, SwitchFor, Talk,
+    About, Adding, AgentsBusy, Anchor, ApprovalPairing, Away, Held, Piece, Place, SwitchBusy,
+    SwitchFor, Talk,
 };
 use ui::small_button;
 use words::count_words;
@@ -451,6 +452,10 @@ pub struct Footplate {
     /// The run ask whose approval is with the yard and not answered yet:
     /// no second one goes after it.
     approving: Option<(String, u64)>,
+    /// A pairing approval's sitting: the transient on its decided card
+    /// until the screen is left or the code runs out, then its ended
+    /// state. Screen memory alone, never logged or filed.
+    approval_pairing: Option<ApprovalPairing>,
     /// The teammates whose removals are with the yard and not answered
     /// yet, by following session and user: no second filing goes after
     /// one.
@@ -945,6 +950,7 @@ impl Footplate {
             typeback,
             typeback_for: None,
             approving: None,
+            approval_pairing: None,
             removing: HashSet::new(),
             moving: HashSet::new(),
             device_name,
@@ -28982,6 +28988,86 @@ yardr.dev
         queued
     }
 
+    const PAIR_DOES: [&str; 5] = [
+        "opens a pairing for the device watch of jo, reached at https://mac.example.net.",
+        "jo has 1 device: phone (never used).",
+        "Approval opens the pairing for that device alone: its code is good for ten minutes and for one device, and whoever has the code within those minutes is answered with that device's token.",
+        "Nothing in the yard keeps the code after it is used or runs out.",
+        "The new device then calls as jo until yardr user device rm jo watch, and jo will then have 2 devices.",
+    ];
+    const PAIR_BACK: &str = "yardr user device pair --end ends it while it stands; once the code is used, yardr user device rm jo watch removes the device";
+    const PAIR_WEIGHT: &str = "a new device watch of jo speaks as them: whoever holds its token calls as jo until the device is removed";
+    const PAIR_RESULT: &str = "a pairing was opened for the device watch of jo, good until 09:30:00: the code was shown to the approver alone and is kept nowhere";
+    const PAIR_CODE: &str = "K7QM-2XPD";
+    const PAIR_QR: &str = "https://mac.example.net#K7QM-2XPD";
+
+    /// The pairing ask 7 on bead-s: the watch of jo, reached at the
+    /// yard's address, in the yard's words.
+    fn pair_run_of() -> Value {
+        json!({"argv": ["user", "device", "pair", "jo", "watch"],
+            "command": "yardr user device pair jo watch",
+            "does": PAIR_DOES, "back": PAIR_BACK})
+    }
+
+    /// That ask as the queue lists it, open or in `state`, approved
+    /// when `ran`.
+    fn queued_pair(state: &str, ran: bool) -> Value {
+        let mut queued = json!({
+            "bead": "bead-s", "bead_title": "A second device", "topic": "", "ask": 7,
+            "question": "Pair the watch?", "asker": "yardmaster",
+            "since": "2026-10-10T10:00:00Z", "run": pair_run_of(),
+            "weight": weighed("trust", PAIR_WEIGHT)
+        });
+        if !state.is_empty() {
+            queued["state"] = json!(state);
+        }
+        if ran {
+            queued["ran"] = json!({"argv": pair_run_of()["argv"], "result": PAIR_RESULT});
+        }
+        queued
+    }
+
+    /// The bead of that ask.
+    fn bead_pair() -> String {
+        json!({"result": {"id": "bead-s", "title": "A second device", "body": "The body.",
+            "stage": "new", "labels": [], "notes": [], "asks": [
+                {"ask": 7, "to": "jo", "asker": "yardmaster",
+                 "since": "2026-10-10T10:00:00Z",
+                 "question": "Pair the watch?",
+                 "context": ["jo's watch arrived, and wants the yard."],
+                 "options": [], "state": "open", "run": pair_run_of(),
+                 "weight": weighed("trust", PAIR_WEIGHT)}]}})
+        .to_string()
+    }
+
+    /// The window on a yard whose one open ask is that pairing ask, its
+    /// card open and read.
+    fn opened_on_a_pair_ask<'a>(
+        yard: &Yard,
+        file: &std::path::Path,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<Footplate>, &'a mut VisualTestContext) {
+        a_yard_of_jo(yard);
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [queued_pair("", false)], "decided": []}}).to_string(),
+        );
+        yard.answer("Bead", &bead_pair());
+        let at = env_on(yard, file);
+        opened_on_the_ask(at, file, cx)
+    }
+
+    /// What `ApproveAsk` answers for that ask: the safe sentence with
+    /// the transient beside it, its code running out at `expires`.
+    fn pairing_approval(expires: &str) -> String {
+        json!({"result": {"bead": "bead-s", "ask": 7, "asker": "yardmaster",
+            "argv": pair_run_of()["argv"], "result": PAIR_RESULT,
+            "pairing": {"user": "jo", "device": "watch", "code": PAIR_CODE,
+                "address": "https://mac.example.net", "expires": expires,
+                "qr": PAIR_QR}}})
+        .to_string()
+    }
+
     /// The bead of that ask, whose context holds what looks like a block
     /// and like a line of the yard's.
     fn bead_run() -> String {
@@ -29658,6 +29744,423 @@ yardr.dev
         cx.run_until_parked();
         assert_eq!(yard.asked("ApproveAsk").len(), 3);
         assert_eq!(answered_otherwise(&yard), Vec::<String>::new());
+    }
+
+    /// A pairing card says the door its approval crosses beside the
+    /// yard's weight, and approving it shows the QR screen in that
+    /// sitting alone instead of the notice line: the QR drawn from the
+    /// transient's string verbatim, the code as text beside it with its
+    /// minutes counted down, and End. Leaving the screen drops both:
+    /// the decided card reads as any other, with no QR in it.
+    #[gpui::test]
+    fn a_pairing_approval_shows_its_qr_until_the_screen_is_left(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        let (view, cx) = opened_on_a_pair_ask(&yard, &file, cx);
+
+        // The card says its door beside the yard's weight, before
+        // approval: on this machine's socket no edge carries the code,
+        // and at an address the carrier could spend it first.
+        assert!(drawn(cx, "weight bead-s 7 0"));
+        assert!(drawn(cx, "door bead-s 7"));
+        assert!(drawn(cx, "approve bead-s 7"));
+        let door = bounds_of(cx, "door bead-s 7");
+        drag(
+            cx,
+            gpui::point(door.left(), door.top() + px(2.)),
+            gpui::point(door.right() - px(2.), door.bottom() - px(2.)),
+        );
+        let wanted = match yard.at_listener() {
+            true => {
+                "approving shows the pairing's code on this screen: show it to the device and to nobody else, since whoever has it within its minutes, the carrier of this approval included, could spend it first"
+            }
+            false => "approving shows the pairing's code on this screen alone: no edge carries it",
+        };
+        assert_eq!(selected(&view, cx).as_deref(), Some(wanted));
+
+        // The weighty gate: the ask's number typed back, no unlock
+        // offered. The approval answers the transient beside the safe
+        // sentence, and the queue reads the ask decided.
+        unlock_as(&view, cx, false, false);
+        view.update(cx, |v, cx| {
+            v.typeback.update(cx, |field, cx| field.set_text("7", cx))
+        });
+        let ends =
+            (chrono::Utc::now() + chrono::TimeDelta::minutes(9) + chrono::TimeDelta::seconds(30))
+                .to_rfc3339();
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [], "decided": [queued_pair("answered", true)]}})
+                .to_string(),
+        );
+        yard.answer("ApproveAsk", &pairing_approval(&ends));
+        cx.simulate_keystrokes("secondary-enter");
+        wait(cx, "the QR screen", |cx| {
+            view.read_with(cx, |v, _| v.approval_pairing.is_some())
+        });
+        cx.run_until_parked();
+        assert_eq!(yard.asked("ApproveAsk"), [weighed_approval(&yard)]);
+        assert_eq!(notice(&view, cx), "");
+        assert_eq!(
+            open_row(&view, cx),
+            Some(Selected::Decided("bead-s".into(), 7))
+        );
+        assert!(drawn(cx, "pair head bead-s 7"));
+        assert!(drawn(cx, "pair qr bead-s 7"));
+        assert!(drawn(cx, "pair code bead-s 7"));
+        assert!(drawn(cx, "pair left bead-s 7"));
+        assert!(drawn(cx, "pair end bead-s 7"));
+        // The transient verbatim: the QR string the screen draws is the
+        // approval's, and the code beside it is the approval's too, with
+        // its minutes counted down from its expiry.
+        view.read_with(cx, |v, _| {
+            let ApprovalPairing::Shown {
+                pairing,
+                ending,
+                end_refused,
+                ..
+            } = v.approval_pairing.as_ref().unwrap()
+            else {
+                panic!("no pairing sitting is shown");
+            };
+            assert!(!ending);
+            assert!(end_refused.is_empty());
+            assert_eq!(pairing.qr, PAIR_QR);
+            assert_eq!(pairing.code, PAIR_CODE);
+            assert_eq!(pairing.device, "watch");
+            assert_eq!(pairing.user, "jo");
+            assert_eq!(pairing.expires, ends);
+            assert_eq!(
+                crate::model::pairing_left(&pairing.expires, &chrono::Utc::now()),
+                "9 minutes left"
+            );
+        });
+        // The code as text, for a device with no camera.
+        let code = bounds_of(cx, "pair code bead-s 7");
+        drag(
+            cx,
+            gpui::point(code.left(), code.top() + px(2.)),
+            gpui::point(code.right() - px(2.), code.bottom() - px(2.)),
+        );
+        assert_eq!(selected(&view, cx).as_deref(), Some(PAIR_CODE));
+
+        // Leaving the screen drops both: another row, and the decided
+        // card reads as any other, its `ran` and no sitting.
+        view.update(cx, |v, cx| {
+            v.change(cx, |m| {
+                m.select(Selected::Conversation("yardmaster".into()))
+            })
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |v, _| assert!(v.approval_pairing.is_none()));
+        assert_eq!(selected(&view, cx), None);
+        open_decided(&view, cx, "bead-s", 7);
+        wait(cx, "the decided card", |cx| has_bead(&view, cx, "bead-s"));
+        assert!(drawn(cx, "ran bead-s 7"));
+        view.read_with(cx, |v, _| assert!(v.approval_pairing.is_none()));
+        // An approval the model holds no decided card of keeps the
+        // notice line instead: the screen has no card to stand on.
+        view.update(cx, |v, cx| {
+            let session = v.session;
+            v.show_approval_pairing_in(
+                session,
+                "bead-s".into(),
+                9,
+                api::AskPairing::default(),
+                "approved, ran: nothing".into(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(notice(&view, cx), "approved, ran: nothing");
+        view.read_with(cx, |v, _| assert!(v.approval_pairing.is_none()));
+    }
+
+    /// The QR screen's End ends the pairing through the yard, and the
+    /// screen shows its ended state, with no code and no QR in it. A
+    /// refusal stands as the screen's line, and the pairing is kept for
+    /// another End.
+    #[gpui::test]
+    fn ending_a_pairing_approval_ends_it_and_shows_its_ended_state(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        let (view, cx) = opened_on_a_pair_ask(&yard, &file, cx);
+        unlock_as(&view, cx, false, false);
+        view.update(cx, |v, cx| {
+            v.typeback.update(cx, |field, cx| field.set_text("7", cx))
+        });
+        let ends = (chrono::Utc::now() + chrono::TimeDelta::minutes(10)).to_rfc3339();
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [], "decided": [queued_pair("answered", true)]}})
+                .to_string(),
+        );
+        yard.answer("ApproveAsk", &pairing_approval(&ends));
+        cx.simulate_keystrokes("secondary-enter");
+        wait(cx, "the QR screen", |cx| {
+            view.read_with(cx, |v, _| v.approval_pairing.is_some())
+        });
+        // The yard refuses the ending: the screen says so in the yard's
+        // words, and the pairing is kept for another End.
+        yard.answer(
+            "DevicePairCloseSelf",
+            r#"{"error": {"code": "not-found", "message": "an open device pairing: not found"}}"#,
+        );
+        click_on(cx, "pair end bead-s 7");
+        wait(cx, "the refused ending", |cx| {
+            view.read_with(cx, |v, _| match &v.approval_pairing {
+                Some(ApprovalPairing::Shown {
+                    ending,
+                    end_refused,
+                    ..
+                }) => !*ending && !end_refused.is_empty(),
+                _ => false,
+            })
+        });
+        assert_eq!(yard.asked("DevicePairCloseSelf"), [json!({"user": "jo"})]);
+        assert!(drawn(cx, "pair refused bead-s 7"));
+        assert!(drawn(cx, "pair qr bead-s 7"));
+        assert!(drawn(cx, "pair end bead-s 7"));
+        // Ended: the screen shows its ended state, and the secrets drop
+        // with the sitting.
+        yard.answer("DevicePairCloseSelf", r#"{"result": {}}"#);
+        click_on(cx, "pair end bead-s 7");
+        wait(cx, "the ended state", |cx| {
+            view.read_with(cx, |v, _| {
+                matches!(&v.approval_pairing, Some(ApprovalPairing::Ended { .. }))
+            })
+        });
+        assert_eq!(yard.asked("DevicePairCloseSelf").len(), 2);
+        assert!(drawn(cx, "pair ended bead-s 7"));
+        view.read_with(cx, |v, _| {
+            let ApprovalPairing::Ended {
+                device,
+                user,
+                expired,
+                ..
+            } = v.approval_pairing.as_ref().unwrap()
+            else {
+                panic!("no ended sitting");
+            };
+            assert_eq!(device, "watch");
+            assert_eq!(user, "jo");
+            assert!(!expired);
+            let kept = format!("{:?}", v.approval_pairing);
+            assert!(!kept.contains(PAIR_CODE));
+            assert!(!kept.contains(PAIR_QR));
+        });
+        assert_eq!(selected(&view, cx), None);
+
+        // A transient whose expiry cannot be read is never shown: there
+        // is no safe way to count down how long its code remains usable.
+        view.update(cx, |v, cx| {
+            let session = v.session;
+            v.show_approval_pairing_in(
+                session,
+                "bead-s".into(),
+                7,
+                api::AskPairing {
+                    user: "jo".into(),
+                    device: "watch".into(),
+                    code: PAIR_CODE.into(),
+                    expires: "not a time".into(),
+                    qr: PAIR_QR.into(),
+                    ..api::AskPairing::default()
+                },
+                "approved, ran: pair".into(),
+                cx,
+            );
+        });
+        view.read_with(cx, |v, _| assert!(v.approval_pairing.is_none()));
+        assert_eq!(
+            notice(&view, cx),
+            "the yard's pairing expiry could not be read; the code was not shown"
+        );
+    }
+
+    /// A pairing approval's code running out drops the transient: the
+    /// screen shows its ended state, with no code and no QR in it.
+    #[gpui::test]
+    fn a_pairing_approval_s_code_running_out_drops_it(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        let (view, cx) = opened_on_a_pair_ask(&yard, &file, cx);
+        unlock_as(&view, cx, false, false);
+        view.update(cx, |v, cx| {
+            v.typeback.update(cx, |field, cx| field.set_text("7", cx))
+        });
+        let ends = (chrono::Utc::now() + chrono::TimeDelta::minutes(10)).to_rfc3339();
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [], "decided": [queued_pair("answered", true)]}})
+                .to_string(),
+        );
+        yard.answer("ApproveAsk", &pairing_approval(&ends));
+        cx.simulate_keystrokes("secondary-enter");
+        wait(cx, "the QR screen", |cx| {
+            view.read_with(cx, |v, _| v.approval_pairing.is_some())
+        });
+        assert!(drawn(cx, "pair qr bead-s 7"));
+        let code = bounds_of(cx, "pair code bead-s 7");
+        drag(
+            cx,
+            gpui::point(code.left(), code.top() + px(2.)),
+            gpui::point(code.right() - px(2.), code.bottom() - px(2.)),
+        );
+        assert_eq!(selected(&view, cx).as_deref(), Some(PAIR_CODE));
+        cx.executor().advance_clock(Duration::from_secs(601));
+        cx.run_until_parked();
+        view.read_with(cx, |v, _| match &v.approval_pairing {
+            Some(ApprovalPairing::Ended { expired, .. }) => assert!(*expired),
+            sitting => panic!("no expired sitting: {sitting:?}"),
+        });
+        assert!(drawn(cx, "pair ended bead-s 7"));
+        view.read_with(cx, |v, _| {
+            let kept = format!("{:?}", v.approval_pairing);
+            assert!(!kept.contains(PAIR_CODE));
+            assert!(!kept.contains(PAIR_QR));
+        });
+        assert_eq!(selected(&view, cx), None);
+    }
+
+    /// A pairing card at an address says its carrier could spend the
+    /// code first: the approval crosses with the token in the clear.
+    #[gpui::test]
+    fn a_pairing_card_at_an_address_says_its_carrier_could_spend_it(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let near = Yard::start();
+        let far = Yard::start_tcp();
+        a_yard_of_jo(&near);
+        a_far_yard_of_jo(&far);
+        near.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
+        let file = dir.path().join("footplate/settings.json");
+        let set = Settings::default()
+            .with_yard(None, listed("far", &far, &file), Some(&file))
+            .unwrap();
+        set.write(&file).unwrap();
+        far.answer(
+            "UserAsks",
+            &json!({"result": {"open": [queued_pair("", false)], "decided": []}}).to_string(),
+        );
+        far.answer("Bead", &bead_pair());
+        let at = env_on(&near, &file);
+        let (view, cx) = opened_at(at, &file, cx);
+        view.update_in(cx, |v, window, cx| v.switch_to("far", window, cx));
+        wait(cx, "the far decision", |cx| {
+            to_decisions(&view, cx);
+            view.read_with(cx, |v, _| {
+                v.model
+                    .as_ref()
+                    .is_some_and(|m| m.selected() == Some(&Selected::Decision("bead-s".into())))
+            })
+        });
+        wait(cx, "the bead", |cx| has_bead(&view, cx, "bead-s"));
+        cx.run_until_parked();
+        assert!(drawn(cx, "door bead-s 7"));
+        let door = bounds_of(cx, "door bead-s 7");
+        drag(
+            cx,
+            gpui::point(door.left(), door.top() + px(2.)),
+            gpui::point(door.right() - px(2.), door.bottom() - px(2.)),
+        );
+        assert_eq!(
+            selected(&view, cx).as_deref(),
+            Some(
+                "approving shows the pairing's code on this screen: show it to the device and to nobody else, since whoever has it within its minutes, the carrier of this approval included, could spend it first"
+            )
+        );
+    }
+
+    /// Leaving a yard drops the pairing screen and its selection; an
+    /// approval result that arrives while that yard is held is discarded.
+    #[gpui::test]
+    fn a_pairing_approval_s_sitting_drops_when_its_yard_is_left(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let near = Yard::start();
+        let second = Yard::start();
+        a_yard_of_jo(&near);
+        a_yard_of_jo(&second);
+        let file = dir.path().join("footplate/settings.json");
+        let set = Settings::default()
+            .with_yard(None, listed("second home", &second, &file), Some(&file))
+            .unwrap();
+        set.write(&file).unwrap();
+        near.answer(
+            "UserAsks",
+            &json!({"result": {"open": [], "decided": [queued_pair("answered", true)]}})
+                .to_string(),
+        );
+        near.answer("Bead", &bead_pair());
+        second.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
+        let at = env_on(&near, &file);
+        let (view, cx) = opened_at(at, &file, cx);
+        wait(cx, "this machine's yard", |cx| {
+            texts(&view, cx) == ["Shall I land it?"]
+        });
+        let session = view.read_with(cx, |v, _| v.session);
+        let ends = (chrono::Utc::now() + chrono::TimeDelta::minutes(10)).to_rfc3339();
+        view.update(cx, |v, cx| {
+            v.show_approval_pairing_in(
+                session,
+                "bead-s".into(),
+                7,
+                api::AskPairing {
+                    user: "jo".into(),
+                    device: "watch".into(),
+                    code: PAIR_CODE.into(),
+                    address: "https://mac.example.net".into(),
+                    expires: ends.clone(),
+                    qr: PAIR_QR.into(),
+                    ..api::AskPairing::default()
+                },
+                "approved, ran: pair".into(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert!(drawn(cx, "pair qr bead-s 7"));
+        let code = bounds_of(cx, "pair code bead-s 7");
+        drag(
+            cx,
+            gpui::point(code.left(), code.top() + px(2.)),
+            gpui::point(code.right() - px(2.), code.bottom() - px(2.)),
+        );
+        assert_eq!(selected(&view, cx).as_deref(), Some(PAIR_CODE));
+        view.update_in(cx, |v, window, cx| v.switch_to("second home", window, cx));
+        assert_eq!(open_yard(&view, cx), "second home");
+        view.read_with(cx, |v, _| assert!(v.approval_pairing.is_none()));
+        assert_eq!(selected(&view, cx), None);
+
+        // The old yard's approval answer arrives after the switch. The
+        // transient is not retained in the held yard for a later return.
+        view.update(cx, |v, cx| {
+            v.show_approval_pairing_in(
+                session,
+                "bead-s".into(),
+                7,
+                api::AskPairing {
+                    user: "jo".into(),
+                    device: "watch".into(),
+                    code: PAIR_CODE.into(),
+                    address: "https://mac.example.net".into(),
+                    expires: ends,
+                    qr: PAIR_QR.into(),
+                    ..api::AskPairing::default()
+                },
+                "approved, ran: pair".into(),
+                cx,
+            );
+        });
+        view.update_in(cx, |v, window, cx| v.switch_to("this machine", window, cx));
+        wait(cx, "this machine's yard again", |cx| {
+            open_yard(&view, cx) == "this machine"
+                && view.read_with(cx, |v, _| v.session == session && v.model.is_some())
+        });
+        view.read_with(cx, |v, _| assert!(v.approval_pairing.is_none()));
+        assert_eq!(selected(&view, cx), None);
     }
 
     /// An invite card is its own card: the address, the yard user and

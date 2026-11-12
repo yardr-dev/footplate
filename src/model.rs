@@ -7574,6 +7574,25 @@ pub fn not_ended(err: &api::Error) -> String {
     }
 }
 
+/// Why a pairing approval's screen did not end its pairing, as the
+/// screen's line says it. A call that sent nothing says so, and is
+/// ended again; one that ended without an answer after it may have run
+/// is never said to be ended or not, and is ended again to be sure,
+/// since the yard reads an approval's pairing back to no one. A refusal
+/// is the yard's words, whole.
+pub fn approval_not_ended(err: &api::Error) -> String {
+    match err {
+        api::Error::Slow {
+            idempotent: false,
+            sent: false,
+        } => "the yard did not answer; nothing was ended. End it again.".to_string(),
+        unknown if pairing_unknown(unknown) => {
+            "the yard did not answer; the pairing may have ended. End it again.".to_string()
+        }
+        _ => format!("not ended: {err}"),
+    }
+}
+
 /// How long a pairing's code is good for, as the pane says it: the
 /// minutes between `now` and `expires`. Under a minute is less than a
 /// minute, and once the time ran out the code ran out. Empty for a
@@ -14494,6 +14513,43 @@ mod tests {
         assert!(pairing_left("", &now).is_empty());
     }
 
+    /// An approval screen's ending that did not go: a call that sent
+    /// nothing is ended again; one that may have ended after all is
+    /// never said to be ended or not, and is ended again to be sure,
+    /// since no state is read for it; a refusal is the yard's words.
+    #[test]
+    fn an_approval_screen_s_ending_says_why_it_did_not_go() {
+        let unsent = api::Error::Slow {
+            idempotent: false,
+            sent: false,
+        };
+        assert_eq!(
+            approval_not_ended(&unsent),
+            "the yard did not answer; nothing was ended. End it again."
+        );
+        for err in [
+            api::Error::Down(std::io::Error::other("the yard went away")),
+            api::Error::Protocol("DevicePairCloseSelf: status 200, and no JSON object".into()),
+            api::Error::Slow {
+                idempotent: false,
+                sent: true,
+            },
+        ] {
+            assert_eq!(
+                approval_not_ended(&err),
+                "the yard did not answer; the pairing may have ended. End it again."
+            );
+        }
+        let refused = api::Error::Refused {
+            code: "error".into(),
+            message: "an open device pairing: not found".into(),
+        };
+        assert_eq!(
+            approval_not_ended(&refused),
+            "not ended: an open device pairing: not found"
+        );
+    }
+
     /// A session's screen opens for the operator alone: the session
     /// working a bead, without its runner word, and a crew member's
     /// own. Anyone else is offered none, as is an unworked bead, an
@@ -17181,6 +17237,7 @@ mod tests {
         api::Approved {
             argv: more_mail().argv,
             result: "peer airy: takes 300 mails and asks an hour, and 2400 files".into(),
+            pairing: None,
         }
     }
 
@@ -17387,6 +17444,7 @@ mod tests {
         let pending = api::Approved {
             argv: more_mail().argv,
             result: CARRY_PENDING.into(),
+            pairing: None,
         };
         m.approved("yd-link", 2710, &pending);
         let detail = m.decided_detail("yd-link", 2710, &chrono::Utc).unwrap();

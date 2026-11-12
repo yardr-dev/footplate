@@ -67,6 +67,7 @@ never otherwise: the microphone is open only while a session stands.
 | `UninviteTeammate` | a teammate row's Remove button, and nothing else: the teammate named, with the operator. Files the removal as a run ask on a new bead, and says the bead and the ask; the run-ask card in the queue is where approval happens |
 | `DevicePairOpen` | the Pair a phone pane's Open button, and nothing else: the device name typed, for the operator's user, with the operator. Where the call ends without a reply the pane says the yard did not answer and reads the pairing again |
 | `DevicePairClose` | the pane's End button, and nothing else, with the operator. Where the call ends without a reply the pane says the yard did not answer and reads the pairing again |
+| `DevicePairCloseSelf` | the approval QR screen's End button, and nothing else: the caller's own user. Where the call ends without a reply the screen says the yard did not answer and keeps the pairing, which the yard reads back to no one |
 | `AckUserInbox` | a conversation or the `yard` row showed mail that was unread |
 | `AckUserNotifications` | `x`, on the open `yard` row: one notice read; shift-`x` or the head's button: every notice read |
 

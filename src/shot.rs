@@ -75,7 +75,9 @@ use crate::yard::Env;
 /// to serve it, saying so in plain words, the grants view open on its
 /// row with a read, an update and an `--as` grant, and a source's named
 /// read call and update call, the Pair a phone pane open on its row
-/// with a pairing's QR, code and minutes left, an open card of a
+/// with a pairing's QR, code and minutes left, a pairing run ask's card
+/// with the door its approval crosses, that approval's QR screen with
+/// its QR, code, minutes and End, and its ended state, an open card of a
 /// secret ask posed
 /// with a value typed, hidden and shown, that card with the yard's
 /// refusal of its answer, the switcher's list open over four yards, one
@@ -198,6 +200,9 @@ pub const STATES: &[&str] = &[
     "old-lines",
     "grants",
     "pairing",
+    "pair-ask",
+    "pair-qr",
+    "pair-ended",
     "secret",
     "secret-shown",
     "secret-refused",
@@ -1485,6 +1490,50 @@ fn populate(yard: &Yard, state: &str) {
                 .to_string(),
             );
         }
+        "pair-ask" => {
+            // A pairing run ask's card: the yard's weight and sentences,
+            // with the door its approval crosses beside the weight.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [], "unread": 0, "last": 0, "from": []}}"#,
+            );
+            yard.answer("Conversation", r#"{"result": []}"#);
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [queued_pairing(false)], "decided": []}}).to_string(),
+            );
+            yard.answer("Bead", &bead_pairing(false));
+        }
+        "pair-qr" => {
+            // A pairing approval's QR screen: the decided card stands
+            // where the approval left it, with the transient posed as
+            // the approval answered it, so the screen draws its QR, code
+            // and minutes with End.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [], "unread": 0, "last": 0, "from": []}}"#,
+            );
+            yard.answer("Conversation", r#"{"result": []}"#);
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [], "decided": [queued_pairing(true)]}}).to_string(),
+            );
+            yard.answer("Bead", &bead_pairing(true));
+        }
+        "pair-ended" => {
+            // A pairing approval's ended state: the decided card with
+            // the sitting posed ended, as End leaves it.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [], "unread": 0, "last": 0, "from": []}}"#,
+            );
+            yard.answer("Conversation", r#"{"result": []}"#);
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [], "decided": [queued_pairing(true)]}}).to_string(),
+            );
+            yard.answer("Bead", &bead_pairing(true));
+        }
         "delivery" => {
             // The yard row open on a hook delivery: ada's Telegram message
             // of a photo of the fence, which the yard holds, and a
@@ -2685,6 +2734,11 @@ fn long_command() -> String {
 
 const RUN_DOES: &str = "the link with airy (it calls itself yardr, key 6lHks9_z…) takes 300 mails and asks an hour from it. It takes 30 now.";
 const RUN_BACK: &str = "yardr peer allow airy --mail-limit 30";
+/// The pairing card's trust line, as the yard weighs it.
+const PAIR_WEIGHT: &str = "a new device watch of jo speaks as them: whoever holds its token calls as jo until the device is removed";
+/// What a pairing approval ran, as the yard keeps it: the safe sentence,
+/// with no code in it.
+const PAIR_RESULT: &str = "a pairing was opened for the device watch of jo, good until 09:30:00: the code was shown to the approver alone and is kept nowhere";
 
 fn run_of() -> serde_json::Value {
     let command = long_command();
@@ -2698,6 +2752,54 @@ fn weighed_run_of() -> serde_json::Value {
     json!({"command": "yardr peer allow airy --mail-limit 300",
            "argv": ["peer", "allow", "airy", "--mail-limit", "300"],
            "does": [RUN_DOES], "back": RUN_BACK})
+}
+
+/// The pairing run of the pair shots: the watch of jo, reached at the
+/// yard's address, in the yard's words.
+fn pairing_run_of() -> serde_json::Value {
+    json!({"command": "yardr user device pair jo watch",
+           "argv": ["user", "device", "pair", "jo", "watch"],
+           "does": ["opens a pairing for the device watch of jo, reached at https://mac.example.net.",
+                    "jo has 1 device: phone (never used).",
+                    "Approval opens the pairing for that device alone: its code is good for ten minutes and for one device, and whoever has the code within those minutes is answered with that device's token.",
+                    "Nothing in the yard keeps the code after it is used or runs out.",
+                    "The new device then calls as jo until yardr user device rm jo watch, and jo will then have 2 devices."],
+           "back": "yardr user device pair --end ends it while it stands; once the code is used, yardr user device rm jo watch removes the device"})
+}
+
+/// The pairing ask 7 on bead-s as the queue lists it, open or, where
+/// `decided`, answered with what the approval ran.
+fn queued_pairing(decided: bool) -> serde_json::Value {
+    let weight = PAIR_WEIGHT;
+    let mut queued = json!({
+        "bead": "bead-s", "bead_title": "A second device", "topic": "", "ask": 7,
+        "question": "Pair the watch?", "asker": "yardmaster",
+        "since": "2026-10-10T10:00:00Z", "run": pairing_run_of(),
+        "weight": [{"class": "trust", "line": weight}]
+    });
+    if decided {
+        queued["state"] = json!("answered");
+        queued["ran"] = json!({"argv": pairing_run_of()["argv"], "result": PAIR_RESULT});
+    }
+    queued
+}
+
+/// The bead of that ask, decided with the queue where `decided`.
+fn bead_pairing(decided: bool) -> String {
+    let weight = PAIR_WEIGHT;
+    let state = match decided {
+        true => "answered",
+        false => "open",
+    };
+    json!({"result": {"id": "bead-s", "title": "A second device", "body": "The body.",
+        "stage": "new", "labels": [], "notes": [], "asks": [
+            {"ask": 7, "to": "jo", "asker": "yardmaster",
+             "since": "2026-10-10T10:00:00Z",
+             "question": "Pair the watch?",
+             "context": ["jo's watch arrived, and wants the yard."],
+             "options": [], "state": state, "run": pairing_run_of(),
+             "weight": [{"class": "trust", "line": weight}]}]}})
+    .to_string()
 }
 
 /// The run ask 7 on bead-s as the queue lists it, asking `question`.
@@ -3052,6 +3154,9 @@ mod tests {
                 "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting"
                 | "lines-waiting-end" | "lines-help" => {
                     assert_eq!(loaded.asks.decided.len(), 12, "{state}")
+                }
+                "pair-qr" | "pair-ended" => {
+                    assert_eq!(loaded.asks.decided.len(), 1, "{state}")
                 }
                 _ => assert_eq!(loaded.asks.decided.len(), 0, "{state}"),
             }
@@ -3461,6 +3566,33 @@ mod tests {
                     assert!(bead.asks[0].identity.is_some(), "{state}");
                     assert_eq!(bead.asks[0].options.len(), 4, "{state}");
                     assert!(bead.asks[1].identity.is_none(), "{state}");
+                }
+                "pair-ask" => {
+                    // The pairing run ask: its command, and its trust
+                    // class.
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    let run = loaded.asks.open[0].run.as_ref().unwrap();
+                    assert_eq!(
+                        run.line().as_str(),
+                        "yardr user device pair jo watch",
+                        "{state}"
+                    );
+                    assert_eq!(loaded.asks.open[0].weight.len(), 1, "{state}");
+                    assert_eq!(loaded.asks.open[0].weight[0].class, "trust", "{state}");
+                    let bead = yard.client().bead("bead-s").unwrap();
+                    assert_eq!(bead.asks.len(), 1, "{state}");
+                    assert!(bead.asks[0].run.is_some(), "{state}");
+                }
+                "pair-qr" | "pair-ended" => {
+                    // The pairing ask decided, with what its approval
+                    // ran: the screen stands on it.
+                    assert!(loaded.asks.open.is_empty(), "{state}");
+                    assert_eq!(loaded.asks.decided.len(), 1, "{state}");
+                    assert!(loaded.asks.decided[0].run.is_some(), "{state}");
+                    assert!(loaded.asks.decided[0].ran.is_some(), "{state}");
+                    let bead = yard.client().bead("bead-s").unwrap();
+                    assert_eq!(bead.asks.len(), 1, "{state}");
+                    assert!(bead.asks[0].run.is_some(), "{state}");
                 }
                 "secret" | "secret-shown" | "secret-refused" => {
                     assert_eq!(loaded.asks.open.len(), 1, "{state}");

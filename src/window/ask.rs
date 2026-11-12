@@ -543,6 +543,34 @@ fn invite_fields(words: &[&str]) -> Option<(String, String)> {
     Some((email?, role.unwrap_or_else(|| "member".to_string())))
 }
 
+/// Whether the run pairs a device: `user device pair <user> <device>`,
+/// with `--url <address>` where the command names one. As the yard's
+/// `IsDevicePairRun` reads it: the user and the device stand, and the
+/// first three words are the row's.
+pub(crate) fn is_device_pair_run(run: &api::Run) -> bool {
+    let argv = &run.argv;
+    argv.len() >= 5 && argv[0] == "user" && argv[1] == "device" && argv[2] == "pair"
+}
+
+/// What a pairing card says of the door its approval crosses, beside
+/// the card's weight and before the approval goes. On this machine's
+/// socket no edge carries the code; sealed to the device the edge
+/// carries it unread; with the token in the clear whoever carries the
+/// approval, the edge included, could spend the code first.
+pub(crate) fn pair_door(sealed: bool, remote: bool) -> &'static str {
+    match (sealed, remote) {
+        (true, _) => {
+            "approving answers the pairing's code sealed to this device: the edge carries it unread"
+        }
+        (false, true) => {
+            "approving shows the pairing's code on this screen: show it to the device and to nobody else, since whoever has it within its minutes, the carrier of this approval included, could spend it first"
+        }
+        (false, false) => {
+            "approving shows the pairing's code on this screen alone: no edge carries it"
+        }
+    }
+}
+
 /// The head of a teammate ask's card: which of the two it is.
 pub(crate) fn teammate_kind(teammate: &Teammate) -> &'static str {
     match teammate {
@@ -868,6 +896,48 @@ mod tests {
         assert_eq!(
             TEAMMATE_CORRECTION,
             "approval runs this command as shown: to change the name or role, decline with words naming the corrected invite"
+        );
+    }
+
+    /// A pairing row is `user device pair` with its user and device, and
+    /// `--url` where it names one; every shorter or other row is not.
+    #[test]
+    fn device_pair_rows_read_from_their_words() {
+        let cases: &[(&str, bool)] = &[
+            ("yardr user device pair jo watch", true),
+            (
+                "yardr user device pair jo watch --url https://mac.example.net",
+                true,
+            ),
+            ("yardr user device pair jo", false),
+            ("yardr user device pair", false),
+            ("yardr user device rm jo watch", false),
+            ("yardr user device add jo watch", false),
+            ("yardr user invite eve --email eve@example.net", false),
+            ("yardr source grant crm read --crew builder-1", false),
+            ("", false),
+        ];
+        for (command, wanted) in cases {
+            assert_eq!(is_device_pair_run(&run_of(command)), *wanted, "{command}");
+        }
+    }
+
+    /// The door's sentence with a pairing card: sealed to the device, on
+    /// this machine's socket, or with the token in the clear, where the
+    /// carrier could spend the code first.
+    #[test]
+    fn pairing_cards_say_their_door() {
+        assert_eq!(
+            pair_door(true, true),
+            "approving answers the pairing's code sealed to this device: the edge carries it unread"
+        );
+        assert_eq!(
+            pair_door(false, false),
+            "approving shows the pairing's code on this screen alone: no edge carries it"
+        );
+        assert_eq!(
+            pair_door(false, true),
+            "approving shows the pairing's code on this screen: show it to the device and to nobody else, since whoever has it within its minutes, the carrier of this approval included, could spend it first"
         );
     }
 }

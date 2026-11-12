@@ -1125,6 +1125,36 @@ fn command_line(argv: &[String]) -> String {
     format!("yardr {}", argv.join(" "))
 }
 
+/// A pairing just opened by the approval of a `user device pair`
+/// ask: the user and the device, the code as it is shown, the address
+/// the device reaches the yard at, the yard's name there where the
+/// address is the edge's, when the code runs out, the yard's channel
+/// public key where it has one, and the QR string those fields make.
+/// It is the direct return of the approving call alone: it stands in no
+/// note, answer, event or later read, and the window holds it in the
+/// approval's screen memory alone, dropping it when the screen is left
+/// or the code runs out, and never logging or filing it. Absent on
+/// every other approval, and on a yard from before the field.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct AskPairing {
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub device: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub yard: String,
+    #[serde(default)]
+    pub expires: String,
+    #[serde(default)]
+    pub channel_key: String,
+    #[serde(default)]
+    pub qr: String,
+}
+
 /// What `ApproveAsk` answers: the command as it ran, and what it printed.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Approved {
@@ -1132,6 +1162,8 @@ pub struct Approved {
     pub argv: Vec<String>,
     #[serde(default)]
     pub result: String,
+    #[serde(default)]
+    pub pairing: Option<AskPairing>,
 }
 
 /// The setup a setup ask proposes: the pack with the yard's sentences for
@@ -4260,6 +4292,18 @@ impl Client {
             .map(drop)
     }
 
+    /// Ends the open pairing of the user themselves: nothing is added,
+    /// and the code is good for nothing then. Another user's pairing,
+    /// and none, are both no pairing to them, with the error not-found.
+    /// The yard serves the call on its socket and to any device, with
+    /// its user held to the device's own; `user` is the caller's. When
+    /// the call ends without a reply the pairing may have ended: the
+    /// caller says the yard did not answer, and never says it ended.
+    pub fn device_pair_close_self(&self, user: &str) -> Result<()> {
+        self.call("DevicePairCloseSelf", json!({ "user": user }))
+            .map(drop)
+    }
+
     /// One bead whole: body, stage, labels, notes, its asks with their
     /// options, recommendation and state, and the about-beads.
     pub fn bead(&self, bead: &str) -> Result<Bead> {
@@ -6046,6 +6090,31 @@ mod tests {
             } else {
                 assert_eq!(sent, Some(json!(["yd-link", 2710, "jo", true])), "{way}");
             }
+            // A pairing approval answers the transient beside the safe
+            // sentence: the code, where the device reaches the yard, when
+            // it runs out and the QR string, with the yard and the
+            // channel key where there are any. Any other approval, and a
+            // yard from before the field, answer none.
+            assert_eq!(approved.pairing, None, "{way}");
+            yard.answer(
+                "ApproveAsk",
+                r#"{"result": {"bead": "yd-crm", "ask": 65, "asker": "yardmaster",
+                    "argv": ["user", "device", "pair", "jo", "watch"],
+                    "does": ["opens a pairing for the device watch of jo."],
+                    "result": "a pairing was opened for the device watch of jo, good until 09:30:00: the code was shown to the approver alone and is kept nowhere",
+                    "pairing": {"user": "jo", "device": "watch", "code": "K7QM-2XPD",
+                        "address": "https://mac.example.net", "expires": "2026-10-08T09:30:00Z",
+                        "qr": "https://mac.example.net#K7QM-2XPD"}}}"#,
+            );
+            let pairing = approve().unwrap().pairing.unwrap();
+            assert_eq!(pairing.user, "jo", "{way}");
+            assert_eq!(pairing.device, "watch", "{way}");
+            assert_eq!(pairing.code, "K7QM-2XPD", "{way}");
+            assert_eq!(pairing.address, "https://mac.example.net", "{way}");
+            assert_eq!(pairing.yard, "", "{way}");
+            assert_eq!(pairing.expires, "2026-10-08T09:30:00Z", "{way}");
+            assert_eq!(pairing.channel_key, "", "{way}");
+            assert_eq!(pairing.qr, "https://mac.example.net#K7QM-2XPD", "{way}");
             // The yard says no, in its words, whole.
             let refusal = "ask 2710 says the link with airy takes 30 mails an hour now, and it takes 100: the card is from before that changed. Nothing ran. Decline it; it is asked again if it is still wanted.";
             yard.answer(
@@ -8972,6 +9041,39 @@ mod tests {
         );
         yard.client().device_pair_close("jo").unwrap();
         assert_eq!(yard.asked("DevicePairClose"), vec![json!({"actor": "jo"})]);
+    }
+
+    #[test]
+    fn device_pair_close_self_names_the_callers_own_user() {
+        for yard in [Yard::start(), Yard::start_tcp()] {
+            let client = yard.client();
+            let way = client.place();
+            // By name on the socket and at an address alike, as the yard
+            // takes this call on each.
+            yard.answer(
+                "DevicePairCloseSelf",
+                r#"{"result": {"user": "jo", "device": "watch", "state": "ended",
+                    "expires": "2026-10-08T09:30:00Z"}}"#,
+            );
+            client.device_pair_close_self("jo").unwrap();
+            assert_eq!(
+                yard.asked("DevicePairCloseSelf"),
+                vec![json!({"user": "jo"})],
+                "{way}"
+            );
+            // Another user's pairing, and none, are no pairing to them.
+            yard.answer(
+                "DevicePairCloseSelf",
+                r#"{"error": {"code": "not-found", "message": "an open device pairing: not found"}}"#,
+            );
+            let err = client.device_pair_close_self("jo").unwrap_err();
+            assert!(err.not_found(), "{way}: {err:?}");
+            // The yard went away over the call: no reply, and no word on
+            // whether the pairing ended.
+            yard.answer_nothing("DevicePairCloseSelf");
+            let err = client.device_pair_close_self("jo").unwrap_err();
+            assert!(matches!(err, Error::Down(_)), "{way}: {err:?}");
+        }
     }
 
     #[test]

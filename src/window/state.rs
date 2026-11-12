@@ -468,6 +468,56 @@ pub(crate) struct Held {
     pub(crate) returns_read: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// A pairing approval's sitting: the transient the approval answered,
+/// shown on its decided card until the screen is left or the code runs
+/// out, and then its ended state, which holds no code. Screen memory
+/// alone: never logged, never filed, and dropped when the card is left.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ApprovalPairing {
+    /// The approval's transient with its card: an ending away, and why
+    /// the last ending did not go, where one did not.
+    Shown {
+        bead: String,
+        ask: u64,
+        pairing: api::AskPairing,
+        ending: bool,
+        end_refused: String,
+    },
+    /// The pairing ended, or its code ran out: the screen's ended
+    /// state, with no code and no QR in it. The device and the user are
+    /// no secret: the decided card names them too.
+    Ended {
+        bead: String,
+        ask: u64,
+        device: String,
+        user: String,
+        expired: bool,
+    },
+}
+
+impl ApprovalPairing {
+    /// The decided card the sitting is shown on.
+    pub(crate) fn card(&self) -> (String, u64) {
+        match self {
+            ApprovalPairing::Shown { bead, ask, .. } => (bead.clone(), *ask),
+            ApprovalPairing::Ended { bead, ask, .. } => (bead.clone(), *ask),
+        }
+    }
+
+    /// Whether the sitting still shows the transient: a shown pairing
+    /// whose code has not run out.
+    pub(crate) fn live(&self) -> bool {
+        let ApprovalPairing::Shown { pairing, .. } = self else {
+            return false;
+        };
+        match pairing.expires.parse::<chrono::DateTime<chrono::Utc>>() {
+            Ok(ends) => ends.timestamp() > chrono::Utc::now().timestamp(),
+            // A code with no readable end must not stay on screen.
+            Err(_) => false,
+        }
+    }
+}
+
 impl Drop for Held {
     /// A yard that is held no longer is followed no longer.
     fn drop(&mut self) {

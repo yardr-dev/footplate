@@ -16,16 +16,16 @@ use super::ask::{
     SECRET_GOES, SEND_WORDS, SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate,
     answer_label, approval, approve_button, ask_line, asked_age, candidate_choice_line, card_head,
     carried_texts, decided_keys, decision_head, description_line, fenced, fold_head, give_label,
-    give_unlock_label, recommended_line, run_keys, run_runs, run_texts, secret_keys, section_head,
-    send_button, setup_keys, setup_runs, show_button, take_back_label, teammate_email,
-    teammate_kind, teammate_of, teammate_role, teammate_user, texts_label, typeback_line,
-    typeback_mismatch, words_send,
+    give_unlock_label, is_device_pair_run, pair_door, recommended_line, run_keys, run_runs,
+    run_texts, secret_keys, section_head, send_button, setup_keys, setup_runs, show_button,
+    take_back_label, teammate_email, teammate_kind, teammate_of, teammate_role, teammate_user,
+    texts_label, typeback_line, typeback_mismatch, words_send,
 };
 use super::expanded_text_key;
 use super::keys::{APPROVE_KEY, SETUP_SECRET_CONTEXT};
 use super::metrics::ASK_QUESTION_MIN;
 use super::rail::{RailTip, UnsentNote, post_note};
-use super::state::Adding;
+use super::state::{Adding, ApprovalPairing};
 use super::ui::{field, keys_hint, send_held, small_button};
 use super::words::{decided_words, left_words, waiting_words};
 use super::{AskAbout, Decline, Expand, FocusFilter, FocusWords};
@@ -133,6 +133,16 @@ impl Footplate {
         if typeback_for != self.typeback_for {
             self.typeback.update(cx, |field, cx| field.set_text("", cx));
             self.typeback_for = typeback_for;
+        }
+        // A pairing approval's sitting is for the card it was approved
+        // on, and is kept for no other and for no return to this one:
+        // leaving the screen drops the transient, and the ended state
+        // with it.
+        let pairing_card = self.approval_pairing.as_ref().map(ApprovalPairing::card);
+        if pairing_card.is_some() && pairing_card != ask {
+            self.approval_pairing = None;
+            self.selection
+                .update(cx, |selection, cx| selection.clear(cx));
         }
         // A secret ask's card draws no line for words, nor does the card
         // of an ask taken back. A focus left in
@@ -821,7 +831,19 @@ impl Footplate {
                         let line = model::approved_line(&approved);
                         this.change_in(session, cx, |m| m.approved(&bead, ask, &approved));
                         this.schedule_return_in(session, cx);
-                        this.notice_in(session, line, cx);
+                        // A pairing approval shows its QR screen in that
+                        // sitting alone, instead of the notice line.
+                        match approved.pairing {
+                            Some(pairing) => this.show_approval_pairing_in(
+                                session,
+                                bead.clone(),
+                                ask,
+                                pairing,
+                                line,
+                                cx,
+                            ),
+                            None => this.notice_in(session, line, cx),
+                        }
                     }
                     Err(err) if model::approves_elsewhere(&err) => {
                         elsewhere.insert(at);
@@ -831,6 +853,226 @@ impl Footplate {
                         this.refused_in(session, (bead.clone(), ask), model::not_approved(&err), cx)
                     }
                 }
+            },
+        );
+    }
+
+    /// A pairing approval's transient goes on its decided card: the QR
+    /// screen in that sitting alone, instead of the notice line. The
+    /// history unfolds to the card and the card opens, so the screen
+    /// shows where the approval was. The transient drops again when the
+    /// screen is left or the code runs out. An ask with no decided card
+    /// keeps the notice line instead: the screen has no card to stand
+    /// on.
+    pub(crate) fn show_approval_pairing_in(
+        &mut self,
+        session: u64,
+        bead: String,
+        ask: u64,
+        pairing: api::AskPairing,
+        line: String,
+        cx: &mut Context<Self>,
+    ) {
+        // A result that arrives after its yard was switched away from is
+        // no longer on the screen that authorized showing its transient.
+        // Keep only the ordinary approval notice with that held yard.
+        if session != self.session {
+            return self.notice_in(session, line, cx);
+        }
+        let dealt = self
+            .model_in(session)
+            .is_some_and(|m| m.decided_detail(&bead, ask, &chrono::Utc).is_some());
+        if !dealt {
+            return self.notice_in(session, line, cx);
+        }
+        if pairing
+            .expires
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .is_err()
+        {
+            self.approval_pairing = None;
+            self.selection
+                .update(cx, |selection, cx| selection.clear(cx));
+            return self.notice_in(
+                session,
+                "the yard's pairing expiry could not be read; the code was not shown".into(),
+                cx,
+            );
+        }
+        let shown = ApprovalPairing::Shown {
+            bead: bead.clone(),
+            ask,
+            pairing,
+            ending: false,
+            end_refused: String::new(),
+        };
+        self.approval_pairing = Some(shown);
+        self.change_in(session, cx, |m| {
+            m.show_decided(&bead, ask);
+            m.select(Selected::Decided(bead.clone(), ask))
+        });
+        self.schedule_approval_pairing_end_in(session, cx);
+    }
+
+    /// Drops a pairing approval's transient when its code runs out: the
+    /// screen shows its ended state, with no code and no QR in it.
+    /// Nothing waits where none is shown. A timer carries the card and
+    /// expiry, never the code or QR; a sitting gone by then, or another's
+    /// (left, ended, approved again), drops nothing.
+    pub(crate) fn schedule_approval_pairing_end_in(
+        &mut self,
+        session: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if session != self.session {
+            return;
+        }
+        let Some((bead, ask, expires, wait)) = self.approval_pairing.as_ref().and_then(|sitting| {
+            let ApprovalPairing::Shown {
+                bead, ask, pairing, ..
+            } = sitting
+            else {
+                return None;
+            };
+            let expires = pairing.expires.clone();
+            let wait = expires
+                .parse::<chrono::DateTime<chrono::Utc>>()
+                .ok()
+                .map(|ends| ends.timestamp() - chrono::Utc::now().timestamp())
+                .filter(|wait| *wait > 0)
+                .map(|wait| wait as u64);
+            Some((bead.clone(), *ask, expires, wait))
+        }) else {
+            return;
+        };
+        let Some(wait) = wait else {
+            return self.expire_approval_pairing_in(session, &bead, ask, &expires, cx);
+        };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(wait))
+                .await;
+            this.update(cx, |this, cx| {
+                this.expire_approval_pairing_in(session, &bead, ask, &expires, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The code the sitting's screen shows ran out: its transient drops
+    /// and the screen shows the ended state. A sitting that is gone, or
+    /// is another's, is left: only its own drops.
+    pub(crate) fn expire_approval_pairing_in(
+        &mut self,
+        session: u64,
+        bead: &str,
+        ask: u64,
+        expires: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if session != self.session {
+            return;
+        }
+        let sitting = &mut self.approval_pairing;
+        let own = matches!(
+            sitting,
+            Some(ApprovalPairing::Shown {
+                bead: shown_bead,
+                ask: shown_ask,
+                pairing,
+                ..
+            }) if shown_bead.as_str() == bead
+                && *shown_ask == ask
+                && pairing.expires.as_str() == expires
+        );
+        if own {
+            if let Some(ApprovalPairing::Shown {
+                bead, ask, pairing, ..
+            }) = sitting.take()
+            {
+                *sitting = Some(ApprovalPairing::Ended {
+                    bead,
+                    ask,
+                    device: pairing.device,
+                    user: pairing.user,
+                    expired: true,
+                });
+            }
+            self.selection
+                .update(cx, |selection, cx| selection.clear(cx));
+            cx.notify();
+        }
+    }
+
+    /// Ends the pairing a pairing approval's screen shows: nothing is
+    /// added, and the code is good for nothing then. The screen shows
+    /// its ended state. A refusal stands as the screen's line, and the
+    /// pairing is kept: the yard reads an approval's pairing back to no
+    /// one, so ending again is the way. A call that ended without an
+    /// answer is never said to have ended or not. Nothing is ended where
+    /// none is shown, or while one is away.
+    pub(crate) fn end_approval_pairing(&mut self, cx: &mut Context<Self>) {
+        let away = match self.approval_pairing.as_mut() {
+            Some(ApprovalPairing::Shown {
+                ending,
+                end_refused,
+                ..
+            }) if !*ending => {
+                *ending = true;
+                end_refused.clear();
+                true
+            }
+            _ => false,
+        };
+        if !away {
+            return;
+        }
+        cx.notify();
+        // The ending is the yard's it was pressed in: what came of it is
+        // that yard's, and is said there, wherever the window is by then.
+        let session = self.session;
+        self.ask_in(
+            session,
+            cx,
+            |client, me| client.device_pair_close_self(me),
+            move |this, ended, cx| {
+                if session != this.session {
+                    return;
+                }
+                let sitting = &mut this.approval_pairing;
+                match ended {
+                    // The secrets drop with the sitting: the ended
+                    // state holds no code and no QR.
+                    Ok(()) => {
+                        if let Some(ApprovalPairing::Shown {
+                            bead, ask, pairing, ..
+                        }) = sitting.take()
+                        {
+                            *sitting = Some(ApprovalPairing::Ended {
+                                bead,
+                                ask,
+                                device: pairing.device,
+                                user: pairing.user,
+                                expired: false,
+                            });
+                        }
+                        this.selection
+                            .update(cx, |selection, cx| selection.clear(cx));
+                    }
+                    Err(err) => {
+                        if let Some(ApprovalPairing::Shown {
+                            ending,
+                            end_refused,
+                            ..
+                        }) = sitting
+                        {
+                            *ending = false;
+                            *end_refused = model::approval_not_ended(&err);
+                        }
+                    }
+                }
+                cx.notify();
             },
         );
     }
@@ -2859,6 +3101,22 @@ impl Footplate {
                     )),
             );
         }
+        // The door a pairing card's approval crosses, beside the yard's
+        // weight: the approver reads it before the approval goes.
+        let pairs = sends && ask.run.as_ref().is_some_and(is_device_pair_run);
+        if pairs && let Some(client) = self.client.as_ref() {
+            let line = pair_door(client.sealed(), client.is_remote());
+            card = card.child(
+                div()
+                    .debug_selector(|| format!("door {bead_id} {ask_seq}"))
+                    .text_color(palette.text_accent)
+                    .child(select::text(
+                        expanded_text_key(card_key, "door", 0, line),
+                        line.to_string(),
+                        &self.selection,
+                    )),
+            );
+        }
         // The question, with how long it waits beside it. The yard and the
         // bead stand once in the head above, not again on every card.
         let asker_marked = ask.run.is_some() || ask.setup.is_some();
@@ -3890,6 +4148,38 @@ impl Footplate {
                     )
                     .child(card_head(&self.yard, &detail.bead, &format!("ask {ask}"))),
             );
+        // A pairing approval's sitting stands where its decided card
+        // does: the QR screen, or its ended state.
+        if let Some(sitting) = self
+            .approval_pairing
+            .as_ref()
+            .filter(|sitting| sitting.card() == (bead.to_string(), ask))
+        {
+            let body = self.approval_pairing_body(bead, ask, sitting, palette, cx);
+            return pane
+                .children(self.reconnect_strip(palette))
+                .child(head)
+                .child(
+                    div()
+                        .id("decided")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.decision)
+                        .p_4()
+                        .child(body),
+                )
+                .when(!model.notice.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .px_4()
+                            .py_1()
+                            .text_sm()
+                            .text_color(palette.warn)
+                            .child(format!("! {}", model.notice)),
+                    )
+                });
+        }
         // The decided card's frame: raised and bordered, as an open
         // card's. Everything the card says stands inside it.
         let mut body = div()
@@ -3933,6 +4223,25 @@ impl Footplate {
                     .child(select::text(
                         expanded_text_key(card_key, "weight", n, &line),
                         line,
+                        &self.selection,
+                    )),
+            );
+        }
+        // The door a pairing card's approval crosses, beside the yard's
+        // weight: the approver reads it before the approval goes. A card
+        // that approves no more has no door to say.
+        let pairs = detail.run.as_ref().is_some_and(is_device_pair_run)
+            && model.approving(bead, ask).is_some()
+            && !self.approve_elsewhere.contains(&(bead.to_string(), ask));
+        if pairs && let Some(client) = self.client.as_ref() {
+            let line = pair_door(client.sealed(), client.is_remote());
+            body = body.child(
+                div()
+                    .debug_selector(|| format!("door {bead} {ask}"))
+                    .text_color(palette.text_accent)
+                    .child(select::text(
+                        expanded_text_key(card_key, "door", 0, line),
+                        line.to_string(),
                         &self.selection,
                     )),
             );
@@ -4338,6 +4647,180 @@ impl Footplate {
                         .child(format!("! {}", model.notice)),
                 )
             })
+    }
+
+    /// A pairing approval's sitting on its decided card: the QR screen
+    /// while the transient shows, its ended state after. A sitting whose
+    /// code ran out draws the ended state, whatever the timer has dropped
+    /// yet.
+    fn approval_pairing_body(
+        &self,
+        bead: &str,
+        ask: u64,
+        sitting: &ApprovalPairing,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        match sitting {
+            ApprovalPairing::Shown {
+                pairing,
+                ending,
+                end_refused,
+                ..
+            } if sitting.live() => self
+                .approval_pairing_open(bead, ask, pairing, *ending, end_refused, palette, cx)
+                .into_any_element(),
+            ApprovalPairing::Shown { pairing, .. } => self
+                .approval_pairing_ended(bead, ask, &pairing.device, &pairing.user, true, palette)
+                .into_any_element(),
+            ApprovalPairing::Ended {
+                device,
+                user,
+                expired,
+                ..
+            } => self
+                .approval_pairing_ended(bead, ask, device, user, *expired, palette)
+                .into_any_element(),
+        }
+    }
+
+    /// The sitting's QR screen: its QR for the new device to scan, its
+    /// code as text for one with no camera, and the minutes the code is
+    /// good for, with End. The QR string is the transient's verbatim.
+    #[allow(clippy::too_many_arguments)]
+    fn approval_pairing_open(
+        &self,
+        bead: &str,
+        ask: u64,
+        pairing: &api::AskPairing,
+        ending: bool,
+        end_refused: &str,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let mut open = div().flex().flex_col().gap_3();
+        open = open.child(
+            div()
+                .debug_selector(|| format!("pair head {bead} {ask}"))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(format!(
+                    "Pair {} for {}",
+                    model::plain(&pairing.device),
+                    model::plain(&pairing.user)
+                )),
+        );
+        match qr_png(&pairing.qr) {
+            Some(png) if !pairing.qr.is_empty() => {
+                let image =
+                    std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
+                let faint = palette.faint;
+                open = open.child(
+                    img(image)
+                        .w(px(240.))
+                        .h(px(240.))
+                        .debug_selector(|| format!("pair qr {bead} {ask}"))
+                        .with_fallback(move || {
+                            div()
+                                .text_sm()
+                                .text_color(faint)
+                                .child("the QR would not draw: type the code")
+                                .into_any_element()
+                        }),
+                );
+            }
+            _ => {
+                open = open.child(
+                    div()
+                        .text_sm()
+                        .text_color(palette.faint)
+                        .debug_selector(|| format!("pair qr unreadable {bead} {ask}"))
+                        .child("the QR would not draw: type the code"),
+                );
+            }
+        }
+        let code = pairing.code.clone();
+        open = open.child(
+            div()
+                .debug_selector(|| format!("pair code {bead} {ask}"))
+                .child(select::text(
+                    select::key(("approval-pairing", "code", pairing.code.as_str())),
+                    fenced(&code),
+                    &self.selection,
+                )),
+        );
+        open = open.child(
+            div()
+                .text_sm()
+                .text_color(palette.faint)
+                .debug_selector(|| format!("pair left {bead} {ask}"))
+                .child(model::pairing_left(&pairing.expires, &chrono::Utc::now())),
+        );
+        if ending {
+            open = open.child(
+                div()
+                    .flex()
+                    .text_sm()
+                    .text_color(palette.faint)
+                    .debug_selector(|| format!("pair ending {bead} {ask}"))
+                    .child("Ending…"),
+            );
+        } else {
+            open = open.child(
+                div().flex().child(
+                    small_button("End".to_string(), palette)
+                        .id("pair end")
+                        .debug_selector(|| format!("pair end {bead} {ask}"))
+                        .on_click(cx.listener(|this, _, _, cx| this.end_approval_pairing(cx))),
+                ),
+            );
+        }
+        if !end_refused.is_empty() {
+            open = open.child(
+                div()
+                    .text_sm()
+                    .text_color(palette.warn)
+                    .debug_selector(|| format!("pair refused {bead} {ask}"))
+                    .child(end_refused.to_string()),
+            );
+        }
+        open
+    }
+
+    /// The sitting's ended state: the pairing ended, or its code ran out.
+    /// No code and no QR stand in it.
+    fn approval_pairing_ended(
+        &self,
+        bead: &str,
+        ask: u64,
+        device: &str,
+        user: &str,
+        expired: bool,
+        palette: Palette,
+    ) -> impl IntoElement + use<> {
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .debug_selector(|| format!("pair head {bead} {ask}"))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!(
+                        "Pair {} for {}",
+                        model::plain(device),
+                        model::plain(user)
+                    )),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(palette.faint)
+                    .debug_selector(|| format!("pair ended {bead} {ask}"))
+                    .child(match expired {
+                        true => "the code ran out".to_string(),
+                        false => "the pairing ended".to_string(),
+                    }),
+            )
     }
 
     /// The grants pane: every source × holder × call the yard serves,

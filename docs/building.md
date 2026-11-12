@@ -376,7 +376,10 @@ its flow), `old-lines` (the Lines pane against a yard too old to
 serve it, saying so in plain words), `grants` (the grants view open on
 its row, with a read, an update and an `--as` grant, and a source's named
 read call and update call), `pairing` (the Pair a phone pane open on
-its row, with a pairing's QR, code and minutes left), `secret` (an open card of a
+its row, with a pairing's QR, code and minutes left), `pair-ask` (a
+pairing run ask's card, with the door its approval crosses), `pair-qr`
+(that approval's QR screen, with its QR, code, minutes and End),
+`pair-ended` (its ended state), `secret` (an open card of a
 secret ask, posed with a value typed and hidden), `secret-shown`
 (that card where the yard marks the value no secret: typed and
 shown), `secret-refused` (that card with the yard's refusal of

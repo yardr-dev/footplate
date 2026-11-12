@@ -301,7 +301,8 @@ The states are `yardmaster` (the conversation with the yardmaster, with a
 few mails), `crew` (chat with the sidebar's groups full: crew working
 and stopped, a linked yard's people, this yard's people, and unread
 notices), `thread` (a long wrapped thread from alternating senders,
-the newest mail with an image), `column` (a long conversation over
+the newest mail holding the whole-text Markdown sample, above one with an
+image), `column` (a long conversation over
 three days, grouped by sender, with short links, a correction and a
 code block of one line),
 `column-hover` (that conversation with the pointer on the code block, a
@@ -369,7 +370,8 @@ arrivals panel open on the arrivals row, with its lamps, headcodes,
 a line with two beads being worked and two waiting for a slot, and quiet
 lines), `departures` (the departures board open under the toggle, with its
 banner), `arrival` (one
-arrival's bead open from the panel), `flow` (yardr's line open on
+arrival's bead open from the panel, its body holding the whole-text
+Markdown sample), `flow` (yardr's line open on
 its flow), `old-lines` (the Lines pane against a yard too old to
 serve it, saying so in plain words), `grants` (the grants view open on
 its row, with a read, an update and an `--as` grant, and a source's named

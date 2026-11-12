@@ -20,7 +20,8 @@ use crate::yard::Env;
 /// the conversation with the yardmaster, chat with the sidebar's groups
 /// full: crew working and stopped, a linked yard's people, this yard's
 /// people, and unread notices, a long wrapped thread with an
-/// image, a long conversation over three days, grouped by sender, with
+/// image under its newest mail, which holds the whole-text Markdown
+/// sample, a long conversation over three days, grouped by sender, with
 /// short links, a correction and a code block of one line, that
 /// conversation with the pointer posed on the code block, a letter under
 /// its head, that conversation with the pointer posed on the block
@@ -67,7 +68,8 @@ use crate::yard::Env;
 /// fields open, the arrivals panel open
 /// on the arrivals row with its lamps, headcodes and quiet lines, the
 /// departures board open under the toggle, one
-/// arrival's bead open from the panel, one
+/// arrival's bead open from the panel, its body holding the whole-text
+/// Markdown sample, one
 /// line's flow open on its row with what landed under its landed
 /// station, the Lines pane against a yard too old
 /// to serve it, saying so in plain words, the grants view open on its
@@ -1299,9 +1301,11 @@ fn populate(yard: &Yard, state: &str) {
             yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
             // One arrival's bead, which the arrival state opens: the
             // body, two labels, two notes, and three asks, two of them
-            // open.
+            // open. The body holds the whole-text Markdown sample, so
+            // the shot shows the table, quote, named link and rule in
+            // a bead's body.
             if state == "arrival" {
-                yard.answer("Bead", &bead_zulu());
+                yard.answer("Bead", &bead_zulu("Two yards answer tonight:\n\n| Yard | Waiting | Working |\n| :--- | ------: | ------: |\n| home | none | 3 |\n| airy | 2 | none |\n\n> Hold the autumn timetable until the folded\n> carriers are printed.\n\nSee the [release page](https://yardr.dev/releases) before you start.\n\n---"));
             }
             // The call for the flows is taken and the connection closed
             // with no reply, as by a server that went away over it: the
@@ -1708,9 +1712,11 @@ fn populate(yard: &Yard, state: &str) {
         }
         "thread" => {
             // A long wrapped thread from alternating senders, the
-            // newest mail with an image: the window opens on it, so
-            // the shot shows the reading column with wrapped mail. The
-            // yard holds the image, as in the mail state.
+            // newest mail holding the whole-text Markdown sample, above
+            // one with an image: the window opens on the sample, so the
+            // shot shows the reading column with wrapped mail and the
+            // table, quote, named link and rule. The yard holds the
+            // image, as in the mail state.
             yard.blob(IMAGE_HASH, IMAGE);
             yard.answer(
                 "UserInbox",
@@ -1739,6 +1745,9 @@ fn populate(yard: &Yard, state: &str) {
                      "text": "The three screenshots from the builder's note: the editor with the override typed in and the reset button, the list and header after saving, and after reset.",
                      "files": [{"hash": IMAGE_HASH, "type": "image/png",
                                 "bytes": IMAGE.len()}],
+                     "read": true},
+                    {"seq": 19, "at": "2026-10-13T10:40:00Z", "from": "yardmaster", "to": "jo",
+                     "text": "Two yards answer tonight:\n\n| Yard | Waiting | Working |\n| :--- | ------: | ------: |\n| home | none | 3 |\n| airy | 2 | none |\n\n> Hold the autumn timetable until the folded\n> carriers are printed.\n\nSee the [release page](https://yardr.dev/releases) before you start.\n\n---",
                      "read": true},
                 ]})
                 .to_string(),
@@ -1880,7 +1889,10 @@ fn populate(yard: &Yard, state: &str) {
                 .to_string(),
             );
             yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
-            yard.answer("Bead", &bead_zulu());
+            yard.answer(
+                "Bead",
+                &bead_zulu("The turn the yard waits on: its tests are green, and the landing waits for the review."),
+            );
         }
         "refs" => {
             // The yardmaster's conversation naming an ask and two bead
@@ -2698,10 +2710,10 @@ fn queued_run(question: &str) -> serde_json::Value {
 }
 
 /// The arrival yd-zulu whole, as the Bead call answers it.
-fn bead_zulu() -> String {
+fn bead_zulu(body: &str) -> String {
     json!({"result": {
         "id": "yd-zulu", "title": "Zulu's late turn",
-        "body": "The turn the yard waits on: its tests are green, and the landing waits for the review.",
+        "body": body,
         "stage": "draft", "labels": ["size:medium", "eyes"],
         "notes": [
             {"seq": 3, "kind": "note", "author": "assembly",
@@ -3299,7 +3311,18 @@ mod tests {
                         assert_eq!(bead.title, "Zulu's late turn", "{state}");
                         assert_eq!(bead.stage, "draft", "{state}");
                         assert_eq!(bead.labels.len(), 2, "{state}");
-                        assert!(!bead.body.is_empty(), "{state}");
+                        // The body holds the whole-text Markdown sample.
+                        assert!(
+                            bead.body.contains("| Yard | Waiting | Working |"),
+                            "{state}"
+                        );
+                        assert!(bead.body.contains("> Hold the autumn timetable"), "{state}");
+                        assert!(
+                            bead.body
+                                .contains("[release page](https://yardr.dev/releases)"),
+                            "{state}"
+                        );
+                        assert!(bead.body.ends_with("\n---"), "{state}");
                         assert_eq!(bead.notes.len(), 2, "{state}");
                         assert_eq!(bead.asks.len(), 3, "{state}");
                         assert_eq!(
@@ -3473,15 +3496,31 @@ mod tests {
                 }
                 "thread" => {
                     assert!(loaded.asks.open.is_empty(), "{state}");
-                    // Seven mails from alternating senders, the newest
+                    // Eight mails from alternating senders: the newest
+                    // holds the whole-text Markdown sample, above the one
                     // with the image the yard holds.
                     let image = yard.client().blob(IMAGE_HASH).unwrap().unwrap();
                     assert_eq!(image.len(), IMAGE.len(), "{state}");
                     let letters = yard.client().conversation("jo", "yardmaster", 0).unwrap();
-                    assert_eq!(letters.len(), 7, "{state}");
+                    assert_eq!(letters.len(), 8, "{state}");
                     assert_eq!(letters[1].from, "jo", "{state}");
                     assert_eq!(letters[6].files.len(), 1, "{state}");
                     assert!(crate::model::is_image(&letters[6].files[0]), "{state}");
+                    assert!(
+                        letters[7].text.contains("| Yard | Waiting | Working |"),
+                        "{state}"
+                    );
+                    assert!(
+                        letters[7].text.contains("> Hold the autumn timetable"),
+                        "{state}"
+                    );
+                    assert!(
+                        letters[7]
+                            .text
+                            .contains("[release page](https://yardr.dev/releases)"),
+                        "{state}"
+                    );
+                    assert!(letters[7].text.ends_with("\n---"), "{state}");
                 }
                 "column" | "column-hover" | "column-copy" | "column-top" => {
                     assert!(loaded.asks.open.is_empty(), "{state}");

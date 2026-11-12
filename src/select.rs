@@ -18,16 +18,16 @@ use std::time::Duration;
 
 use gpui::{
     AnyTooltip, AnyView, App, AppContext, Bounds, ClipboardItem, Context, CursorStyle,
-    DispatchPhase, Element, ElementId, Entity, FontStyle, FontWeight, GlobalElementId, Hitbox,
-    HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, Style,
-    Styled, StyledText, TextLayout, TextRun, TextStyle, TextStyleRefinement, UnderlineStyle,
-    Window, div, fill, point, px, rems, size,
+    DispatchPhase, Display, Element, ElementId, Entity, FlexDirection, FontStyle, FontWeight,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
+    Render, SharedString, Style, Styled, StyledText, TextAlign, TextLayout, TextRun, TextStyle,
+    TextStyleRefinement, UnderlineStyle, Window, div, fill, point, px, rems, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::input::next_boundary;
-use crate::markdown::{self, Block, Kind, Marks};
+use crate::markdown::{self, Align, Block, Cell, Kind, Marks, NamedLink};
 use crate::theme::Palette;
 
 /// What is selected in the talk, if anything is.
@@ -59,6 +59,15 @@ type Chips = Vec<(usize, Bounds<Pixels>)>;
 enum Clicked {
     Link(SharedString),
     Ref(RefTarget),
+}
+
+/// What a press was on: the place in the source, the link or reference
+/// under the pointer, and a named link's shape whole where the press
+/// was on one's words.
+struct Press {
+    place: Range<usize>,
+    clicked: Option<Clicked>,
+    shape: Option<Range<usize>>,
 }
 
 struct Selected {
@@ -135,30 +144,29 @@ impl Selection {
             .is_some_and(|at| at.key == key && at.selecting)
     }
 
-    /// A press on the text `key` at `place`: what was selected is dropped,
-    /// wherever it was. A second press selects the word there. `clicked`
-    /// is the link or reference under the pointer.
+    /// A press on the text `key` at `at`: what was selected is dropped,
+    /// wherever it was. A second press selects the word there, or the
+    /// named link's shape whole where it was on one's words.
     fn press(
         &mut self,
         key: u64,
         text: SharedString,
-        place: Range<usize>,
-        clicked: Option<Clicked>,
+        at: Press,
         clicks: usize,
         cx: &mut Context<Self>,
     ) {
         let word = clicks == 2;
         // The word after the marks that stand there.
         let anchor = if word {
-            word_at(&text, place.end)
+            at.shape.unwrap_or_else(|| word_at(&text, at.place.end))
         } else {
-            place
+            at.place
         };
         self.at = Some(Selected {
             key,
             text,
             // The first press of the two has opened it already.
-            clicked: clicked.filter(|_| clicks == 1),
+            clicked: at.clicked.filter(|_| clicks == 1),
             range: anchor.start..if word { anchor.end } else { anchor.start },
             anchor,
             word,
@@ -318,9 +326,11 @@ pub fn links(text: &str) -> Vec<Range<usize>> {
 }
 
 /// A link as it is drawn: `from` is where the full link stands in the
-/// block's text, `shown` where its form stands in what gpui lays out,
-/// and `url` what a click opens. A long link's form is its short one,
-/// and the tooltip names it whole; a short link draws as written.
+/// block's text, or a named link's words, `shown` where its form stands
+/// in what gpui lays out, and `url` what a click opens. A long link's
+/// form is its short one, and the tooltip names it whole; a short link
+/// draws as written, and a named link draws its words with its host
+/// beside them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ShownLink {
     from: Range<usize>,
@@ -328,30 +338,96 @@ struct ShownLink {
     url: SharedString,
     /// Whether the link draws in its short form: only then does the
     /// tooltip stand over it, since a short link already shows its
-    /// whole URL, and only then do its bounds round out to it.
+    /// whole URL, and only then do its bounds round out to it. A named
+    /// link always does: the tooltip names the address its words hide.
     short: bool,
+    /// Where ` · host` stands in what is drawn, for a named link: none
+    /// for a bare one, whose short form is the link whole.
+    host: Option<Range<usize>>,
 }
 
-/// What gpui lays out for the block's `text`, whose links are `links`:
-/// the text with every long link in its short form, and each link's
-/// spans in both. The spans stand in order, and never overlap.
-fn shrink(text: &str, links: &[Range<usize>]) -> (String, Vec<ShownLink>) {
+/// Between a named link's words and its host.
+const HOST_SEP: &str = " · ";
+
+/// What of a link draws in the link dress: a bare link's short form
+/// whole, or a named link's words without the host beside them.
+fn dressed(link: &ShownLink) -> Range<usize> {
+    link.shown.start..link.host.as_ref().map_or(link.shown.end, |host| host.start)
+}
+
+/// The link under the character `at`: a named link's words are active,
+/// its faint host is only a label beside them.
+fn link_at(links: &[ShownLink], at: usize) -> Option<&ShownLink> {
+    links.iter().find(|link| dressed(link).contains(&at))
+}
+
+/// What gpui lays out for the words `text`, whose bare links are `links`
+/// and whose named links are `named`: the text with every long link in
+/// its short form and every named link's host beside its words, and
+/// each link's spans in both. The spans stand in order, and never
+/// overlap: a bare link over a named link's words is none, since the
+/// words open whole.
+fn shrink(text: &str, links: &[Range<usize>], named: &[NamedLink]) -> (String, Vec<ShownLink>) {
+    let links: Vec<Range<usize>> = links
+        .iter()
+        .filter(|link| {
+            !named
+                .iter()
+                .any(|named| link.start < named.shown.end && named.shown.start < link.end)
+        })
+        .cloned()
+        .collect();
+    enum Cut<'a> {
+        Bare(&'a Range<usize>),
+        Named(&'a NamedLink),
+    }
+    let mut cuts: Vec<(usize, Cut)> = links
+        .iter()
+        .map(|link| (link.start, Cut::Bare(link)))
+        .chain(
+            named
+                .iter()
+                .map(|link| (link.shown.start, Cut::Named(link))),
+        )
+        .collect();
+    cuts.sort_by_key(|(at, _)| *at);
     let mut display = String::with_capacity(text.len());
-    let mut shown = Vec::with_capacity(links.len());
+    let mut shown = Vec::with_capacity(cuts.len());
     let mut at = 0;
-    for link in links {
-        display.push_str(&text[at..link.start]);
-        let url = &text[link.clone()];
-        let short = markdown::short_link(url);
-        let start = display.len();
-        display.push_str(&short);
-        shown.push(ShownLink {
-            from: link.clone(),
-            shown: start..display.len(),
-            short: short != url,
-            url: url.to_string().into(),
-        });
-        at = link.end;
+    for (_, cut) in cuts {
+        match cut {
+            Cut::Bare(link) => {
+                display.push_str(&text[at..link.start]);
+                let url = &text[link.clone()];
+                let short = markdown::short_link(url);
+                let start = display.len();
+                display.push_str(&short);
+                shown.push(ShownLink {
+                    from: link.clone(),
+                    shown: start..display.len(),
+                    short: short != url,
+                    url: url.to_string().into(),
+                    host: None,
+                });
+                at = link.end;
+            }
+            Cut::Named(link) => {
+                display.push_str(&text[at..link.shown.start]);
+                let start = display.len();
+                display.push_str(&text[link.shown.clone()]);
+                let host_at = display.len();
+                display.push_str(HOST_SEP);
+                display.push_str(&markdown::link_host(&link.url));
+                shown.push(ShownLink {
+                    from: link.shown.clone(),
+                    shown: start..display.len(),
+                    url: link.url.clone().into(),
+                    short: true,
+                    host: Some(host_at..display.len()),
+                });
+                at = link.shown.end;
+            }
+        }
     }
     display.push_str(&text[at..]);
     (display, shown)
@@ -360,58 +436,70 @@ fn shrink(text: &str, links: &[Range<usize>]) -> (String, Vec<ShownLink>) {
 /// Where the display boundary `at` stands in the block's text. Inside
 /// a shortened link at its start, and at its end where the boundary is
 /// the link's end, so that selecting the short form selects the whole
-/// link. Everywhere else the shift the shorter links before it made.
+/// link; a named link's words with its host stand for the words the
+/// same way. Everywhere else the shift the links before it made.
 fn to_src(links: &[ShownLink], at: usize) -> usize {
     for link in links {
-        // Ahead of the link, or in one that draws whole: the shift the
-        // shorter links before it made.
-        if at <= link.shown.start || !link.short && at < link.shown.end {
-            return at + (link.from.start - link.shown.start);
+        // Ahead of the link: the shift the links before it made.
+        if at <= link.shown.start {
+            return (at as i64 + link.from.start as i64 - link.shown.start as i64) as usize;
         }
-        // In a shortened link at its start, and at its end on its end.
+        // In a shortened link at its start; in one that draws whole the
+        // same character, shifted past the links before it.
         if at < link.shown.end {
-            return link.from.start;
+            if link.short {
+                return link.from.start;
+            }
+            return (at as i64 + link.from.start as i64 - link.shown.start as i64) as usize;
         }
+        // At the link's end on its end.
         if at == link.shown.end {
             return link.from.end;
         }
     }
     match links.last() {
-        Some(link) => at + (link.from.end - link.shown.end),
+        Some(link) => (at as i64 + link.from.end as i64 - link.shown.end as i64) as usize,
         None => at,
     }
 }
 
 /// Where the block-text range stands in what is drawn. A bound inside
-/// a shortened link rounds out to the link's short form, so that what
-/// is selected of a link highlights it whole. References never stand
+/// a shortened link rounds out to the link's short form, or to a named
+/// link's words without the host beside them, so that what is selected
+/// of a link highlights it whole. An empty range stands where it
+/// stands, shifted past the links before it. References never stand
 /// inside a link, so theirs only shift.
 fn to_display(links: &[ShownLink], range: Range<usize>) -> Range<usize> {
     // The shift before the link `at` stands ahead of: what the
-    // shorter links before it took.
+    // shorter links before it took, or what the hosts beside named
+    // links added.
     let shift = |at: usize| {
         links.iter().find(|link| at < link.from.end).map_or_else(
             || {
                 links
                     .last()
-                    .map_or(0, |link| link.from.end - link.shown.end)
+                    .map_or(0, |link| link.from.end as i64 - link.shown.end as i64)
             },
-            |link| link.from.start - link.shown.start,
+            |link| link.from.start as i64 - link.shown.start as i64,
         )
     };
+    if range.is_empty() {
+        let shifted = (range.start as i64 - shift(range.start)) as usize;
+        return shifted..shifted;
+    }
     let start = match links
         .iter()
         .find(|link| link.short && link.from.start <= range.start && range.start < link.from.end)
     {
         Some(link) => link.shown.start,
-        None => range.start - shift(range.start),
+        None => (range.start as i64 - shift(range.start)) as usize,
     };
     let end = match links
         .iter()
         .find(|link| link.short && link.from.start < range.end && range.end <= link.from.end)
     {
-        Some(link) => link.shown.end,
-        None => range.end - shift(range.end),
+        Some(link) => dressed(link).end,
+        None => (range.end as i64 - shift(range.end)) as usize,
     };
     start..end
 }
@@ -433,6 +521,9 @@ pub enum RefTarget {
 pub struct RefSpan {
     /// The block it stands in, as `markdown::blocks` numbers them.
     pub block: usize,
+    /// The table cell it stands in, row 0 being the head: none elsewhere.
+    /// The range is in the cell's words where one stands, else the block's.
+    pub cell: Option<(usize, usize)>,
     pub range: Range<usize>,
     pub target: RefTarget,
 }
@@ -635,6 +726,39 @@ pub fn refs(text: &str) -> Vec<Ref> {
     out
 }
 
+/// The asks and bead ids a block names, each with the table cell it
+/// stands in, row 0 being the head: outside any named link's words,
+/// which open whole.
+pub fn block_refs(block: &Block) -> Vec<(Option<(usize, usize)>, Ref)> {
+    match &block.kind {
+        Kind::Table { head, rows, .. } => {
+            let mut out = Vec::new();
+            for (row, cells) in std::iter::once(head).chain(rows).enumerate() {
+                for (col, cell) in cells.iter().enumerate() {
+                    let skip: Vec<Range<usize>> =
+                        cell.links.iter().map(|link| link.shown.clone()).collect();
+                    out.extend(
+                        refs(&cell.text)
+                            .into_iter()
+                            .filter(|found| !overlaps(&skip, &found.range))
+                            .map(|found| (Some((row, col)), found)),
+                    );
+                }
+            }
+            out
+        }
+        _ => {
+            let skip: Vec<Range<usize>> =
+                block.links.iter().map(|link| link.shown.clone()).collect();
+            refs(&block.text)
+                .into_iter()
+                .filter(|found| !overlaps(&skip, &found.range))
+                .map(|found| (None, found))
+                .collect()
+        }
+    }
+}
+
 /// Where in `text` a pointer at `position` is: the boundary between two
 /// characters that is closest to it, as in the typed line. Above the text
 /// that is its start, below it its end.
@@ -674,9 +798,33 @@ struct Shown {
     /// The resolved references in what is drawn, each with what opening
     /// it shows.
     refs: Vec<(Range<usize>, RefTarget)>,
+    /// A table's cells as they are drawn, row 0 being the head: empty
+    /// where the block is no table.
+    cells: Vec<Vec<CellShown>>,
     /// An exact copy payload for a code block whose displayed form was
     /// sanitized before it reached the markdown reader.
     copy_override: Option<SharedString>,
+}
+
+/// One table cell as it is drawn.
+struct CellShown {
+    /// What gpui lays out: the cell's words with every long link in its
+    /// short form and every named link's host beside its words.
+    display: SharedString,
+    /// The links in both, each with the URL a click opens.
+    links: Vec<ShownLink>,
+    /// The resolved references in what is drawn, each with what opening
+    /// it shows.
+    refs: Vec<(Range<usize>, RefTarget)>,
+}
+
+/// The table cell at `row` and `col` of `block`, row 0 being the head.
+fn table_cell(block: &Block, row: usize, col: usize) -> Option<&Cell> {
+    match &block.kind {
+        Kind::Table { head, .. } if row == 0 => head.get(col),
+        Kind::Table { rows, .. } if row > 0 => rows.get(row - 1)?.get(col),
+        _ => None,
+    }
 }
 
 /// The text `text` of the talk, which `selection` may be in. `key` tells it
@@ -745,7 +893,41 @@ fn text_inner(
         .into_iter()
         .enumerate()
         .map(|(ix, block)| {
-            let (display, links) = shrink(&block.text, &links(&block.text));
+            let cells = match &block.kind {
+                Kind::Table { head, rows, .. } => std::iter::once(head)
+                    .chain(rows)
+                    .enumerate()
+                    .map(|(row, cells)| {
+                        cells
+                            .iter()
+                            .enumerate()
+                            .map(|(col, cell)| {
+                                let (display, links) =
+                                    shrink(&cell.text, &links(&cell.text), &cell.links);
+                                let refs = refs
+                                    .iter()
+                                    .filter(|span| {
+                                        span.block == ix && span.cell == Some((row, col))
+                                    })
+                                    .map(|span| {
+                                        (
+                                            to_display(&links, span.range.clone()),
+                                            span.target.clone(),
+                                        )
+                                    })
+                                    .collect();
+                                CellShown {
+                                    display: display.into(),
+                                    links,
+                                    refs,
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let (display, links) = shrink(&block.text, &links(&block.text), &block.links);
             Shown {
                 copy_override: if block.kind == Kind::Code {
                     code_copy.take()
@@ -755,9 +937,10 @@ fn text_inner(
                 display: display.into(),
                 refs: refs
                     .iter()
-                    .filter(|span| span.block == ix)
+                    .filter(|span| span.block == ix && span.cell.is_none())
                     .map(|span| (to_display(&links, span.range.clone()), span.target.clone()))
                     .collect(),
+                cells,
                 links,
                 block,
             }
@@ -786,6 +969,18 @@ pub fn key(of: impl Hash) -> u64 {
 pub const ITEM_INDENT: f32 = 1.5;
 /// Between a marker and its item's words.
 const MARKER_GAP: f32 = 0.4;
+/// How far a quote's words stand in from the edge of the text, in rems:
+/// the bar is in that space.
+const QUOTE_INSET: f32 = 0.75;
+/// How wide a quote's bar is, in pixels.
+const QUOTE_BAR: f32 = 3.;
+/// Around a table cell's words: half a rem at each side, and six pixels
+/// above and below, as the design gives them.
+const CELL_SIDE: f32 = 0.5;
+const CELL_ENDS: f32 = 6.;
+/// The widest share of the reading column one table column takes: two
+/// fifths.
+const TABLE_COLUMN_CAP: f32 = 0.4;
 /// Around the lines of a code block, inside its ground. The left is wider:
 /// the mark of a line that was wrapped stands there.
 const CODE_LEFT: f32 = 1.;
@@ -858,42 +1053,106 @@ fn face(kind: &Kind, base: &TextStyle, mono: Option<&SharedString>, rem: Pixels)
                 face.font_family = mono.clone();
             }
         }
-        Kind::Text | Kind::Item { .. } => {}
+        Kind::Text | Kind::Item { .. } | Kind::Table { .. } | Kind::Quote | Kind::Rule => {}
     }
     face
 }
 
-/// The runs `shown` is drawn in, in the face `face` of its kind:
-/// bold, italic and inline code as its marks say, with a quiet ground
-/// under the code; a link as one, in the link blue; a reference as a
-/// chip, in the code's face on its ground but in the link blue, with
-/// no underline; and `selected` of it on the selection's ground.
-/// `selected` stands in
-/// the text as it was written, as the selection keeps it; every other
-/// range stands in what gpui lays out, the long links shortened. A
-/// selection may begin or end inside a link or a mark: the runs do not
-/// overlap.
+/// The face a table cell is drawn in: its block's, semibold where the
+/// cell is in the head.
+fn cell_face(head: bool, face: &TextStyle) -> TextStyle {
+    let mut face = face.clone();
+    if head {
+        face.font_weight = FontWeight::SEMIBOLD;
+    }
+    face
+}
+
+/// Each column's share of the table's width from its cells' measures:
+/// weighed by the widest cell up to two fifths of the column, what
+/// remains shared. The shares add to one.
+fn columns(natural: &[f32]) -> Vec<f32> {
+    let mut shares = vec![0.0; natural.len()];
+    let mut open: Vec<usize> = (0..natural.len()).collect();
+    let mut remaining = 1.0;
+    while !open.is_empty() {
+        let total: f32 = open.iter().map(|&i| natural[i]).sum();
+        let share = |i: usize| {
+            if total > 0.0 {
+                remaining * natural[i] / total
+            } else {
+                remaining / open.len() as f32
+            }
+        };
+        let capped: Vec<usize> = open
+            .iter()
+            .copied()
+            .filter(|&i| share(i) > TABLE_COLUMN_CAP)
+            .collect();
+        if capped.is_empty() {
+            for &i in &open {
+                shares[i] = share(i);
+            }
+            return shares;
+        }
+        for i in capped {
+            shares[i] = TABLE_COLUMN_CAP;
+            remaining -= TABLE_COLUMN_CAP;
+            open.retain(|&j| j != i);
+        }
+    }
+    // Every column capped: what remains is shared equally.
+    if remaining > 0.0 {
+        let each = remaining / shares.len() as f32;
+        for share in shares.iter_mut() {
+            *share += each;
+        }
+    }
+    shares
+}
+
+/// What runs are drawn with: the words' face, the palette, and the
+/// monospaced face where the machine has one.
+struct Draw<'a> {
+    face: &'a TextStyle,
+    palette: &'a Palette,
+    mono: Option<&'a SharedString>,
+}
+
+/// The runs words are drawn in: bold, italic and inline code as `marks`
+/// say, with a quiet ground under the code; a link as one, in the link
+/// blue, a named link's host beside its words in the faint colour with
+/// neither underline nor selection ground; a reference as a chip, in
+/// the code's face on its ground but in the link blue, with no
+/// underline; and `selected` of the words on the selection's ground.
+/// `marks` and `selected` stand in the words; `refs` and every link's
+/// spans stand in `display`, the long links shortened. A selection may
+/// begin or end inside a link or a mark: the runs do not overlap.
 fn runs(
-    shown: &Shown,
-    face: &TextStyle,
-    palette: &Palette,
-    mono: Option<&SharedString>,
+    display: &str,
+    marks: &[(Range<usize>, Marks)],
+    links: &[ShownLink],
     refs: &[Range<usize>],
     selected: Option<Range<usize>>,
+    draw: &Draw,
 ) -> Vec<TextRun> {
-    let block = &shown.block;
     let selected = selected
-        .map(|selected| to_display(&shown.links, block.shown(selected)))
+        .map(|selected| to_display(links, selected))
         .filter(|selected| !selected.is_empty());
-    let marks: Vec<(Range<usize>, Marks)> = block
-        .marks
+    let marks: Vec<(Range<usize>, Marks)> = marks
         .iter()
-        .map(|(range, marks)| (to_display(&shown.links, range.clone()), *marks))
+        .map(|(range, marks)| (to_display(links, range.clone()), *marks))
         .collect();
-    let links: Vec<Range<usize>> = shown.links.iter().map(|link| link.shown.clone()).collect();
-    let mut cuts = vec![0, shown.display.len()];
+    let dressed: Vec<Range<usize>> = links.iter().map(dressed).collect();
+    let hosts: Vec<Range<usize>> = links.iter().filter_map(|link| link.host.clone()).collect();
+    let mut cuts = vec![0, display.len()];
     let marked = marks.iter().map(|(range, _)| range);
-    for range in marked.chain(&links).chain(refs).chain(&selected) {
+    for range in marked
+        .chain(&dressed)
+        .chain(&hosts)
+        .chain(refs)
+        .chain(&selected)
+    {
         cuts.extend([range.start, range.end]);
     }
     cuts.sort_unstable();
@@ -902,7 +1161,7 @@ fn runs(
     let mut runs = Vec::new();
     for cut in cuts.windows(2) {
         let (start, end) = (cut[0], cut[1]);
-        let mut run = face.to_run(end - start);
+        let mut run = draw.face.to_run(end - start);
         if let Some((_, marks)) = marks.iter().find(|(range, _)| within(range, start)) {
             if marks.bold {
                 run.font.weight = FontWeight::BOLD;
@@ -911,35 +1170,42 @@ fn runs(
                 run.font.style = FontStyle::Italic;
             }
             if marks.code {
-                if let Some(mono) = mono {
+                if let Some(mono) = draw.mono {
                     run.font.family = mono.clone();
                 }
-                run.background_color = Some(palette.code.into());
+                run.background_color = Some(draw.palette.code.into());
             }
         }
-        if links.iter().any(|link| within(link, start)) {
-            run.color = palette.link.into();
+        if dressed.iter().any(|link| within(link, start)) {
+            run.color = draw.palette.link.into();
             run.underline = Some(UnderlineStyle {
                 thickness: px(1.),
-                color: Some(palette.link.into()),
+                color: Some(draw.palette.link.into()),
                 wavy: false,
             });
         }
         if refs.iter().any(|reference| within(reference, start)) {
-            if let Some(mono) = mono {
+            if let Some(mono) = draw.mono {
                 run.font.family = mono.clone();
             }
-            run.color = palette.link.into();
-            run.background_color = Some(palette.code.into());
+            run.color = draw.palette.link.into();
+            run.background_color = Some(draw.palette.code.into());
         }
-        if selected.as_ref().is_some_and(|s| within(s, start)) {
-            run.background_color = Some(palette.selection.into());
+        // A named link's host: the faint colour, with neither the
+        // link's underline nor the selection's ground over it.
+        let hosted = hosts.iter().any(|host| within(host, start));
+        if hosted {
+            run.color = draw.palette.faint.into();
+            run.underline = None;
+        }
+        if !hosted && selected.as_ref().is_some_and(|s| within(s, start)) {
+            run.background_color = Some(draw.palette.selection.into());
         }
         runs.push(run);
     }
     // An empty text is one empty run, as gpui makes it.
     if runs.is_empty() {
-        runs.push(face.to_run(0));
+        runs.push(draw.face.to_run(0));
     }
     runs
 }
@@ -950,8 +1216,15 @@ fn runs(
 fn frame(block: &Block, before: Option<&Kind>) -> Style {
     let mut style = Style::default();
     if let Some(before) = before {
-        let heading = matches!(block.kind, Kind::Heading(_));
-        let above = if block.apart || heading {
+        // The wide room above a block a blank line stood before, above
+        // any heading or table, and above and below any rule.
+        let above = if block.apart
+            || matches!(
+                block.kind,
+                Kind::Heading(_) | Kind::Table { .. } | Kind::Rule
+            )
+            || *before == Kind::Rule
+        {
             APART
         } else if block.kind == Kind::Code || *before == Kind::Code {
             NEAR
@@ -970,7 +1243,15 @@ fn frame(block: &Block, before: Option<&Kind>) -> Style {
         Kind::Item { depth, .. } => {
             style.padding.left = rems(ITEM_INDENT * f32::from(depth + 1)).into();
         }
-        Kind::Text | Kind::Heading(_) => {}
+        Kind::Quote => {
+            style.padding.left = rems(QUOTE_INSET).into();
+        }
+        Kind::Rule => {
+            // The hairline alone: a pixel tall, with the wide room its
+            // margins give it.
+            style.size.height = px(1.).into();
+        }
+        Kind::Text | Kind::Heading(_) | Kind::Table { .. } => {}
     }
     style
 }
@@ -1012,20 +1293,153 @@ fn copy_chip(frame: Bounds<Pixels>, rem: Pixels) -> Bounds<Pixels> {
 #[derive(Clone)]
 struct Drawn {
     blocks: Rc<[Shown]>,
-    layouts: Rc<[TextLayout]>,
+    /// Each block's words where they are drawn: none where the block is
+    /// a table, whose cells stand in `cells`.
+    layouts: Rc<[Option<TextLayout>]>,
     /// Where each block's ground is drawn.
     frames: Rc<[Bounds<Pixels>]>,
     /// The copy control of each code block, by block.
     chips: Rc<[(usize, Bounds<Pixels>)]>,
+    /// Every table cell where it is drawn, by block, row and column.
+    cells: Rc<[CellDrawn]>,
+}
+
+/// One table cell where it is drawn: what the mouse goes by.
+#[derive(Clone)]
+struct CellDrawn {
+    block: usize,
+    row: usize,
+    col: usize,
+    layout: TextLayout,
+    /// Where the cell's frame is drawn, its room included.
+    frame: Bounds<Pixels>,
+    align: TextAlign,
+}
+
+/// Where the pointer stands in aligned words: gpui paints a right- or
+/// centre-aligned line shifted into its width, and finds positions as
+/// if it stood at the left, so the shift comes back off for the mouse.
+fn unshift(
+    layout: &TextLayout,
+    align: TextAlign,
+    display: &str,
+    position: Point<Pixels>,
+) -> Point<Pixels> {
+    let shift = align_shift(layout, align, display, position).unwrap_or(px(0.));
+    point(position.x - shift, position.y)
+}
+
+/// How far the line under the pointer is shifted into its width, where
+/// the words are right- or centre-aligned: the slack the line leaves,
+/// or half of it. None where the line cannot be found.
+fn align_shift(
+    layout: &TextLayout,
+    align: TextAlign,
+    display: &str,
+    position: Point<Pixels>,
+) -> Option<Pixels> {
+    if align == TextAlign::Left {
+        return Some(px(0.));
+    }
+    let mut probe = position;
+    probe.x = layout.bounds().left();
+    let mut ix = layout.index_for_position(probe).unwrap_or_else(|ix| ix);
+    ix = ix.min(display.len());
+    while !display.is_char_boundary(ix) {
+        ix -= 1;
+    }
+    let wrapped = layout.line_layout_for_index(ix)?;
+    let line = &wrapped.unwrapped_layout;
+    let start = display[..ix].rfind('\n').map_or(0, |at| at + 1);
+    let top = layout.position_for_index(start)?;
+    let row = (f32::from(position.y - top.y) / f32::from(layout.line_height()))
+        .round()
+        .max(0.) as usize;
+    let fragments = wrapped.wrap_boundaries.len() + 1;
+    let row = row.min(fragments - 1);
+    // The fragments' widths from their glyphs: the first glyph of the
+    // next fragment stands where this one ends, and the last fragment
+    // ends where the line does.
+    let first_x = |fragment: usize| {
+        if fragment == 0 {
+            return Some(px(0.));
+        }
+        let bound = wrapped.wrap_boundaries.get(fragment - 1)?;
+        let run = line.runs.get(bound.run_ix)?;
+        if let Some(glyph) = run.glyphs.get(bound.glyph_ix + 1) {
+            Some(glyph.position.x)
+        } else {
+            Some(line.runs.get(bound.run_ix + 1)?.glyphs.first()?.position.x)
+        }
+    };
+    let start_x = first_x(row)?;
+    let end_x = if row + 1 < fragments {
+        first_x(row + 1)?
+    } else {
+        line.width
+    };
+    let slack = layout.bounds().size.width - (end_x - start_x);
+    let slack = if slack > px(0.) { slack } else { px(0.) };
+    Some(match align {
+        TextAlign::Right => slack,
+        TextAlign::Center => slack / 2.,
+        TextAlign::Left => px(0.),
+    })
 }
 
 impl Drawn {
     /// The block the pointer at `position` is in. Between two blocks it is
     /// the lower one, whose start is closest, and under the last the last.
+    /// A rule's frame is its hairline; its empty text may stand taller,
+    /// and must not catch what is under it.
     fn block_at(&self, position: Point<Pixels>) -> Option<usize> {
-        let last = self.layouts.len().checked_sub(1)?;
-        let under = |layout: &TextLayout| position.y < layout.bounds().bottom();
-        Some(self.layouts.iter().position(under).unwrap_or(last))
+        let last = self.blocks.len().checked_sub(1)?;
+        let under = |ix: usize| {
+            let bottom = match self.layouts[ix].as_ref() {
+                Some(layout) => {
+                    let (text, frame) = (layout.bounds().bottom(), self.frames[ix].bottom());
+                    if text < frame { text } else { frame }
+                }
+                None => self.frames[ix].bottom(),
+            };
+            position.y < bottom
+        };
+        Some((0..self.blocks.len()).position(under).unwrap_or(last))
+    }
+
+    /// The table cell of the block `block` the pointer is in: the first
+    /// row standing under it, else the last, and within it the first
+    /// cell standing past it, else the last.
+    fn cell_at(&self, block: usize, position: Point<Pixels>) -> Option<(usize, usize)> {
+        let mut row = None;
+        let mut last = None;
+        for cell in self.cells.iter().filter(|cell| cell.block == block) {
+            last = Some(cell.row);
+            if row.is_none() && position.y < cell.frame.bottom() {
+                row = Some(cell.row);
+            }
+        }
+        let row = row.or(last)?;
+        let mut col = None;
+        let mut last = None;
+        for cell in self
+            .cells
+            .iter()
+            .filter(|cell| cell.block == block && cell.row == row)
+        {
+            last = Some(cell.col);
+            if col.is_none() && position.x < cell.frame.right() {
+                col = Some(cell.col);
+            }
+        }
+        Some((row, col.or(last)?))
+    }
+
+    /// The table cell drawn at `block`, `row` and `col`.
+    fn drawn_cell(&self, block: usize, row: usize, col: usize) -> Option<&CellDrawn> {
+        self.cells
+            .iter()
+            .find(|cell| cell.block == block && cell.row == row && cell.col == col)
     }
 
     /// Where in the text as it was written the pointer is: a place, with
@@ -1036,7 +1450,25 @@ impl Drawn {
             return 0..0;
         };
         let shown = &self.blocks[ix];
-        let index = index_at(&self.layouts[ix], &shown.display, position);
+        if matches!(shown.block.kind, Kind::Table { .. }) {
+            let Some((row, col)) = self.cell_at(ix, position) else {
+                return 0..0;
+            };
+            let (Some(cell), Some(words)) = (
+                self.drawn_cell(ix, row, col),
+                table_cell(&shown.block, row, col),
+            ) else {
+                return 0..0;
+            };
+            let display = &shown.cells[row][col].display;
+            let position = unshift(&cell.layout, cell.align, display, position);
+            let index = index_at(&cell.layout, display, position);
+            return words.source_at(to_src(&shown.cells[row][col].links, index));
+        }
+        let Some(layout) = self.layouts[ix].as_ref() else {
+            return 0..0;
+        };
+        let index = index_at(layout, &shown.display, position);
         shown.block.source_at(to_src(&shown.links, index))
     }
 
@@ -1046,7 +1478,20 @@ impl Drawn {
     fn short_link_at(&self, position: Point<Pixels>) -> Option<SharedString> {
         let ix = self.block_at(position)?;
         let shown = &self.blocks[ix];
-        let index = self.layouts[ix].index_for_position(position).ok()?;
+        if matches!(shown.block.kind, Kind::Table { .. }) {
+            let (row, col) = self.cell_at(ix, position)?;
+            let cell = self.drawn_cell(ix, row, col)?;
+            let display = &shown.cells[row][col].display;
+            let position = unshift(&cell.layout, cell.align, display, position);
+            let index = cell.layout.index_for_position(position).ok()?;
+            return shown.cells[row][col]
+                .links
+                .iter()
+                .find(|link| link.short && link.shown.contains(&index))
+                .map(|link| link.url.clone());
+        }
+        let layout = self.layouts[ix].as_ref()?;
+        let index = layout.index_for_position(position).ok()?;
         shown
             .links
             .iter()
@@ -1054,13 +1499,56 @@ impl Drawn {
             .map(|link| link.url.clone())
     }
 
+    /// The named link's shape under the pointer, where it is over one's
+    /// words: a second press selects it whole. The character under the
+    /// pointer counts here, not the closest boundary.
+    fn shape_at(&self, position: Point<Pixels>) -> Option<Range<usize>> {
+        let ix = self.block_at(position)?;
+        let shown = &self.blocks[ix];
+        if matches!(shown.block.kind, Kind::Table { .. }) {
+            let (row, col) = self.cell_at(ix, position)?;
+            let cell = self.drawn_cell(ix, row, col)?;
+            let display = &shown.cells[row][col].display;
+            let position = unshift(&cell.layout, cell.align, display, position);
+            let index = cell.layout.index_for_position(position).ok()?;
+            let link =
+                link_at(&shown.cells[row][col].links, index).filter(|link| link.host.is_some())?;
+            let words = table_cell(&shown.block, row, col)?;
+            return Some(
+                words.source_at(link.from.start).start..words.source_at(link.from.end).end,
+            );
+        }
+        let layout = self.layouts[ix].as_ref()?;
+        let index = layout.index_for_position(position).ok()?;
+        let link = link_at(&shown.links, index).filter(|link| link.host.is_some())?;
+        let block = &shown.block;
+        Some(block.source_at(link.from.start).start..block.source_at(link.from.end).end)
+    }
+
     /// The link or reference the pointer is over: the character under
     /// it counts here, not the closest boundary.
     fn clicked_at(&self, position: Point<Pixels>) -> Option<Clicked> {
         let ix = self.block_at(position)?;
         let shown = &self.blocks[ix];
-        let index = self.layouts[ix].index_for_position(position).ok()?;
-        if let Some(link) = shown.links.iter().find(|link| link.shown.contains(&index)) {
+        if matches!(shown.block.kind, Kind::Table { .. }) {
+            let (row, col) = self.cell_at(ix, position)?;
+            let cell = self.drawn_cell(ix, row, col)?;
+            let display = &shown.cells[row][col].display;
+            let position = unshift(&cell.layout, cell.align, display, position);
+            let index = cell.layout.index_for_position(position).ok()?;
+            let links = &shown.cells[row][col].links;
+            if let Some(link) = link_at(links, index) {
+                return Some(Clicked::Link(link.url.clone()));
+            }
+            return shown.cells[row][col]
+                .refs
+                .iter()
+                .find(|(range, _)| range.contains(&index))
+                .map(|(_, target)| Clicked::Ref(target.clone()));
+        }
+        let layout = self.layouts[ix].as_ref()?;
+        let index = layout.index_for_position(position).ok()?;
+        if let Some(link) = link_at(&shown.links, index) {
             return Some(Clicked::Link(link.url.clone()));
         }
         shown
@@ -1123,12 +1611,41 @@ pub struct Text {
 
 /// A block of a text where it is laid out.
 pub struct Laid {
+    /// The space around the block, and where it is once that is known.
+    frame: LayoutId,
+    bounds: Bounds<Pixels>,
+    text: LaidText,
+}
+
+/// A block's words where they are laid out: one text, or a table's rows
+/// of cell texts.
+enum LaidText {
+    One {
+        /// gpui's own text: it shapes, wraps and draws.
+        styled: StyledText,
+        text: LayoutId,
+    },
+    Table {
+        rows: Vec<RowLaid>,
+    },
+}
+
+/// One table row where it is laid out.
+struct RowLaid {
+    frame: LayoutId,
+    bounds: Bounds<Pixels>,
+    cells: Vec<CellLaid>,
+}
+
+/// One table cell where it is laid out.
+struct CellLaid {
     /// gpui's own text: it shapes, wraps and draws.
     styled: StyledText,
     text: LayoutId,
-    /// The space around the text, and where it is once that is known.
     frame: LayoutId,
-    bounds: Bounds<Pixels>,
+    /// Where the cell's frame is drawn, its room included.
+    frame_bounds: Bounds<Pixels>,
+    align: TextAlign,
 }
 
 impl IntoElement for Text {
@@ -1146,7 +1663,10 @@ impl Text {
             blocks: self.blocks.clone(),
             layouts: laid
                 .iter()
-                .map(|laid| laid.styled.layout().clone())
+                .map(|laid| match &laid.text {
+                    LaidText::One { styled, .. } => Some(styled.layout().clone()),
+                    LaidText::Table { .. } => None,
+                })
                 .collect(),
             frames: laid.iter().map(|laid| laid.bounds).collect(),
             chips: laid
@@ -1155,6 +1675,31 @@ impl Text {
                 .enumerate()
                 .filter(|(_, (_, shown))| shown.block.kind == Kind::Code)
                 .map(|(ix, (laid, _))| (ix, copy_chip(laid.bounds, rem)))
+                .collect(),
+            cells: laid
+                .iter()
+                .enumerate()
+                .flat_map(|(ix, laid)| match &laid.text {
+                    LaidText::Table { rows } => rows
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(row, laid)| {
+                            laid.cells
+                                .iter()
+                                .enumerate()
+                                .map(move |(col, cell)| CellDrawn {
+                                    block: ix,
+                                    row,
+                                    col,
+                                    layout: cell.styled.layout().clone(),
+                                    frame: cell.frame_bounds,
+                                    align: cell.align,
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>(),
+                    LaidText::One { .. } => Vec::new(),
+                })
                 .collect(),
         }
     }
@@ -1186,16 +1731,131 @@ impl Element for Text {
         let mut before = None;
         for shown in self.blocks.iter() {
             let block = &shown.block;
+            if let Kind::Table { head, rows, align } = &block.kind {
+                // Each column weighed by its widest cell's words, shaped
+                // as one line, with the cell's room at each side.
+                let size = base.font_size.to_pixels(rem);
+                let natural: Vec<f32> = (0..align.len())
+                    .map(|col| {
+                        let mut widest = 0f32;
+                        for row in 0..shown.cells.len() {
+                            let display = &shown.cells[row][col].display;
+                            if display.is_empty() {
+                                continue;
+                            }
+                            let mut run = base.to_run(display.len());
+                            if row == 0 {
+                                run.font.weight = FontWeight::SEMIBOLD;
+                            }
+                            let line = window.text_system().shape_line(
+                                display.clone(),
+                                size,
+                                &[run],
+                                None,
+                            );
+                            widest = widest.max(f32::from(line.width));
+                        }
+                        widest + f32::from(rem * 2. * CELL_SIDE)
+                    })
+                    .collect();
+                let shares = columns(&natural);
+                let mut row_frames = Vec::with_capacity(shown.cells.len());
+                let mut laid_rows = Vec::with_capacity(shown.cells.len());
+                for (row, cells) in std::iter::once(head).chain(rows).enumerate() {
+                    let mut cell_frames = Vec::with_capacity(cells.len());
+                    let mut laid_cells = Vec::with_capacity(cells.len());
+                    for (col, words) in cells.iter().enumerate() {
+                        let cell = &shown.cells[row][col];
+                        let face =
+                            cell_face(row == 0, &face(&block.kind, &base, mono.as_ref(), rem));
+                        let refs: Vec<Range<usize>> =
+                            cell.refs.iter().map(|(range, _)| range.clone()).collect();
+                        let selected = selected.clone().map(|selected| words.shown(selected));
+                        let draw = Draw {
+                            face: &face,
+                            palette: &palette,
+                            mono: mono.as_ref(),
+                        };
+                        let runs = runs(
+                            &cell.display,
+                            &words.marks,
+                            &cell.links,
+                            &refs,
+                            selected,
+                            &draw,
+                        );
+                        let mut styled = StyledText::new(cell.display.clone()).with_runs(runs);
+                        let align = match align[col] {
+                            Align::Left => TextAlign::Left,
+                            Align::Centre => TextAlign::Center,
+                            Align::Right => TextAlign::Right,
+                        };
+                        // gpui takes the size of the lines from the
+                        // window, not from the runs, and paints each
+                        // line where its alignment says.
+                        let size = TextStyleRefinement {
+                            font_size: Some(face.font_size),
+                            text_align: Some(align),
+                            ..Default::default()
+                        };
+                        let (text, ()) = window.with_text_style(Some(size), |window| {
+                            styled.request_layout(None, None, window, cx)
+                        });
+                        let mut cell_style = Style::default();
+                        cell_style.padding.left = rems(CELL_SIDE).into();
+                        cell_style.padding.right = rems(CELL_SIDE).into();
+                        cell_style.padding.top = px(CELL_ENDS).into();
+                        cell_style.padding.bottom = px(CELL_ENDS).into();
+                        cell_style.flex_basis = px(0.).into();
+                        cell_style.flex_grow = shares[col];
+                        let frame = window.request_layout(cell_style, [text], cx);
+                        cell_frames.push(frame);
+                        laid_cells.push(CellLaid {
+                            styled,
+                            text,
+                            frame,
+                            frame_bounds: Bounds::default(),
+                            align,
+                        });
+                    }
+                    let row_style = Style {
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Row,
+                        ..Default::default()
+                    };
+                    let frame = window.request_layout(row_style, cell_frames, cx);
+                    row_frames.push(frame);
+                    laid_rows.push(RowLaid {
+                        frame,
+                        bounds: Bounds::default(),
+                        cells: laid_cells,
+                    });
+                }
+                let frame = window.request_layout(frame(block, before), row_frames, cx);
+                before = Some(&block.kind);
+                laid.push(Laid {
+                    frame,
+                    bounds: Bounds::default(),
+                    text: LaidText::Table { rows: laid_rows },
+                });
+                continue;
+            }
             let face = face(&block.kind, &base, mono.as_ref(), rem);
             let refs: Vec<Range<usize>> =
                 shown.refs.iter().map(|(range, _)| range.clone()).collect();
+            let selected = selected.clone().map(|selected| shown.block.shown(selected));
+            let draw = Draw {
+                face: &face,
+                palette: &palette,
+                mono: mono.as_ref(),
+            };
             let runs = runs(
-                shown,
-                &face,
-                &palette,
-                mono.as_ref(),
+                &shown.display,
+                &shown.block.marks,
+                &shown.links,
                 &refs,
-                selected.clone(),
+                selected,
+                &draw,
             );
             let mut styled = StyledText::new(shown.display.clone()).with_runs(runs);
             // gpui takes the size of the lines from the window, not from
@@ -1210,10 +1870,9 @@ impl Element for Text {
             let frame = window.request_layout(frame(block, before), [text], cx);
             before = Some(&block.kind);
             laid.push(Laid {
-                styled,
-                text,
                 frame,
                 bounds: Bounds::default(),
+                text: LaidText::One { styled, text },
             });
         }
         let frames: Vec<LayoutId> = laid.iter().map(|laid| laid.frame).collect();
@@ -1230,8 +1889,23 @@ impl Element for Text {
         cx: &mut App,
     ) -> Self::PrepaintState {
         for laid in laid.iter_mut() {
-            let text = window.layout_bounds(laid.text);
-            laid.styled.prepaint(None, None, text, &mut (), window, cx);
+            match &mut laid.text {
+                LaidText::One { styled, text } => {
+                    let bounds = window.layout_bounds(*text);
+                    styled.prepaint(None, None, bounds, &mut (), window, cx);
+                }
+                LaidText::Table { rows } => {
+                    for row in rows.iter_mut() {
+                        row.bounds = window.layout_bounds(row.frame);
+                        for cell in row.cells.iter_mut() {
+                            let bounds = window.layout_bounds(cell.text);
+                            cell.styled
+                                .prepaint(None, None, bounds, &mut (), window, cx);
+                            cell.frame_bounds = window.layout_bounds(cell.frame);
+                        }
+                    }
+                }
+            }
             laid.bounds = window.layout_bounds(laid.frame);
         }
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
@@ -1299,35 +1973,81 @@ impl Element for Text {
             selection.note_chips(key, drawn.chips.to_vec())
         });
         for (laid, shown) in laid.iter_mut().zip(self.blocks.iter()) {
-            let layout = laid.styled.layout().clone();
-            let text = layout.bounds();
-            match &shown.block.kind {
-                Kind::Code => {
-                    window.paint_quad(fill(laid.bounds, palette.code).corner_radii(rem * 0.25));
-                    let rows = wrapped_rows(&layout, &shown.display);
-                    if !rows.is_empty() {
-                        let mark = beside(WRAPPED, palette.faint, window);
-                        let left = text.left() - (rem * CODE_LEFT + mark.width) / 2.;
-                        for row in rows {
-                            let at = point(left, row.y);
-                            let _ = mark.paint(at, layout.line_height(), window, cx);
+            let frame = laid.bounds;
+            match &mut laid.text {
+                // Hairlines divide a table's rows: under the head and
+                // between the body rows, with none after the last.
+                LaidText::Table { rows } => {
+                    let count = rows.len();
+                    for (r, row) in rows.iter_mut().enumerate() {
+                        if r + 1 < count {
+                            let hairline = Bounds::new(
+                                point(frame.left(), row.bounds.bottom()),
+                                gpui::size(frame.size.width, px(1.)),
+                            );
+                            window.paint_quad(fill(hairline, palette.line));
+                        }
+                        for cell in row.cells.iter_mut() {
+                            let size = TextStyleRefinement {
+                                text_align: Some(cell.align),
+                                ..Default::default()
+                            };
+                            let bounds = cell.styled.layout().bounds();
+                            window.with_text_style(Some(size), |window| {
+                                cell.styled
+                                    .paint(None, None, bounds, &mut (), &mut (), window, cx);
+                            });
                         }
                     }
                 }
-                Kind::Item { marker, .. } => {
-                    let mut run = base.to_run(marker.len());
-                    run.color = palette.faint.into();
-                    let marker =
-                        window
-                            .text_system()
-                            .shape_line(marker.clone().into(), size, &[run], None);
-                    let at = point(text.left() - rem * MARKER_GAP - marker.width, text.top());
-                    let _ = marker.paint(at, layout.line_height(), window, cx);
+                LaidText::One { styled, .. } => {
+                    let layout = styled.layout().clone();
+                    let text = layout.bounds();
+                    match &shown.block.kind {
+                        Kind::Code => {
+                            window.paint_quad(fill(frame, palette.code).corner_radii(rem * 0.25));
+                            let rows = wrapped_rows(&layout, &shown.display);
+                            if !rows.is_empty() {
+                                let mark = beside(WRAPPED, palette.faint, window);
+                                let left = text.left() - (rem * CODE_LEFT + mark.width) / 2.;
+                                for row in rows {
+                                    let at = point(left, row.y);
+                                    let _ = mark.paint(at, layout.line_height(), window, cx);
+                                }
+                            }
+                        }
+                        Kind::Item { marker, .. } => {
+                            let mut run = base.to_run(marker.len());
+                            run.color = palette.faint.into();
+                            let marker = window.text_system().shape_line(
+                                marker.clone().into(),
+                                size,
+                                &[run],
+                                None,
+                            );
+                            let at =
+                                point(text.left() - rem * MARKER_GAP - marker.width, text.top());
+                            let _ = marker.paint(at, layout.line_height(), window, cx);
+                        }
+                        Kind::Quote => {
+                            let bar = Bounds::new(
+                                point(frame.left(), frame.top()),
+                                gpui::size(px(QUOTE_BAR), frame.size.height),
+                            );
+                            window.paint_quad(fill(bar, palette.line));
+                        }
+                        Kind::Rule => {
+                            let line = Bounds::new(
+                                point(frame.left(), frame.top()),
+                                gpui::size(frame.size.width, px(1.)),
+                            );
+                            window.paint_quad(fill(line, palette.line));
+                        }
+                        Kind::Text | Kind::Heading(_) | Kind::Table { .. } => {}
+                    }
+                    styled.paint(None, None, text, &mut (), &mut (), window, cx);
                 }
-                Kind::Text | Kind::Heading(_) => {}
             }
-            laid.styled
-                .paint(None, None, text, &mut (), &mut (), window, cx);
         }
 
         // The copy control of a code block shows while the pointer is over
@@ -1348,6 +2068,9 @@ impl Element for Text {
             if Some(*ix) != hovered && !just_copied {
                 continue;
             }
+            let Some(layout) = drawn.layouts[*ix].as_ref() else {
+                continue;
+            };
             let label = if just_copied { "copied" } else { "copy" };
             window.paint_quad(fill(*chip, palette.side).corner_radii(rem * 0.25));
             let mut run = base.to_run(label.len());
@@ -1361,7 +2084,7 @@ impl Element for Text {
             let shaped = window
                 .text_system()
                 .shape_line(label.into(), size, &[run], None);
-            let height = drawn.layouts[*ix].line_height();
+            let height = layout.line_height();
             let at = point(
                 chip.left() + (chip.size.width - shaped.width) / 2.,
                 chip.top() + (chip.size.height - height) / 2.,
@@ -1413,10 +2136,15 @@ impl Element for Text {
                         }
                         return;
                     }
-                    let place = drawn.place_at(event.position);
-                    let clicked = over(event.position, window);
+                    let pressed = Press {
+                        place: drawn.place_at(event.position),
+                        clicked: over(event.position, window),
+                        shape: (event.click_count == 2)
+                            .then(|| drawn.shape_at(event.position))
+                            .flatten(),
+                    };
                     selection.update(cx, |selection, cx| {
-                        selection.press(key, text.clone(), place, clicked, event.click_count, cx)
+                        selection.press(key, text.clone(), pressed, event.click_count, cx)
                     });
                 } else if selection.read(cx).chip_at(event.position).is_none() {
                     // A click on another text's copy control is no press
@@ -1537,12 +2265,33 @@ mod tests {
 
     /// The block as it is drawn, with no resolved references.
     fn shown_block(block: Block) -> Shown {
-        let (display, links) = shrink(&block.text, &links(&block.text));
+        let cells = match &block.kind {
+            Kind::Table { head, rows, .. } => std::iter::once(head)
+                .chain(rows)
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .map(|cell| {
+                            let (display, links) =
+                                shrink(&cell.text, &links(&cell.text), &cell.links);
+                            CellShown {
+                                display: display.into(),
+                                links,
+                                refs: Vec::new(),
+                            }
+                        })
+                        .collect()
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let (display, links) = shrink(&block.text, &links(&block.text), &block.links);
         Shown {
             block,
             display: display.into(),
             links,
             refs: Vec::new(),
+            cells,
             copy_override: None,
         }
     }
@@ -1562,17 +2311,30 @@ mod tests {
         refs: &[Range<usize>],
     ) -> Vec<(String, TextRun)> {
         let shown = shown_of(text);
-        let (base, mono) = (base(), mono_face());
+        let (base, mono, palette) = (base(), mono_face(), dark());
         let face = face(&shown.block.kind, &base, Some(&mono), px(16.));
+        let selected = selected.map(|selected| shown.block.shown(selected));
+        let draw = Draw {
+            face: &face,
+            palette: &palette,
+            mono: Some(&mono),
+        };
         let mut at = 0;
-        runs(&shown, &face, &dark(), Some(&mono), refs, selected)
-            .into_iter()
-            .map(|run| {
-                let words = shown.display[at..at + run.len].to_string();
-                at += run.len;
-                (words, run)
-            })
-            .collect()
+        runs(
+            &shown.display,
+            &shown.block.marks,
+            &shown.links,
+            refs,
+            selected,
+            &draw,
+        )
+        .into_iter()
+        .map(|run| {
+            let words = shown.display[at..at + run.len].to_string();
+            at += run.len;
+            (words, run)
+        })
+        .collect()
     }
 
     #[test]
@@ -1615,7 +2377,22 @@ mod tests {
             }
             runs
         };
-        let now = |selected| runs(&shown, &face, &palette, None, &[], selected);
+        let draw = Draw {
+            face: &face,
+            palette: &palette,
+            mono: None,
+        };
+        let now = |selected: Option<Range<usize>>| {
+            let selected = selected.map(|selected| shown.block.shown(selected));
+            runs(
+                &shown.display,
+                &shown.block.marks,
+                &shown.links,
+                &[],
+                selected,
+                &draw,
+            )
+        };
 
         assert_eq!(now(None), before(vec![(4..25, link)]));
         assert_eq!(now(None).len(), 3);
@@ -1627,13 +2404,32 @@ mod tests {
         assert_eq!(now(Some(2..10)).len(), 5);
         // Nothing in it: one run, the text's own.
         let plain = shown_of("Land it today.");
+        let draw = Draw {
+            face: &base,
+            palette: &palette,
+            mono: None,
+        };
         assert_eq!(
-            runs(&plain, &base, &palette, None, &[], None),
+            runs(
+                &plain.display,
+                &plain.block.marks,
+                &plain.links,
+                &[],
+                None,
+                &draw
+            ),
             [base.to_run(14)]
         );
         let empty = shown_of("");
         assert_eq!(
-            runs(&empty, &base, &palette, None, &[], None),
+            runs(
+                &empty.display,
+                &empty.block.marks,
+                &empty.links,
+                &[],
+                None,
+                &draw
+            ),
             [base.to_run(0)]
         );
     }
@@ -1656,7 +2452,19 @@ mod tests {
         assert_eq!(face.font_family, mono);
         assert_eq!(face.font_size, base.font_size);
         assert_eq!(face.font_weight, base.font_weight);
-        let all = runs(&shown, &face, &palette, Some(&mono), &[], None);
+        let draw = Draw {
+            face: &face,
+            palette: &palette,
+            mono: Some(&mono),
+        };
+        let all = runs(
+            &shown.display,
+            &shown.block.marks,
+            &shown.links,
+            &[],
+            None,
+            &draw,
+        );
         assert_eq!(all, [face.to_run(code.text.len())]);
         assert_eq!(
             (&all[0].font.family, all[0].background_color),
@@ -1679,7 +2487,19 @@ mod tests {
 
         // A machine without one of the faces has the ground alone.
         let shown = shown_of("run `yardr prime` now");
-        let all = runs(&shown, &base, &palette, None, &[], None);
+        let draw = Draw {
+            face: &base,
+            palette: &palette,
+            mono: None,
+        };
+        let all = runs(
+            &shown.display,
+            &shown.block.marks,
+            &shown.links,
+            &[],
+            None,
+            &draw,
+        );
         assert_eq!(all[1].font, base.to_run(0).font);
         assert_eq!(all[1].background_color, quiet);
     }
@@ -1706,7 +2526,20 @@ mod tests {
             let face = face(&block.kind, &base, Some(&mono), px(16.));
             assert_eq!(face.font_weight, FontWeight::BOLD);
             assert_eq!(face.font_family, base.font_family);
-            let all = runs(&shown, &face, &dark(), Some(&mono), &[], None);
+            let dark = dark();
+            let draw = Draw {
+                face: &face,
+                palette: &dark,
+                mono: Some(&mono),
+            };
+            let all = runs(
+                &shown.display,
+                &shown.block.marks,
+                &shown.links,
+                &[],
+                None,
+                &draw,
+            );
             assert_eq!(all, [face.to_run(block.text.len())]);
             assert_eq!(all[0].font.weight, FontWeight::BOLD);
             larger.push(face.font_size.to_pixels(px(16.)));
@@ -1812,46 +2645,100 @@ mod tests {
         assert_eq!(last.text, "a bold b");
         use gpui::AppContext as _;
         let selection = cx.new(|_| Selection::default());
-        let mut selected = |from: Range<usize>, to: Range<usize>, clicks: usize| {
-            selection.update(cx, |selection, cx| {
-                selection.press(1, src.into(), from, None, clicks, cx);
-                selection.drag(to, cx);
-                selection.text().map(str::to_string)
-            })
-        };
+        let mut selected =
+            |text: &'static str, from: Range<usize>, to: Range<usize>, clicks: usize| {
+                selection.update(cx, |selection, cx| {
+                    let pressed = Press {
+                        place: from,
+                        clicked: None,
+                        shape: None,
+                    };
+                    selection.press(1, text.into(), pressed, clicks, cx);
+                    selection.drag(to, cx);
+                    selection.text().map(str::to_string)
+                })
+            };
 
         // The bold word alone, either way: the word.
         let (start, end) = (last.source_at(2), last.source_at(6));
         assert_eq!(
-            selected(start.clone(), end.clone(), 1).as_deref(),
+            selected(src, start.clone(), end.clone(), 1).as_deref(),
             Some("bold")
         );
         assert_eq!(
-            selected(end.clone(), start.clone(), 1).as_deref(),
+            selected(src, end.clone(), start.clone(), 1).as_deref(),
             Some("bold")
         );
         // With what is around it: as it was written.
         let (first, after) = (last.source_at(0), last.source_at(8));
         assert_eq!(
-            selected(first.clone(), after.clone(), 1).as_deref(),
+            selected(src, first.clone(), after.clone(), 1).as_deref(),
             Some("a **bold** b")
         );
         // The code alone is the code, a command as it is typed.
         let (top, bottom) = (code.source_at(0), code.source_at(6));
         assert_eq!(
-            selected(top.clone(), bottom.clone(), 1).as_deref(),
+            selected(src, top.clone(), bottom.clone(), 1).as_deref(),
             Some("ls -la")
         );
-        assert_eq!(selected(bottom, top, 1).as_deref(), Some("ls -la"));
+        assert_eq!(selected(src, bottom, top, 1).as_deref(), Some("ls -la"));
         // Across the code block, from the text before it to the text after
         // it: the fences and the language are in it.
-        assert_eq!(selected(0..0, after.clone(), 1).as_deref(), Some(src));
-        assert_eq!(selected(after, 0..0, 1).as_deref(), Some(src));
+        assert_eq!(selected(src, 0..0, after.clone(), 1).as_deref(), Some(src));
+        assert_eq!(selected(src, after, 0..0, 1).as_deref(), Some(src));
         // A second press on the bold word selects it.
-        assert_eq!(selected(start.clone(), start, 2).as_deref(), Some("bold"));
+        assert_eq!(
+            selected(src, start.clone(), start, 2).as_deref(),
+            Some("bold")
+        );
+        // A quote's drawn words whole: the break and the next line's
+        // marker stand in the middle of the stretch, the first marker
+        // left off, since the selection begins at the first drawn word.
+        let quoted = "> Hold the timetable.\n> It is printed.";
+        let quote = &markdown::blocks(quoted)[0];
+        assert_eq!(
+            selected(quoted, quote.source_at(0), quote.source_at(34), 1).as_deref(),
+            Some("Hold the timetable.\n> It is printed.")
+        );
+        // Either line alone copies without its own marker.
+        assert_eq!(
+            selected(quoted, quote.source_at(0), quote.source_at(19), 1).as_deref(),
+            Some("Hold the timetable.")
+        );
+        assert_eq!(
+            selected(quoted, quote.source_at(20), quote.source_at(34), 1).as_deref(),
+            Some("It is printed.")
+        );
+        // A named link's words: the shape whole.
+        let named = "See the [release page](https://yardr.dev/releases) first.";
+        let link = &markdown::blocks(named)[0];
+        assert_eq!(
+            selected(named, link.source_at(10), link.source_at(20), 1).as_deref(),
+            Some("[release page](https://yardr.dev/releases)")
+        );
+        // A second press on the words selects the shape whole.
+        let shape = Some(link.links[0].source.clone());
+        let doubled = selection.update(cx, |selection, cx| {
+            let pressed = Press {
+                place: link.source_at(12),
+                clicked: None,
+                shape,
+            };
+            selection.press(1, named.into(), pressed, 2, cx);
+            selection.text().map(str::to_string)
+        });
+        assert_eq!(
+            doubled.as_deref(),
+            Some("[release page](https://yardr.dev/releases)")
+        );
         // A press and no drag selects nothing.
         let none = selection.update(cx, |selection, cx| {
-            selection.press(1, src.into(), 2..4, None, 1, cx);
+            let pressed = Press {
+                place: 2..4,
+                clicked: None,
+                shape: None,
+            };
+            selection.press(1, src.into(), pressed, 1, cx);
             selection.text().map(str::to_string)
         });
         assert_eq!(none, None);
@@ -1871,6 +2758,12 @@ mod tests {
         );
         // A word before it without a space is no part of it.
         assert_eq!(linked("José:https://a.example"), ["https://a.example"]);
+        // In code the named shape is the code's own characters, and both
+        // address runs still open as bare addresses do.
+        assert_eq!(
+            linked("[release page](https://yardr.dev/releases) and https://yardr.dev/releases"),
+            ["https://yardr.dev/releases", "https://yardr.dev/releases"]
+        );
     }
 
     #[test]
@@ -1909,7 +2802,7 @@ mod tests {
     #[test]
     fn a_long_link_draws_short_and_maps_to_the_whole_link() {
         let text = format!("call: {LONG} now");
-        let (display, spans) = shrink(&text, &links(&text));
+        let (display, spans) = shrink(&text, &links(&text), &[]);
         assert_eq!(spans.len(), 1);
         let link = &spans[0];
         assert_eq!(&text[link.from.clone()], LONG);
@@ -1919,12 +2812,12 @@ mod tests {
         assert_eq!(display, format!("call: {} now", markdown::short_link(LONG)));
         // A short link draws as written, and carries no tooltip.
         let text = "see https://example.org/a now";
-        let (display, spans) = shrink(text, &links(text));
+        let (display, spans) = shrink(text, &links(text), &[]);
         assert_eq!(display, text);
         assert_eq!(spans.len(), 1);
         assert!(!spans[0].short);
         // None at all: the text draws as it is.
-        let (display, spans) = shrink("no link in this", &[]);
+        let (display, spans) = shrink("no link in this", &[], &[]);
         assert_eq!(display, "no link in this");
         assert!(spans.is_empty());
     }
@@ -1932,7 +2825,7 @@ mod tests {
     #[test]
     fn display_and_text_boundaries_map_past_shortened_links() {
         let text = format!("call: {LONG} now, and https://example.org/a too");
-        let (display, spans) = shrink(&text, &links(&text));
+        let (display, spans) = shrink(&text, &links(&text), &[]);
         assert_eq!(spans.len(), 2);
         let short = &spans[0];
         assert!(short.short);
@@ -2150,5 +3043,245 @@ mod tests {
         assert_eq!(all[1].0, "ask 6926");
         assert_eq!(all[1].1.font.weight, FontWeight::BOLD);
         assert_eq!(all[1].1.color, palette.link.into());
+    }
+
+    #[test]
+    fn a_named_link_draws_its_words_with_its_host_beside_them() {
+        let text = "See the [release page](https://yardr.dev/releases) first.";
+        let block = one(text);
+        assert_eq!(block.links.len(), 1);
+        let (display, spans) = shrink(&block.text, &links(&block.text), &block.links);
+        assert_eq!(display, "See the release page · yardr.dev first.");
+        assert_eq!(spans.len(), 1);
+        let link = &spans[0];
+        assert_eq!(&block.text[link.from.clone()], "release page");
+        assert_eq!(&display[link.shown.clone()], "release page · yardr.dev");
+        assert_eq!(link.url.as_ref(), "https://yardr.dev/releases");
+        assert!(link.short);
+        assert_eq!(
+            link.host.clone().map(|host| display[host].to_string()),
+            Some(" · yardr.dev".to_string())
+        );
+        assert_eq!(link_at(&spans, link.shown.start), Some(link));
+        assert_eq!(link_at(&spans, dressed(link).end - 1), Some(link));
+        let host = link.host.as_ref().unwrap();
+        assert!(link_at(&spans, host.start + HOST_SEP.len()).is_none());
+        // Selecting any part of the words selects the shape whole:
+        // inside at the words' start, at their end with the host on the
+        // words' end.
+        assert_eq!(to_src(&spans, link.shown.start), link.from.start);
+        assert_eq!(to_src(&spans, link.shown.start + 1), link.from.start);
+        assert_eq!(to_src(&spans, link.shown.end - 1), link.from.start);
+        assert_eq!(to_src(&spans, link.shown.end), link.from.end);
+        // The other way the highlight draws over the words alone.
+        assert_eq!(to_display(&spans, link.from.clone()), dressed(link));
+        assert_eq!(
+            dressed(link),
+            link.shown.start..link.host.as_ref().unwrap().start
+        );
+        // An empty range stands where it stands, shifted past the host.
+        assert_eq!(to_display(&spans, 0..0), 0..0);
+        assert_eq!(
+            to_display(&spans, link.from.end..link.from.end),
+            link.shown.end..link.shown.end
+        );
+        // A round trip past the link stands where it began.
+        for at in [0, link.from.start, link.from.end, block.text.len()] {
+            let there = to_display(&spans, at..at);
+            assert_eq!(there.start, there.end);
+            assert_eq!(to_src(&spans, there.start), at, "{at}");
+        }
+    }
+
+    #[test]
+    fn a_bare_link_over_a_named_link_s_words_is_none() {
+        // A bare address inside the words is the link's words and no
+        // link: the tap opens the named address.
+        let text = "See [the https://example.org/a page](https://yardr.dev/p).";
+        let block = one(text);
+        let (_, spans) = shrink(&block.text, &links(&block.text), &block.links);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].url.as_ref(), "https://yardr.dev/p");
+        // Beside the words, a bare address still stands.
+        let text = "See [the page](https://yardr.dev/p) and https://yardr.dev/q.";
+        let block = one(text);
+        let (_, spans) = shrink(&block.text, &links(&block.text), &block.links);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].url.as_ref(), "https://yardr.dev/p");
+        assert_eq!(spans[1].url.as_ref(), "https://yardr.dev/q");
+    }
+
+    #[test]
+    fn a_named_link_is_its_words_in_the_link_blue_with_its_host_faint() {
+        let palette = dark();
+        let text = "See the [release page](https://yardr.dev/releases) first.";
+        let all = drawn(text, None);
+        let words: Vec<&str> = all.iter().map(|(words, _)| words.as_str()).collect();
+        assert_eq!(
+            words,
+            ["See the ", "release page", " · yardr.dev", " first."]
+        );
+        let link = &all[1].1;
+        assert_eq!(link.color, palette.link.into());
+        assert!(link.underline.is_some());
+        let host = &all[2].1;
+        assert_eq!(host.color, palette.faint.into());
+        assert!(host.underline.is_none());
+        assert_eq!(host.font.weight, base().font_weight);
+        // Bold words keep their weight under the link dress.
+        let all = drawn("**[held](https://example.org)**", None);
+        assert_eq!(all[0].0, "held");
+        assert_eq!(all[0].1.font.weight, FontWeight::BOLD);
+        assert_eq!(all[0].1.color, palette.link.into());
+        // A selection over the words highlights them alone.
+        let all = drawn(text, Some(8..50));
+        let grounds: Vec<(&str, Option<gpui::Hsla>)> = all
+            .iter()
+            .map(|(words, run)| (words.as_str(), run.background_color))
+            .collect();
+        assert_eq!(
+            grounds,
+            [
+                ("See the ", None),
+                ("release page", Some(palette.selection.into())),
+                (" · yardr.dev", None),
+                (" first.", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_quote_stands_in_a_rule_takes_no_room_and_a_table_takes_the_wide() {
+        let quote = one("> quoted");
+        assert_eq!(
+            frame(&quote, Some(&Kind::Text)).padding.left,
+            rems(QUOTE_INSET).into()
+        );
+        assert_eq!(face(&quote.kind, &base(), None, px(16.)), base());
+        // A rule's frame is its hairline alone, with the wide room above
+        // and below it.
+        let rule = one("---");
+        assert_eq!(
+            frame(&rule, Some(&Kind::Text)).margin.top,
+            rems(APART).into()
+        );
+        assert_eq!(frame(&rule, None).size.height, px(1.).into());
+        let text = one("words");
+        assert_eq!(
+            frame(&text, Some(&Kind::Rule)).margin.top,
+            rems(APART).into()
+        );
+        // Above any table, as above a heading.
+        let table = one("| a | b |\n| --- | --- |");
+        assert_eq!(
+            frame(&table, Some(&Kind::Text)).margin.top,
+            rems(APART).into()
+        );
+    }
+
+    #[test]
+    fn a_reference_inside_a_named_link_s_words_is_no_chip() {
+        let block = one("See [ask 5 on yd-crm](https://yardr.dev/p) and ask 6.");
+        let found = block_refs(&block);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, None);
+        assert_eq!(&block.text[found[0].1.range.clone()], "ask 6");
+        // In a table each cell's references stand with their cell, row 0
+        // the head, each range in its cell's words.
+        let block = one("| ask 1 | x |\n| --- | --- |\n| yd-zulu | ask 2 |");
+        let found = block_refs(&block);
+        let cells: Vec<Option<(usize, usize)>> = found.iter().map(|(cell, _)| *cell).collect();
+        assert_eq!(cells, [Some((0, 0)), Some((1, 0)), Some((1, 1))]);
+        assert_eq!(found[0].1.range, 0..5);
+        let block = one("| [ask 9](https://yardr.dev/p) | x |\n| --- | --- |");
+        assert!(block_refs(&block).is_empty());
+    }
+
+    #[test]
+    fn table_columns_are_weighed_by_their_cells_up_to_two_fifths() {
+        // Each case as (measures, shares): weighed by the widest cell,
+        // capped at two fifths, what remains shared, adding to one.
+        for (natural, shares) in [
+            (&[1., 1.][..], vec![0.5, 0.5]),
+            (&[2., 1., 1.][..], vec![0.4, 0.3, 0.3]),
+            (&[1., 1., 1., 1.][..], vec![0.25, 0.25, 0.25, 0.25]),
+            (&[3., 1., 1., 1.][..], vec![0.4, 0.2, 0.2, 0.2]),
+            (&[5.][..], vec![1.]),
+            (&[0., 0.][..], vec![0.5, 0.5]),
+        ] {
+            let got = columns(natural);
+            assert_eq!(got.len(), shares.len(), "{natural:?}");
+            for (got, want) in got.iter().zip(shares.iter()) {
+                assert!((got - want).abs() < 1e-6, "{natural:?}: {got:?}");
+            }
+            let sum: f32 = got.iter().sum();
+            assert!((sum - 1.).abs() < 1e-6, "{natural:?}: {got:?}");
+        }
+    }
+
+    #[test]
+    fn a_table_s_head_is_set_semibold() {
+        let base = base();
+        assert_eq!(cell_face(false, &base), base);
+        let head = cell_face(true, &base);
+        assert_eq!(head.font_weight, FontWeight::SEMIBOLD);
+        assert_eq!(head.font_size, base.font_size);
+        assert_eq!(head.font_family, base.font_family);
+    }
+
+    #[gpui::test]
+    fn a_table_s_cells_draw_with_their_links_and_their_references(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        let selection = cx.new(|_| Selection::default());
+        let text =
+            "| see [the page](https://yardr.dev/p) | ask 7 |\n| --- | --- |\n| yd-zulu | x |";
+        let blocks = markdown::blocks(text);
+        assert_eq!(blocks.len(), 1);
+        let refs = vec![
+            RefSpan {
+                block: 0,
+                cell: Some((0, 1)),
+                range: 0..5,
+                target: RefTarget::Ask {
+                    bead: "bead-x".into(),
+                    ask: 7,
+                    open: true,
+                },
+            },
+            RefSpan {
+                block: 0,
+                cell: Some((1, 0)),
+                range: 0..7,
+                target: RefTarget::Bead {
+                    bead: "yd-zulu".into(),
+                },
+            },
+        ];
+        let made = text_inner(1, text.into(), blocks, None, refs, None, &selection);
+        let shown = &made.blocks[0];
+        assert_eq!(shown.display.as_ref(), "");
+        assert!(shown.links.is_empty());
+        assert!(shown.refs.is_empty());
+        assert_eq!(shown.cells.len(), 2);
+        assert_eq!(shown.cells[0].len(), 2);
+        // The head's first cell draws its words with the host beside
+        // them, opening the named address.
+        assert_eq!(
+            shown.cells[0][0].display.as_ref(),
+            "see the page · yardr.dev"
+        );
+        assert_eq!(shown.cells[0][0].links.len(), 1);
+        assert_eq!(
+            shown.cells[0][0].links[0].url.as_ref(),
+            "https://yardr.dev/p"
+        );
+        assert!(shown.cells[0][0].refs.is_empty());
+        // Each cell's references stand in that cell's words.
+        assert_eq!(shown.cells[0][1].display.as_ref(), "ask 7");
+        assert_eq!(shown.cells[0][1].refs.len(), 1);
+        assert_eq!(shown.cells[0][1].refs[0].0, 0..5);
+        assert_eq!(shown.cells[1][0].refs.len(), 1);
+        assert_eq!(shown.cells[1][0].refs[0].0, 0..7);
+        assert!(shown.cells[1][1].refs.is_empty());
     }
 }

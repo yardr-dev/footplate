@@ -4852,7 +4852,7 @@ impl Model {
         let mut previews = Vec::new();
         let mut previewed: HashSet<(String, u64)> = HashSet::new();
         for (ix, block) in markdown::blocks(text).iter().enumerate() {
-            for found in select::refs(&block.text) {
+            for (cell, found) in select::block_refs(block) {
                 // An ask's whole reference chips, or the bead's own
                 // where the ask is none the yard said.
                 let (range, target) = match &found.kind {
@@ -4904,6 +4904,7 @@ impl Model {
                 }
                 spans.push(select::RefSpan {
                     block: ix,
+                    cell,
                     range,
                     target,
                 });
@@ -6348,8 +6349,8 @@ pub fn plain(text: &str) -> String {
 fn named_beads(text: &str) -> Vec<String> {
     markdown::blocks(text)
         .iter()
-        .flat_map(|block| select::refs(&block.text))
-        .filter_map(|found| match found.kind {
+        .flat_map(select::block_refs)
+        .filter_map(|(_, found)| match found.kind {
             select::RefKind::Bead(bead) | select::RefKind::AskOn { bead, .. } => Some(bead),
             select::RefKind::Ask(_) => None,
         })
@@ -9847,6 +9848,7 @@ mod tests {
             entries[0].refs,
             [select::RefSpan {
                 block: 0,
+                cell: None,
                 range: 34..39,
                 target: ask.clone(),
             }]
@@ -9869,6 +9871,7 @@ mod tests {
             entries[1].refs,
             [select::RefSpan {
                 block: 0,
+                cell: None,
                 range: 10..17,
                 target: select::RefTarget::Bead {
                     bead: "yd-zulu".into()
@@ -9881,6 +9884,7 @@ mod tests {
             entries[2].refs,
             [select::RefSpan {
                 block: 1,
+                cell: None,
                 range: 4..9,
                 target: ask,
             }]
@@ -9911,6 +9915,7 @@ mod tests {
             entries[0].refs,
             [select::RefSpan {
                 block: 0,
+                cell: None,
                 range: 18..23,
                 target: select::RefTarget::Ask {
                     bead: "yardr-n8ta".into(),
@@ -9996,6 +10001,7 @@ mod tests {
             entries[0].refs,
             [select::RefSpan {
                 block: 0,
+                cell: None,
                 range: 9..16,
                 target: select::RefTarget::Bead {
                     bead: "yd-zulu".into()

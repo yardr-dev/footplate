@@ -187,7 +187,8 @@ Text and drawing helpers:
 - `src/input.rs`: the line typed in (gpui has no text field).
 - `src/select.rs`: a message's text with mouse selection, one at a time.
 - `src/markdown.rs`: the light Markdown messages draw with (code, one-level
-  lists, headings to h3, bold/italic); the rest stays as written.
+  lists, headings to h3, tables, quotes, rules, bold/italic, named links);
+  the rest stays as written.
 - `src/theme.rs`: the light and dark palettes.
 
 Platform surface:

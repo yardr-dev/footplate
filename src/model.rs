@@ -7608,7 +7608,8 @@ pub fn pairing_left<Tz: TimeZone>(expires: &str, now: &DateTime<Tz>) -> String {
 
 /// What the yard answered to a setup approval, in one line: the pack with
 /// the preset picked and who the grants are for, with the names given,
-/// the candidate taken or the standing account kept, and that the server
+/// the candidate taken or the standing account kept, the host given where
+/// the approval carried one, in the terminal's shape, and that the server
 /// carries the setup out after the call. The card that proposed it leaves
 /// with the approval.
 pub fn setup_approved_line(setup: &Setup, approved: &api::SetupApproved) -> String {
@@ -7624,6 +7625,9 @@ pub fn setup_approved_line(setup: &Setup, approved: &api::SetupApproved) -> Stri
         what.push_str(&format!("; gave {}", approved.given.join(", ")));
     } else if approved.keep {
         what.push_str("; kept");
+    }
+    if !approved.host.is_empty() {
+        what.push_str(&format!("; gave the host {}", plain(&approved.host)));
     }
     format!("approved, being carried out: {what}")
 }
@@ -17827,6 +17831,7 @@ mod tests {
             given: names.to_vec(),
             account: String::new(),
             keep: false,
+            host: String::new(),
             result: CARRY_PENDING.into(),
         }
     }
@@ -18049,6 +18054,21 @@ mod tests {
         assert_eq!(
             line,
             "approved, being carried out: setup of pack courier, preset read to crew yardmaster; kept"
+        );
+        // A host the approval carried is named in the terminal's shape,
+        // beside what of the account it took.
+        let mut hosted = setup_approved_with(&["COURIER_ACCOUNT".to_string()]);
+        hosted.host = "courier.example.net".to_string();
+        let line = setup_approved_line(&courier(), &hosted);
+        assert_eq!(
+            line,
+            "approved, being carried out: setup of pack courier, preset read to crew yardmaster; gave COURIER_ACCOUNT; gave the host courier.example.net"
+        );
+        kept.host = "courier.example.net".to_string();
+        let line = setup_approved_line(&courier(), &kept);
+        assert_eq!(
+            line,
+            "approved, being carried out: setup of pack courier, preset read to crew yardmaster; kept; gave the host courier.example.net"
         );
         let mut bare = courier();
         bare.candidates.clear();

@@ -1188,6 +1188,13 @@ pub struct Setup {
     /// The file a typed value goes to, on the yard's machine.
     #[serde(default)]
     pub account_file: String,
+    /// The address a host the operator types fills, with `{host}` where
+    /// it goes: the card shows a field for it above the account, and the
+    /// approval carries it. The yard's, never the writer's: empty where
+    /// no carried source declares a template, and on a yard from before
+    /// the ask said.
+    #[serde(default)]
+    pub host_template: String,
     /// A drift card whose standing file holds every account name: kept
     /// with a bare preset pick, typed another to change it, or a
     /// candidate's file taken. Absent on a first setup, which has no
@@ -1309,6 +1316,10 @@ pub struct SetupApproved {
     /// `account` and `keep` is set.
     #[serde(default)]
     pub keep: bool,
+    /// The host the approval gave the carried sources to fill their
+    /// templates with; empty for none.
+    #[serde(default)]
+    pub host: String,
     /// `approved, to be carried out`: the server carries the setup out
     /// after the call.
     #[serde(default)]
@@ -4450,7 +4461,12 @@ impl Client {
     /// yard reached down its edge link that is not hosted: a value-free
     /// read first meets the edge's session refusal, or the yard says it
     /// is no hosted one, the call sends nothing, and the card answers it
-    /// at the yard instead, in the yard's words.
+    /// at the yard instead, in the yard's words. `host` is the host of a
+    /// server of the operator's own the card asked for above the account
+    /// ([`Setup::host_template`]): it goes beside the typed values, the
+    /// candidate taken, or a bare pick that keeps the standing account,
+    /// and is left out where none was typed, as a yard from before the
+    /// argument takes the call.
     #[allow(clippy::too_many_arguments)]
     pub fn approve_setup(
         &self,
@@ -4461,6 +4477,7 @@ impl Client {
         account: Option<&str>,
         actor: &str,
         weighed: bool,
+        host: Option<&str>,
     ) -> Result<SetupApproved> {
         // A typed account is a secret: before any is sent at an address,
         // a value-free read looks at what answers. With no session
@@ -4505,6 +4522,9 @@ impl Client {
         }
         if let Some(account) = account {
             args["account"] = json!(account);
+        }
+        if let Some(host) = host {
+            args["host"] = json!(host);
         }
         self.answer("ApproveSetup", args)
     }
@@ -6148,7 +6168,7 @@ mod tests {
             // A yard that does not have the call, or does not serve it to
             // this window, says so as of any method.
             let err = client
-                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
                 .unwrap_err();
             assert_eq!(err.to_string(), "no such method ApproveSetup", "{way}");
             without(&err);
@@ -6161,7 +6181,7 @@ mod tests {
                     "result": "approved, to be carried out"}}"#,
             );
             let approved = client
-                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
                 .unwrap();
             assert_eq!(approved.pack, "courier", "{way}");
             assert_eq!(approved.preset, "read", "{way}");
@@ -6177,7 +6197,7 @@ mod tests {
             // Said, the client's word goes with it: every setup ask is
             // weighty, and the yard refuses one without it.
             client
-                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", true)
+                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", true, None)
                 .unwrap();
             assert_eq!(
                 yard.asked("ApproveSetup").last(),
@@ -6199,7 +6219,16 @@ mod tests {
                     "result": "approved, to be carried out"}}"#,
             );
             let approved = client
-                .approve_setup("yd-crm", 41, 1, None, Some("courier-existing"), "jo", false)
+                .approve_setup(
+                    "yd-crm",
+                    41,
+                    1,
+                    None,
+                    Some("courier-existing"),
+                    "jo",
+                    false,
+                    None,
+                )
                 .unwrap();
             assert_eq!(approved.account, "courier-existing", "{way}");
             assert!(approved.given.is_empty(), "{way}");
@@ -6218,7 +6247,7 @@ mod tests {
                     "result": "approved, to be carried out"}}"#,
             );
             let approved = client
-                .approve_setup("yd-crm", 41, 1, None, None, "jo", false)
+                .approve_setup("yd-crm", 41, 1, None, None, "jo", false, None)
                 .unwrap();
             assert!(approved.keep, "{way}");
             assert!(approved.given.is_empty(), "{way}");
@@ -6228,6 +6257,77 @@ mod tests {
                 Some(&json!({"bead": "yd-crm", "ask": 41, "option": 1, "actor": "jo"})),
                 "{way}"
             );
+            // A host the card asked for goes beside each of the three
+            // shapes: the typed values, the candidate taken, or a bare
+            // pick that keeps the standing account. Where none was typed
+            // nothing goes, as a yard from before the argument takes the
+            // call.
+            yard.answer(
+                "ApproveSetup",
+                r#"{"result": {"bead": "yd-crm", "ask": 41, "asker": "yardmaster",
+                    "pack": "courier", "preset": "read", "given": ["COURIER_ACCOUNT"],
+                    "host": "courier.example.net",
+                    "result": "approved, to be carried out"}}"#,
+            );
+            let approved = client
+                .approve_setup(
+                    "yd-crm",
+                    41,
+                    1,
+                    Some(&values),
+                    None,
+                    "jo",
+                    false,
+                    Some("courier.example.net"),
+                )
+                .unwrap();
+            assert_eq!(approved.host, "courier.example.net", "{way}");
+            assert_eq!(
+                yard.asked("ApproveSetup").last(),
+                Some(&json!({"bead": "yd-crm", "ask": 41, "option": 1,
+                             "values": {"COURIER_ACCOUNT": VALUE}, "actor": "jo",
+                             "host": "courier.example.net"})),
+                "{way}"
+            );
+            client
+                .approve_setup(
+                    "yd-crm",
+                    41,
+                    1,
+                    None,
+                    Some("courier-existing"),
+                    "jo",
+                    false,
+                    Some("courier.example.net"),
+                )
+                .unwrap();
+            assert_eq!(
+                yard.asked("ApproveSetup").last(),
+                Some(&json!({"bead": "yd-crm", "ask": 41, "option": 1,
+                             "account": "courier-existing", "actor": "jo",
+                             "host": "courier.example.net"})),
+                "{way}"
+            );
+            client
+                .approve_setup(
+                    "yd-crm",
+                    41,
+                    1,
+                    None,
+                    None,
+                    "jo",
+                    false,
+                    Some("courier.example.net"),
+                )
+                .unwrap();
+            assert_eq!(
+                yard.asked("ApproveSetup").last(),
+                Some(
+                    &json!({"bead": "yd-crm", "ask": 41, "option": 1, "actor": "jo",
+                             "host": "courier.example.net"})
+                ),
+                "{way}"
+            );
             // The yard says no, in its words, whole.
             let refusal = "ask 41 on yd-crm: the candidate courier-existing holds COURIER_ACCOUNT=ops@example.com no more: the card is from before that changed. Nothing ran. Decline it; it is asked again if it is still wanted.";
             yard.answer(
@@ -6235,21 +6335,30 @@ mod tests {
                 &json!({"error": {"code": "error", "message": refusal}}).to_string(),
             );
             let err = client
-                .approve_setup("yd-crm", 41, 1, None, Some("courier-existing"), "jo", false)
+                .approve_setup(
+                    "yd-crm",
+                    41,
+                    1,
+                    None,
+                    Some("courier-existing"),
+                    "jo",
+                    false,
+                    None,
+                )
                 .unwrap_err();
             assert_eq!(err.to_string(), refusal, "{way}");
             // The yard went away over the call: no reply, and no word on
             // whether the approval landed.
             yard.answer_nothing("ApproveSetup");
             let err = client
-                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+                .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
                 .unwrap_err();
             assert!(matches!(err, Error::Down(_)), "{way}: {err:?}");
             without(&err);
             // Typed values at a listener look first: one value-free read
-            // goes before each of the four approvals above. None goes on
+            // goes before each of the five approvals above. None goes on
             // the socket, which is no edge.
-            let probed = if yard.at_listener() { 4 } else { 0 };
+            let probed = if yard.at_listener() { 5 } else { 0 };
             assert_eq!(yard.asked("Head").len(), probed, "{way}");
         }
         // A typed account is withheld from a yard reached down its edge
@@ -6269,7 +6378,7 @@ mod tests {
         let linked = Client::remote(Address::parse(edge.address()).unwrap(), TOKEN);
         let values = [("COURIER_ACCOUNT".to_string(), VALUE.to_string())];
         let err = linked
-            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
             .unwrap_err();
         assert_eq!(err.to_string(), "answer it at the yard");
         assert!(!err.to_string().contains(VALUE));
@@ -6286,7 +6395,7 @@ mod tests {
         // whole call.
         let client = edge.client_with(TOKEN, SESSION);
         let approved = client
-            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
             .unwrap();
         assert_eq!(approved.given, ["COURIER_ACCOUNT"]);
         assert_eq!(
@@ -6298,7 +6407,7 @@ mod tests {
         // pick does.
         let empty: [(String, String); 0] = [];
         client
-            .approve_setup("yd-crm", 41, 1, Some(&empty), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&empty), None, "jo", false, None)
             .unwrap();
         assert_eq!(
             yard.asked("ApproveSetup").last(),
@@ -6319,7 +6428,7 @@ mod tests {
             path: String::new(),
         };
         let err = Client::remote(far, TOKEN)
-            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
             .unwrap_err();
         assert!(matches!(err, Error::Down(_)), "{err:?}");
         // A yard reached with a session is asked through Settings whether
@@ -6333,7 +6442,7 @@ mod tests {
         let sent = edge.seen("POST /user/call/ApproveSetup ").len();
         let reads = edge.seen("POST /user/call/Settings ").len();
         let err = client
-            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
             .unwrap_err();
         assert_eq!(err.to_string(), "answer it at the yard");
         assert!(!err.to_string().contains(VALUE));
@@ -6345,7 +6454,7 @@ mod tests {
         // Where Settings says hosted the typed account goes as ever.
         yard.answer("Settings", r#"{"result": {"hosted": "true"}}"#);
         let approved = client
-            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
             .unwrap();
         assert_eq!(approved.given, ["COURIER_ACCOUNT"]);
         assert_eq!(
@@ -6358,11 +6467,11 @@ mod tests {
         // what the call itself would say.
         yard.answer("Settings", r#"{"result": {"operator": "jo"}}"#);
         client
-            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
             .unwrap();
         yard.answer_nothing("Settings");
         client
-            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false)
+            .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)
             .unwrap();
         assert_eq!(yard.asked("ApproveSetup").len(), approvals + 3);
     }
@@ -6372,6 +6481,7 @@ mod tests {
         let yard = Yard::start();
         let setup = json!({"pack": "courier", "label": "embedded in yardr doctest",
             "account": ["COURIER_ACCOUNT"], "account_file": "/home/jo/.yardr/sources/courier.env",
+            "host_template": "https://{host}/api",
             "candidates": [{"source": "courier-existing",
                             "file": "/home/jo/.yardr/sources/courier-existing.env",
                             "values": {"COURIER_ACCOUNT": "jo@example.test"}}],
@@ -6404,6 +6514,7 @@ mod tests {
         assert_eq!(asked.pack, "courier");
         assert_eq!(asked.account, ["COURIER_ACCOUNT"]);
         assert_eq!(asked.account_file, "/home/jo/.yardr/sources/courier.env");
+        assert_eq!(asked.host_template, "https://{host}/api");
         let candidate = asked.candidates.first().unwrap();
         assert_eq!(candidate.source, "courier-existing");
         assert_eq!(

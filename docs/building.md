@@ -383,8 +383,10 @@ pairing run ask's card, with the door its approval crosses), `pair-qr`
 secret ask, posed with a value typed and hidden), `secret-shown`
 (that card where the yard marks the value no secret: typed and
 shown), `secret-refused` (that card with the yard's refusal of
-its answer), `switcher` (the switcher's list open over four
-yards, one of them away), `switcher-shut` (that list, shut a second after
+its answer), `setup-host` (an open card of a setup ask whose account
+stands, posed with a host typed above it), `switcher` (the switcher's
+list open over four yards, one of them away), `switcher-shut` (that
+list, shut a second after
 it drew as a click outside it shuts it: the scripts drive no pointer, so
 the state asks the window for what the click asks), `switcher-member`
 (that list over an own and a member hosted yard, the member marked with

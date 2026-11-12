@@ -134,6 +134,36 @@ impl Footplate {
             self.typeback.update(cx, |field, cx| field.set_text("", cx));
             self.typeback_for = typeback_for;
         }
+        // What is typed of a host is for the ask it was typed on, and is
+        // kept for no other and for no return to this one, as a secret's
+        // is. The field names the address it fills, as the web card does.
+        // A bead and ask number can recur in another yard. Keep the host
+        // only for the session and ask it was typed on.
+        let host_for = ask
+            .as_ref()
+            .map(|(bead, ask)| (self.session, bead.clone(), *ask));
+        if host_for != self.host_for {
+            self.host.update(cx, |field, cx| field.set_text("", cx));
+            self.host_for = host_for;
+            // The setup-host shot poses a host in the field: a debug
+            // build's alone, as the secret shots pose a value.
+            #[cfg(debug_assertions)]
+            if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("setup-host") {
+                self.host
+                    .update(cx, |field, cx| field.set_text("courier.example.net", cx));
+            }
+        }
+        let hosted = ask.as_ref().and_then(|(bead, ask)| {
+            self.model
+                .as_ref()
+                .and_then(|m| m.setup_approving(bead, *ask))
+                .map(|setup| setup.host_template.clone())
+                .filter(|template| !template.is_empty())
+        });
+        let hosted = hosted.map(|template| format!("Host of a server of your own: {template}"));
+        self.host.update(cx, |field, cx| {
+            field.set_placeholder(hosted.as_deref().unwrap_or_default(), cx)
+        });
         // A pairing approval's sitting is for the card it was approved
         // on, and is kept for no other and for no return to this one:
         // leaving the screen drops the transient, and the ended state
@@ -273,6 +303,12 @@ impl Footplate {
     pub(crate) fn forget_secret(&mut self, cx: &mut Context<Self>) {
         self.secret_typed.clear();
         self.secret.update(cx, |field, cx| field.set_text("", cx));
+    }
+
+    /// Nothing typed of a host stays in the window once its approval
+    /// went: the card leaves with it.
+    pub(crate) fn forget_host(&mut self, cx: &mut Context<Self>) {
+        self.host.update(cx, |field, cx| field.set_text("", cx));
     }
 
     /// Draws the secret as typed, for a look, or as marks again: the
@@ -1231,6 +1267,17 @@ impl Footplate {
         let Some(setup) = self.setup_approvable() else {
             return;
         };
+        // The host the card asked for above the account, typed in the
+        // clear: it goes with the approval, whatever shape the account
+        // takes, and where none was typed nothing goes. An ask with no
+        // template sends none, whatever the field holds.
+        let host = match setup.host_template.is_empty() {
+            true => None,
+            false => {
+                let typed = self.host.read(cx).text().trim().to_string();
+                (!typed.is_empty()).then_some(typed)
+            }
+        };
         // The field's value goes with what Enter took, as the next name;
         // what is pasted often ends in a line break, which nobody sees
         // among the marks and which the yard refuses at either end.
@@ -1287,7 +1334,7 @@ impl Footplate {
         let session = self.session;
         match self.card_approval(&bead, ask) {
             Approval::Direct => self.send_approve_setup_in(
-                session, bead, ask, option, values, account, setup, false, cx,
+                session, bead, ask, option, values, account, setup, false, host, cx,
             ),
             // The number field holds the ask's number or the approval
             // sends nothing: the card stays as it is, and says so.
@@ -1297,7 +1344,7 @@ impl Footplate {
                 }
                 self.clear_typeback(cx);
                 self.send_approve_setup_in(
-                    session, bead, ask, option, values, account, setup, true, cx,
+                    session, bead, ask, option, values, account, setup, true, host, cx,
                 );
             }
             // The system unlock first: its cancel sends nothing, and the
@@ -1316,7 +1363,7 @@ impl Footplate {
                     cx,
                     move |this, session, cx| {
                         this.send_approve_setup_in(
-                            session, bead, ask, option, values, account, setup, true, cx,
+                            session, bead, ask, option, values, account, setup, true, host, cx,
                         )
                     },
                     move |this, session, cx| {
@@ -1346,6 +1393,7 @@ impl Footplate {
         account: Option<String>,
         setup: api::Setup,
         weighed: bool,
+        host: Option<String>,
         cx: &mut Context<Self>,
     ) {
         let at = (bead.clone(), ask);
@@ -1377,6 +1425,7 @@ impl Footplate {
                     account.as_deref(),
                     me,
                     weighed,
+                    host.as_deref(),
                 );
                 (approved, values)
             },
@@ -1395,6 +1444,15 @@ impl Footplate {
                     Ok(approved) => {
                         let line = model::setup_approved_line(&setup, &approved);
                         this.forget_secret(cx);
+                        if this
+                            .host_for
+                            .as_ref()
+                            .is_some_and(|(for_session, for_bead, for_ask)| {
+                                *for_session == session && for_bead == &bead && *for_ask == ask
+                            })
+                        {
+                            this.forget_host(cx);
+                        }
                         this.change_in(session, cx, |m| {
                             m.setup_approved(&bead, ask, option, &approved)
                         });
@@ -3394,6 +3452,16 @@ impl Footplate {
                     palette,
                 ));
             }
+            // A setup ask whose ask carries a host template takes the
+            // host in a field of its own above the account: an address,
+            // typed in the clear. Where the card sends nowhere the
+            // approval goes in a terminal, and draws no field.
+            let hosted = ask
+                .setup
+                .as_ref()
+                .is_some_and(|setup| !setup.host_template.is_empty());
+            let host_focus = self.host.focus_handle(cx);
+            let host = self.host.clone();
             // A secret's field stands beside its toggle: Show draws what
             // is typed as typed, for a look, Hide draws marks again.
             let toggle = secret_field.then(|| {
@@ -3402,6 +3470,16 @@ impl Footplate {
                     self.secret_shown,
                     palette,
                     cx,
+                )
+            });
+            card = card.when(hosted && !declining && sends, |card| {
+                card.child(
+                    field(host_focus, host, palette)
+                        .debug_selector(|| format!("host {bead_id} {ask_seq}"))
+                        // A setup ask's host field takes its approval's
+                        // key too, with what the field holds, as the
+                        // account field does.
+                        .key_context(SETUP_SECRET_CONTEXT),
                 )
             });
             card = card.when(
@@ -4492,10 +4570,29 @@ impl Footplate {
             let kind = if secret_field { "secret" } else { "words" };
             let words = detail.secret.is_none() && detail.run.is_none() && detail.setup.is_none();
             let fielded = !taken_back && sends && (words || giving.is_some() || setup_field);
+            // A setup the card can still approve takes the host above
+            // the account where its ask carries a template, as on an
+            // open card.
+            let hosted = setup_field
+                && detail
+                    .setup
+                    .as_ref()
+                    .is_some_and(|setup| !setup.host_template.is_empty());
+            let host_focus = self.host.focus_handle(cx);
+            let host = self.host.clone();
             // A secret's field stands beside its toggle, as on an open
             // card.
             let toggle = secret_field
                 .then(|| show_button(format!("show {bead} {ask}"), self.secret_shown, palette, cx));
+            body = body.when(hosted, |body| {
+                body.child(
+                    field(host_focus, host, palette)
+                        .debug_selector(|| format!("host {bead} {ask}"))
+                        // A setup's host field takes its approval's key
+                        // too, as on an open card.
+                        .key_context(SETUP_SECRET_CONTEXT),
+                )
+            });
             body = body.when(fielded, |body| {
                 let boxed = field(focus, input, palette)
                     .debug_selector(|| format!("{kind} {bead} {ask}"))

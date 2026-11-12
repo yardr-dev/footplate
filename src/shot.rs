@@ -80,7 +80,8 @@ use crate::yard::Env;
 /// its QR, code, minutes and End, and its ended state, an open card of a
 /// secret ask posed
 /// with a value typed, hidden and shown, that card with the yard's
-/// refusal of its answer, the switcher's list open over four yards, one
+/// refusal of its answer, an open card of a setup ask whose account
+/// stands, posed with a host typed above it, the switcher's list open over four yards, one
 /// of them away, that list shut a second after it drew, as a click
 /// outside it shuts it, that list over an own and a member hosted yard,
 /// the member marked, the settings' yards with a member yard's pair this
@@ -206,6 +207,7 @@ pub const STATES: &[&str] = &[
     "secret",
     "secret-shown",
     "secret-refused",
+    "setup-host",
     "switcher",
     "switcher-shut",
     "switcher-member",
@@ -2109,6 +2111,25 @@ fn populate(yard: &Yard, state: &str) {
             yard.emit(r#"{"seq": 21, "kind": "peer_message_failed", "actor": "yard", "data": {"peer": "north", "kind": "mail", "id": "m1", "attempts": 1, "reason": "peer north: refused by the peer: it takes 30 mails an hour from this yard; send again after 21:00"}}"#);
             yard.emit(r#"{"seq": 22, "kind": "mail", "actor": "yard", "at": "2026-10-13T20:31:00Z", "data": {"to": "jo", "to_user": true, "undelivered": "m1", "limit": 30, "until": "2026-10-13T21:00:00Z", "text": "your mail to clerk@north of 10-13 20:31 was not delivered: refused by the peer: it takes 30 mails an hour from this yard; send again after 21:00"}}"#);
         }
+        "setup-host" => {
+            // An open card of a setup ask whose account stands, with a
+            // host template: the host field above the account's, posed
+            // with a host typed, and the yard's host line among the
+            // Does lines.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}]}"#,
+            );
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [queued_setup_host()], "decided": []}}).to_string(),
+            );
+            yard.answer("Bead", &bead_setup_host());
+        }
         "secret" | "secret-shown" | "secret-refused" => {
             // An open card of a secret ask, posed with a value typed:
             // hidden, with the toggle to Show, or shown where the yard
@@ -2945,6 +2966,70 @@ fn bead_secret(unconcealed: bool) -> String {
     .to_string()
 }
 
+/// The setup-host shot's card: the courier pack on a yard where its
+/// account stands, with the address a host fills. The yard's lines, as
+/// it writes them: the pack, the credential, the call and the mint, the
+/// host above the account's, and the grants.
+const SETUP_HOST_TEMPLATE: &str = "https://{host}/api";
+const SETUP_HOST_PACK: &str = "pack courier (embedded in yardr 1.2.3), of kind source, into the yard: it adds 1 source and copies 1 command file (1 command), and changes nothing else. It makes no hook and sets no credential's file.";
+const SETUP_HOST_CREDENTIAL: &str = "source courier: its calls go to https://courier.example.com/api. Its credential is the variable COURIER_TOKEN (the name, never the value), minted from COURIER_ACCOUNT by courier-mint, sent in the header \"Authorization: Bearer {credential}\" on every call.";
+const SETUP_HOST_CALL: &str =
+    "call ping (read): GET /me. It takes no parameter, and sends no query.";
+const SETUP_HOST_MINT: &str = "its mint courier-mint is copied to <home>/sources/courier/courier-mint, sha256 275239824e00e61b0a220e61a41791c7e9b4bd726f8b0c27077a338f8131c9dc mode 0700. It runs with the operator's local logins, and a mint_command the operator sets wins over it.";
+const SETUP_HOST_LINE: &str = "the host of source courier: its calls go to https://courier.example.com/api. To send them to a server of your own instead, give its host with --host <host> (a name or an address with an optional port, yours to type): they then go to https://<host>/api, and the account below is given for that host. The account that stands was given for the host in use, so a new host holds it back until you type it again.";
+const SETUP_HOST_ACCOUNT: &str = "the account COURIER_ACCOUNT: given, in /home/jo/.yardr/sources/courier.env. Type another unseen to change it, or approve keeping it with a bare preset pick (written to /home/jo/.yardr/sources/courier.env, named in the answer, never the value).";
+const SETUP_HOST_GRANTS: &str = "grants to crew yardmaster — pick one:";
+const SETUP_HOST_BACK: &str =
+    "yardr source rm courier; yardr source revoke courier <what> --crew yardmaster";
+const SETUP_HOST_DECLARATION: &str = "name: courier\nbase: https://courier.example.com/api\nbase_template: https://{host}/api\ncredential: COURIER_TOKEN\n";
+const SETUP_HOST_MINT_FILE: &str = "#!/bin/sh\n# mint COURIER_TOKEN from COURIER_ACCOUNT\nexec courier-mint \"$COURIER_ACCOUNT\"\n";
+const SETUP_HOST_MINT_SHA: &str =
+    "275239824e00e61b0a220e61a41791c7e9b4bd726f8b0c27077a338f8131c9dc";
+
+/// What the setup-host shot's ask proposes.
+fn setup_host_of() -> serde_json::Value {
+    json!({"pack": "courier", "account": ["COURIER_ACCOUNT"],
+           "account_file": "/home/jo/.yardr/sources/courier.env",
+           "host_template": SETUP_HOST_TEMPLATE, "given": true,
+           "candidates": [],
+           "does": [SETUP_HOST_PACK, SETUP_HOST_CREDENTIAL, SETUP_HOST_CALL,
+                    SETUP_HOST_MINT, SETUP_HOST_LINE, SETUP_HOST_ACCOUNT,
+                    SETUP_HOST_GRANTS],
+           "back": SETUP_HOST_BACK,
+           "carried": [{"name": "courier", "text": SETUP_HOST_DECLARATION,
+                         "files": [{"program": "courier-mint", "text": SETUP_HOST_MINT_FILE,
+                                    "sha256": SETUP_HOST_MINT_SHA}]}],
+           "presets": [{"name": "read", "grants": [{"source": "courier", "calls": ["read"]}]},
+                       {"name": "everything",
+                        "grants": [{"source": "courier", "calls": ["read", "put"]}]}],
+           "to": [{"crew": "yardmaster"}]})
+}
+
+/// The setup ask 7 on bead-s as the queue lists it, open.
+fn queued_setup_host() -> serde_json::Value {
+    json!({
+        "bead": "bead-s", "bead_title": "The courier", "topic": "", "ask": 7,
+        "question": "Set up courier for the yardmaster?", "asker": "yardmaster",
+        "since": "2026-10-10T10:00:00Z", "setup": setup_host_of()
+    })
+}
+
+/// The bead of that ask, with two presets and `you decide`.
+fn bead_setup_host() -> String {
+    json!({"result": {"id": "bead-s", "title": "The courier", "body": "The body.",
+        "stage": "new", "labels": [], "notes": [], "asks": [
+            {"ask": 7, "to": "jo", "asker": "yardmaster",
+             "since": "2026-10-10T10:00:00Z",
+             "question": "Set up courier for the yardmaster?",
+             "context": ["The yardmaster reads the courier to work beads."],
+             "options": [{"label": "read", "consequence": "may make every read call of the source courier (https://courier.example.com/api): today that is ping"},
+                         {"label": "everything", "consequence": "may make every call of the source courier (https://courier.example.com/api)"},
+                         {"label": "You decide", "consequence": "the recommended preset, read, is granted"}],
+             "recommend": 1, "why": "reading is the job",
+             "state": "open", "setup": setup_host_of()}]}})
+    .to_string()
+}
+
 /// The open ask of the decisions states: a question that wraps to two
 /// lines in the list, with four options on its card.
 fn queued_links() -> serde_json::Value {
@@ -3618,6 +3703,17 @@ mod tests {
                     let bead = yard.client().bead("bead-s").unwrap();
                     assert_eq!(bead.asks.len(), 1, "{state}");
                     assert!(bead.asks[0].run.is_some(), "{state}");
+                }
+                "setup-host" => {
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    let setup = loaded.asks.open[0].setup.as_ref().unwrap();
+                    assert_eq!(setup.host_template, SETUP_HOST_TEMPLATE, "{state}");
+                    assert!(setup.given, "{state}");
+                    assert_eq!(setup.does.len(), 7, "{state}");
+                    let bead = yard.client().bead("bead-s").unwrap();
+                    assert_eq!(bead.asks.len(), 1, "{state}");
+                    assert_eq!(bead.asks[0].options.len(), 3, "{state}");
+                    assert!(bead.asks[0].setup.is_some(), "{state}");
                 }
                 "secret" | "secret-shown" | "secret-refused" => {
                     assert_eq!(loaded.asks.open.len(), 1, "{state}");

@@ -81,6 +81,8 @@
 # ask, posed with a value typed and hidden), `secret-shown` (that
 # card where the yard marks the value no secret: typed and shown),
 # `secret-refused` (that card with the yard's refusal of its answer),
+# `setup-host` (an open card of a setup ask whose account stands, posed
+# with a host typed above it),
 # `switcher` (the switcher's list open over four yards, one away),
 # `switcher-shut` (that list, shut a second after it drew as a click
 # outside it shuts it: the script drives no pointer, so the state asks the
@@ -153,7 +155,7 @@ set -e
 caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image image-menu refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open lines-waiting lines-waiting-end lines-help lines-panel lines-departures keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image image-menu refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused setup-host switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open lines-waiting lines-waiting-end lines-help lines-panel lines-departures keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;

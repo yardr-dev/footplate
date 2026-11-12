@@ -897,6 +897,7 @@ impl Footplate {
         self.older_at = None;
         self.line.update(cx, |line, cx| line.set_text("", cx));
         self.forget_secret(cx);
+        self.forget_host(cx);
         cx.notify();
     }
 
@@ -1247,6 +1248,17 @@ impl Footplate {
                     // build's alone.
                     #[cfg(debug_assertions)]
                     if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("page")
+                        && let Some(Selected::Decision(bead)) = model.selected()
+                    {
+                        self.returning =
+                            Some(((Selected::Decision(bead.clone()), px(1_000_000.)), false));
+                    }
+                    // The setup-host shot stands at the card's end, so the
+                    // host field above the account's shows with the host
+                    // posed in it: as above, past its end, where the
+                    // layout stops. A debug build's alone.
+                    #[cfg(debug_assertions)]
+                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("setup-host")
                         && let Some(Selected::Decision(bead)) = model.selected()
                     {
                         self.returning =
@@ -6871,7 +6883,7 @@ fn shot_section() -> Option<Section> {
 /// The row a screenshot state opens on instead of the yard's own: the
 /// refused mail's conversation for the undelivered shot, the open card
 /// for the plain, plain-select, page, run, teammates, weighty-mapping,
-/// secret and pair-ask shots (the refused shot's with its refusal), the
+/// secret, setup-host and pair-ask shots (the refused shot's with its refusal), the
 /// decided pairing card for the pair-qr and pair-ended shots, the board for the
 /// arrivals and departures shots, one arrival's bead for the arrival
 /// shot, yardr's line for the flow shot, the first parked bead's card for
@@ -6908,6 +6920,7 @@ fn shot_selected() -> Option<Selected> {
         | Ok("secret")
         | Ok("secret-shown")
         | Ok("secret-refused")
+        | Ok("setup-host")
         | Ok("pair-ask") => {
             return Some(Selected::Decision("bead-s".into()));
         }

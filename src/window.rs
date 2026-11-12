@@ -449,6 +449,14 @@ pub struct Footplate {
     /// The session and ask the number field is for: bead IDs and ask
     /// numbers can be the same in different yards.
     typeback_for: Option<(u64, String, u64)>,
+    /// The field of a setup ask's card for the host the ask carries a
+    /// template for, drawn as typed: a host is an address, typed in the
+    /// clear as the terminal flag is. It is another than the secret
+    /// field: the host stands above the unseen account. Enter in it
+    /// submits nothing: the approval reads it.
+    host: Entity<Line>,
+    /// The session and ask the host field is for.
+    host_for: Option<(u64, String, u64)>,
     /// The run ask whose approval is with the yard and not answered yet:
     /// no second one goes after it.
     approving: Option<(String, u64)>,
@@ -687,6 +695,12 @@ impl Footplate {
         // nothing: the approval or the give reads it, and Enter alone
         // approves nothing still.
         let typeback = cx.new(Line::new);
+        // A setup card's host, where the ask carries a template for one:
+        // drawn as typed, as a terminal echoes its flag. Enter in it
+        // submits nothing: the approval reads it, and Enter alone
+        // approves nothing still.
+        let host = cx.new(Line::new);
+        cx.observe(&host, |_, _, cx| cx.notify()).detach();
         // The card's Give and Send buttons are disabled while their field
         // is empty: the window is drawn again with what is typed.
         cx.observe(&line, |_, _, cx| cx.notify()).detach();
@@ -949,6 +963,8 @@ impl Footplate {
             secret_shown: false,
             typeback,
             typeback_for: None,
+            host,
+            host_for: None,
             approving: None,
             approval_pairing: None,
             removing: HashSet::new(),
@@ -1147,7 +1163,8 @@ impl Render for Footplate {
             | Some(Selected::Decided(_, _))
                 if self.line.focus_handle(cx).is_focused(window)
                     || self.secret.focus_handle(cx).is_focused(window)
-                    || self.typeback.focus_handle(cx).is_focused(window) =>
+                    || self.typeback.focus_handle(cx).is_focused(window)
+                    || self.host.focus_handle(cx).is_focused(window) =>
             {
                 CONTEXT
             }
@@ -2023,6 +2040,16 @@ mod tests {
     /// What a weighty card's number field holds.
     fn typeback_text(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> String {
         view.read_with(cx, |v, cx| v.typeback.read(cx).text().to_string())
+    }
+
+    /// What a setup card's host field holds.
+    fn host_text(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> String {
+        view.read_with(cx, |v, cx| v.host.read(cx).text().to_string())
+    }
+
+    /// What a setup card's host field says it takes.
+    fn host_placeholder(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> String {
+        view.read_with(cx, |v, cx| v.host.read(cx).placeholder().to_string())
     }
 
     fn placeholder(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> String {
@@ -31426,10 +31453,24 @@ yardr.dev
     /// The setup the courier ask proposes on a pack already applied: the
     /// yard's account line for what stands, with `given` and `missing`.
     /// No candidate matches a sibling: the standing file is the account.
-    fn setup_drift(account: &[&str], given: bool, missing: &[&str]) -> Value {
+    /// Where `template` names the address a host fills, the ask carries
+    /// it with the yard's host line above the account's, as the yard
+    /// writes it.
+    fn setup_drift(account: &[&str], given: bool, missing: &[&str], template: &str) -> Value {
         let mut setup = setup_of(account, false);
         setup["given"] = json!(given);
         setup["missing"] = json!(missing);
+        if !template.is_empty() {
+            setup["host_template"] = json!(template);
+            let mut line = format!(
+                "the host of source courier: its calls go to https://courier.example.com/api. To send them to a server of your own instead, give its host with --host <host> (a name or an address with an optional port, yours to type): they then go to {}, and the account below is given for that host.",
+                template.replace("{host}", "<host>")
+            );
+            if given {
+                line.push_str(" The account that stands was given for the host in use, so a new host holds it back until you type it again.");
+            }
+            setup["does"].as_array_mut().unwrap().insert(4, json!(line));
+        }
         if given || !missing.is_empty() {
             let names = account.join(" and ");
             let file = "/home/jo/.yardr/sources/courier.env";
@@ -31454,38 +31495,49 @@ yardr.dev
 
     /// The setup ask 7 on bead-s on a pack already applied, as the queue
     /// lists it, open.
-    fn queued_drift(account: &[&str], given: bool, missing: &[&str]) -> Value {
+    fn queued_drift(account: &[&str], given: bool, missing: &[&str], template: &str) -> Value {
         let mut queued = queued_setup(account, false);
-        queued["setup"] = setup_drift(account, given, missing);
+        queued["setup"] = setup_drift(account, given, missing, template);
         queued
     }
 
     /// The bead of that ask, with two presets and `you decide`,
     /// `recommend` recommended.
-    fn bead_drift(account: &[&str], given: bool, missing: &[&str], recommend: u64) -> String {
+    fn bead_drift(
+        account: &[&str],
+        given: bool,
+        missing: &[&str],
+        recommend: u64,
+        template: &str,
+    ) -> String {
         let mut bead: Value = serde_json::from_str(&bead_setup(account, false, recommend)).unwrap();
-        bead["result"]["asks"][0]["setup"] = setup_drift(account, given, missing);
+        bead["result"]["asks"][0]["setup"] = setup_drift(account, given, missing, template);
         bead.to_string()
     }
 
     /// The window on a yard whose one open ask is that setup ask, its
     /// card open and read.
+    #[allow(clippy::too_many_arguments)]
     fn opened_on_a_drift_ask<'a>(
         yard: &Yard,
         account: &[&str],
         given: bool,
         missing: &[&str],
         recommend: u64,
+        template: &str,
         file: &std::path::Path,
         cx: &'a mut TestAppContext,
     ) -> (Entity<Footplate>, &'a mut VisualTestContext) {
         a_yard_of_jo(yard);
         yard.answer(
             "UserAsks",
-            &json!({"result": {"open": [queued_drift(account, given, missing)], "decided": []}})
+            &json!({"result": {"open": [queued_drift(account, given, missing, template)], "decided": []}})
                 .to_string(),
         );
-        yard.answer("Bead", &bead_drift(account, given, missing, recommend));
+        yard.answer(
+            "Bead",
+            &bead_drift(account, given, missing, recommend, template),
+        );
         yard.answer("DeferAsk", "{}");
         yard.answer("DeclineAsk", "{}");
         let at = env_on(yard, file);
@@ -32200,7 +32252,8 @@ yardr.dev
     /// every account name: the approval with nothing typed and no
     /// candidate taken keeps it with the bare preset pick, and neither
     /// values nor a candidate go. What is typed instead changes the
-    /// account, and is wanted whole.
+    /// account, and is wanted whole. With no host template the card
+    /// shows no host field.
     #[gpui::test]
     fn a_setup_ask_that_stands_is_kept_with_a_bare_preset_pick(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
@@ -32212,6 +32265,7 @@ yardr.dev
             true,
             &[],
             1,
+            "",
             &file,
             cx,
         );
@@ -32219,6 +32273,7 @@ yardr.dev
             secret_field(&view, cx).2,
             "COURIER_ACCOUNT for the setup of courier (1 of 2)"
         );
+        assert!(!drawn(cx, "host bead-s 7"));
 
         // One of the two typed, the approval wants the other: what is
         // typed changes the account, and goes whole or not at all.
@@ -32240,7 +32295,7 @@ yardr.dev
             &json!({"result": {"open": [], "decided": [{
                 "bead": "bead-s", "ask": 7, "question": "Set up courier for the yardmaster?",
                 "asker": "yardmaster", "state": "answered", "option": 1, "option_label": "read",
-                "setup": setup_drift(&["COURIER_ACCOUNT", "COURIER_REGION"], true, &[]),
+                "setup": setup_drift(&["COURIER_ACCOUNT", "COURIER_REGION"], true, &[], ""),
                 "ran": {"argv": ["setup", "courier"], "result": "approved, to be carried out"}}]}})
             .to_string(),
         );
@@ -32268,6 +32323,141 @@ yardr.dev
         );
     }
 
+    /// A setup card whose ask carries a host template, where the account
+    /// stands: the host field stands above the account's, naming the
+    /// address it fills; a host typed there approves beside the bare
+    /// pick that keeps the account, and the line names it. Keys typed in
+    /// the field are its text, and the approval's key sends from it, as
+    /// from the account field.
+    #[gpui::test]
+    fn a_setup_card_with_a_host_template_takes_the_host_above_the_account(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        let second = Yard::start();
+        a_yard_of_jo(&second);
+        let template = "https://{host}/api";
+        second.answer(
+            "UserAsks",
+            &json!({"result": {"open": [queued_drift(&["COURIER_ACCOUNT"], true, &[], template)], "decided": []}})
+                .to_string(),
+        );
+        second.answer(
+            "Bead",
+            &bead_drift(&["COURIER_ACCOUNT"], true, &[], 1, template),
+        );
+        second.answer("DeferAsk", "{}");
+        second.answer("DeclineAsk", "{}");
+        Settings::default()
+            .with_yard(None, listed("second home", &second, &file), Some(&file))
+            .unwrap()
+            .write(&file)
+            .unwrap();
+        let (view, cx) = opened_on_a_drift_ask(
+            &yard,
+            &["COURIER_ACCOUNT"],
+            true,
+            &[],
+            1,
+            template,
+            &file,
+            cx,
+        );
+        // The host field above the account field, naming the address it
+        // fills; the yard's host line stands among the Does lines.
+        assert!(drawn(cx, "host bead-s 7"));
+        assert!(drawn(cx, "secret bead-s 7"));
+        let host = bounds_of(cx, "host bead-s 7");
+        let secret = bounds_of(cx, "secret bead-s 7");
+        assert!(host.bottom() <= secret.top());
+        assert_eq!(host_text(&view, cx), "");
+        assert_eq!(
+            host_placeholder(&view, cx),
+            "Host of a server of your own: https://{host}/api"
+        );
+        assert!(drawn(cx, "setup does bead-s 7 4"));
+
+        // A click types in the field: keys there are its text, not the
+        // card's — neither a pick nor a decline.
+        click_on(cx, "host bead-s 7");
+        cx.simulate_keystrokes("d2");
+        cx.run_until_parked();
+        assert_eq!(host_text(&view, cx), "d2");
+        assert_eq!(
+            view.read_with(cx, |v, _| {
+                v.model.as_ref().unwrap().setup_pick("bead-s", 7)
+            }),
+            Some(1)
+        );
+        assert_eq!(view.read_with(cx, |v, _| v.declining.clone()), None);
+
+        // Another yard can have the same bead and ask IDs. A host typed
+        // for this machine's card is cleared when the second home's card
+        // opens, and stays cleared when this machine's card returns.
+        view.update_in(cx, |v, window, cx| v.switch_to("second home", window, cx));
+        wait(cx, "the second home's setup card", |cx| {
+            to_decisions(&view, cx);
+            open_yard(&view, cx) == "second home"
+                && view.read_with(cx, |v, _| {
+                    v.model
+                        .as_ref()
+                        .is_some_and(|m| m.selected() == Some(&Selected::Decision("bead-s".into())))
+                })
+                && drawn(cx, "host bead-s 7")
+        });
+        assert_eq!(host_text(&view, cx), "");
+        view.update_in(cx, |v, window, cx| v.switch_to("this machine", window, cx));
+        wait(cx, "this machine's setup card again", |cx| {
+            to_decisions(&view, cx);
+            open_yard(&view, cx) == "this machine" && drawn(cx, "host bead-s 7")
+        });
+        assert_eq!(host_text(&view, cx), "");
+
+        // The host typed after returning to this yard, the approval
+        // sends it beside the bare pick that keeps the standing account,
+        // from the field's key, and the line names it.
+        click_on(cx, "host bead-s 7");
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [], "decided": [{
+                "bead": "bead-s", "ask": 7, "question": "Set up courier for the yardmaster?",
+                "asker": "yardmaster", "state": "answered", "option": 1, "option_label": "read",
+                "setup": setup_drift(&["COURIER_ACCOUNT"], true, &[], "https://{host}/api"),
+                "ran": {"argv": ["setup", "courier"], "result": "approved, to be carried out"}}]}})
+            .to_string(),
+        );
+        yard.answer(
+            "ApproveSetup",
+            &json!({"result": {"bead": "bead-s", "ask": 7, "asker": "yardmaster",
+                "pack": "courier", "preset": "read", "keep": true,
+                "host": "d2b.example.net",
+                "result": "approved, to be carried out"}})
+            .to_string(),
+        );
+        cx.simulate_input("d2b.example.net");
+        cx.run_until_parked();
+        assert_eq!(host_text(&view, cx), "d2b.example.net");
+        cx.simulate_keystrokes("secondary-enter");
+        wait(cx, "approved", |cx| {
+            notice(&view, cx)
+                == "approved, being carried out: setup of pack courier, preset read to crew yardmaster; kept; gave the host d2b.example.net"
+        });
+        assert_eq!(
+            yard.asked("ApproveSetup"),
+            [
+                json!({"bead": "bead-s", "ask": 7, "option": 1, "actor": "jo",
+                     "host": "d2b.example.net"})
+            ]
+        );
+        assert_eq!(answered_otherwise(&yard), Vec::<String>::new());
+        assert_eq!(host_text(&view, cx), "");
+        let detail = decided_detail_of(&view, cx, "bead-s", 7);
+        assert_eq!(
+            detail.state_line,
+            "approved, being carried out: setup of pack courier, preset read to crew yardmaster"
+        );
+    }
+
     /// A setup ask whose update newly needs a name: the field asks for
     /// just the missing names, and the approval sends exactly those with
     /// the preset pick. A bare pick keeps nothing here: the account is
@@ -32283,6 +32473,7 @@ yardr.dev
             false,
             &["COURIER_REGION"],
             1,
+            "",
             &file,
             cx,
         );
@@ -32303,7 +32494,7 @@ yardr.dev
             &json!({"result": {"open": [], "decided": [{
                 "bead": "bead-s", "ask": 7, "question": "Set up courier for the yardmaster?",
                 "asker": "yardmaster", "state": "answered", "option": 1, "option_label": "read",
-                "setup": setup_drift(&["COURIER_ACCOUNT", "COURIER_REGION"], false, &["COURIER_REGION"]),
+                "setup": setup_drift(&["COURIER_ACCOUNT", "COURIER_REGION"], false, &["COURIER_REGION"], ""),
                 "given": ["COURIER_REGION"],
                 "ran": {"argv": ["setup", "courier"], "result": "approved, to be carried out"}}]}})
             .to_string(),

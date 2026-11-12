@@ -1263,6 +1263,23 @@ impl Footplate {
                         });
                         self.returning = Some(((open, px(1_000_000.)), false));
                     }
+                    // The waiting-many shots stand the many-move card at its
+                    // end, where the folded control or the moves and the line
+                    // for their note are: as above, past its end, where the
+                    // layout stops. The open state unfolds the moves, as a
+                    // key would. A debug build's alone.
+                    #[cfg(debug_assertions)]
+                    if matches!(
+                        std::env::var("FOOTPLATE_SHOT").as_deref(),
+                        Ok("waiting-many") | Ok("waiting-many-open")
+                    ) && let Some(open) = model.selected().cloned()
+                        && let Selected::Waiting(bead) = &open
+                    {
+                        if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("waiting-many-open") {
+                            model.expand_moves(bead);
+                        }
+                        self.returning = Some(((open, px(1_000_000.)), false));
+                    }
                     // The image shot opens the mail's image over the
                     // window, as a click on its thumbnail does: the yard
                     // holds the shot's bytes, and they show when they
@@ -6805,7 +6822,8 @@ fn shot_section() -> Option<Section> {
 /// and secret shots (the refused shot's with its refusal), the board for the
 /// arrivals and departures shots, one arrival's bead for the arrival
 /// shot, yardr's line for the flow shot, the first parked bead's card for
-/// the waiting shots and the yard row for the delivery shot, else none. A
+/// the waiting shots, the many-move bead's card for the waiting-many shots
+/// and the yard row for the delivery shot, else none. A
 /// debug build's alone.
 fn shot_selected() -> Option<Selected> {
     // The card shots open their cards, in decisions: a debug build's
@@ -6821,6 +6839,9 @@ fn shot_selected() -> Option<Selected> {
         }
         Ok("waiting") | Ok("waiting-folded") | Ok("waiting-end") => {
             return Some(Selected::Waiting("plantime-4f2a".into()));
+        }
+        Ok("waiting-many") | Ok("waiting-many-open") => {
+            return Some(Selected::Waiting("lead-5gvp".into()));
         }
         // The same bead's Lines details, from the board.
         Ok("lines-waiting") | Ok("lines-waiting-end") | Ok("lines-help") => {

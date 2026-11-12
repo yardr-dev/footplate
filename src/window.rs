@@ -33738,6 +33738,59 @@ yardr.dev
         board.to_string()
     }
 
+    /// Long move lists beside the short ones: a bead with eight plain
+    /// moves (folded), one with seven (folded), one with six (flat), and
+    /// one with seven moves where the first is an outcome (flat).
+    fn parked_board_long() -> String {
+        let plain = |n: usize| {
+            (1..=n)
+                .map(|i| {
+                    json!({
+                        "kind": "advance",
+                        "label": format!("Move to stage-{i}"),
+                        "to": format!("stage-{i}")
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut outcome = plain(6);
+        outcome.insert(
+            0,
+            json!({"kind": "done", "label": "done: move to build",
+                   "outcome": "done", "to": "build"}),
+        );
+        json!({"result": [
+            {"bead": "bead-m", "title": "Many plain moves",
+             "stage": "backlog", "group": "people",
+             "since": "2026-10-09T09:30:00Z", "revision": "rev-m",
+             "actions": plain(8)},
+            {"bead": "bead-n", "title": "More plain moves",
+             "stage": "backlog", "group": "people",
+             "since": "2026-10-09T09:40:00Z", "revision": "rev-n",
+             "actions": plain(7)},
+            {"bead": "bead-s", "title": "Six plain moves",
+             "stage": "backlog", "group": "people",
+             "since": "2026-10-10T09:30:00Z", "revision": "rev-s",
+             "actions": plain(6)},
+            {"bead": "bead-o", "title": "An outcome among moves",
+             "stage": "ready", "group": "people",
+             "since": "2026-10-10T09:40:00Z", "revision": "rev-o",
+             "actions": outcome},
+        ]})
+        .to_string()
+    }
+
+    /// `parked_board_long` as the yard serves it once the beads in `gone`
+    /// have been moved on.
+    fn parked_board_long_without(gone: &[&str]) -> String {
+        let mut board: Value = serde_json::from_str(&parked_board_long()).unwrap();
+        board["result"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|row| !gone.contains(&row["bead"].as_str().unwrap()));
+        board.to_string()
+    }
+
     /// A parked bead as `Bead` serves it: its body and a note, and no ask.
     fn bead_parked(id: &str, title: &str) -> String {
         json!({"result": {
@@ -33773,6 +33826,26 @@ yardr.dev
         yard.answer(
             "MoveBead",
             r#"{"result": {"bead": "bead-p", "stage": "build"}}"#,
+        );
+    }
+
+    /// A yard whose jo has the beads of `parked_board_long` waiting for a
+    /// move, and no questions.
+    fn a_yard_with_long_moves(yard: &Yard) {
+        a_yard_of_jo(yard);
+        yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
+        yard.answer("Waiting", &parked_board_long());
+        for (bead, title) in [
+            ("bead-m", "Many plain moves"),
+            ("bead-n", "More plain moves"),
+            ("bead-s", "Six plain moves"),
+            ("bead-o", "An outcome among moves"),
+        ] {
+            yard.answer_for("Bead", "bead", bead, &bead_parked(bead, title));
+        }
+        yard.answer(
+            "MoveBead",
+            r#"{"result": {"bead": "bead-m", "stage": "stage-3"}}"#,
         );
     }
 
@@ -34015,6 +34088,73 @@ yardr.dev
             view.read_with(cx, |v, _| v.model.as_ref().unwrap().parked_count()),
             0
         );
+    }
+
+    /// A long uniform move list stands folded behind the one control, which
+    /// names how many moves stand behind it; Enter, a click, a number or
+    /// the arrows stand them unfolded, with none picked, and then picking
+    /// and Enter work as today. Six moves and a list with an outcome in it
+    /// never fold.
+    #[gpui::test]
+    fn a_long_uniform_move_list_folds_behind_one_control_until_expanded(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        a_yard_with_long_moves(&yard);
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+        to_decisions(&view, cx);
+        wait(cx, "the section", |cx| drawn(cx, "waiting row bead-m"));
+        // The folded card shows the one control, and no move button.
+        click_on(cx, "waiting row bead-m");
+        wait(cx, "the bead", |cx| has_bead(&view, cx, "bead-m"));
+        assert!(drawn(cx, "waiting moves bead-m"));
+        assert!(!drawn(cx, "waiting move bead-m 1"));
+        view.read_with(cx, |v, _| {
+            let m = v.model.as_ref().unwrap();
+            assert!(m.moves_folded("bead-m"));
+            assert_eq!(m.picked_move("bead-m"), None);
+        });
+        // Enter unfolds, and makes no move.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("MoveBead"), Vec::<Value>::new());
+        wait(cx, "the moves", |cx| drawn(cx, "waiting move bead-m 8"));
+        view.read_with(cx, |v, _| {
+            let m = v.model.as_ref().unwrap();
+            assert!(!m.moves_folded("bead-m"));
+            assert_eq!(m.picked_move("bead-m"), None);
+        });
+        // Unfolded, a number picks and Enter makes, as today.
+        cx.simulate_keystrokes("3");
+        assert_eq!(
+            view.read_with(cx, |v, _| v.model.as_ref().unwrap().picked_move("bead-m")),
+            Some(3)
+        );
+        yard.answer("Waiting", &parked_board_long_without(&["bead-m"]));
+        cx.simulate_keystrokes("enter");
+        wait(cx, "the move made", |_| !yard.asked("MoveBead").is_empty());
+        assert_eq!(
+            yard.asked("MoveBead"),
+            [json!({"bead": "bead-m", "to": "stage-3", "revision": "rev-m", "actor": "jo"})]
+        );
+        // A click unfolds another card the same way; the arrows pick from
+        // there.
+        click_on(cx, "waiting row bead-n");
+        wait(cx, "the bead", |cx| has_bead(&view, cx, "bead-n"));
+        assert!(drawn(cx, "waiting moves bead-n"));
+        click_on(cx, "waiting moves bead-n");
+        wait(cx, "the moves", |cx| drawn(cx, "waiting move bead-n 1"));
+        cx.simulate_keystrokes("down");
+        assert_eq!(
+            view.read_with(cx, |v, _| v.model.as_ref().unwrap().picked_move("bead-n")),
+            Some(1)
+        );
+        // Six moves and an outcome list never fold: their buttons stand.
+        for bead in ["bead-s", "bead-o"] {
+            click_on(cx, &format!("waiting row {bead}"));
+            wait(cx, "the bead", |cx| has_bead(&view, cx, bead));
+            assert!(drawn(cx, &format!("waiting move {bead} 1")), "{bead}");
+            assert!(!drawn(cx, &format!("waiting moves {bead}")), "{bead}");
+        }
     }
 
     /// A move back wants a note: its button stands faint, saying so, and

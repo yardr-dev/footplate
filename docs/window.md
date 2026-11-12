@@ -188,7 +188,10 @@ where the line holds any. A click on a button makes that move at once. Where
 several moves are offered none is picked until you pick one, so a habit of
 Enter chooses nothing; a lone move stands picked. A move that wants a note,
 as a move back to an earlier stage does, stands faint and says `needs a note`
-until the line holds words.
+until the line holds words. Where more than six moves are offered and every
+one is a plain move to a stage, they fold behind one `Move to ...` control,
+which names how many stand behind it. Enter, a click, a number or the arrows
+unfold them, with none picked; then the keys above pick among them as ever.
 
 The yard checks the move in its own write: the bead must still be as the
 card read it, the move must be one the yard offers you, and a note must be

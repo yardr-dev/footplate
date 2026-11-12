@@ -49,6 +49,22 @@ pub(crate) fn waiting_keys(moves: usize) -> String {
     }
 }
 
+/// The keys of a folded card, as they stand under it: the moves are shown
+/// first, then picked as today.
+pub(crate) fn waiting_keys_folded() -> String {
+    "enter shows the moves · i note".to_string()
+}
+
+/// What the folded moves' control says on its face: the yard's words for
+/// a move to a stage, with no stage named.
+pub(crate) const MOVE_TO: &str = "Move to ...";
+
+/// What the folded moves' control says of how many moves stand behind it,
+/// at its right.
+pub(crate) fn folded_count(moves: usize) -> String {
+    format!("{moves} moves ▸")
+}
+
 /// What Enter says when it makes no move because none is picked.
 pub(crate) fn pick_a_move(moves: usize) -> String {
     format!("pick a move first: 1-{moves}, or the arrows")
@@ -355,16 +371,31 @@ impl Footplate {
         let held = self.reconnecting();
         let underway = self.moving.contains(&(self.session, bead.clone()));
         let mut buttons = div().flex().flex_col().gap_1();
-        for how in &detail.moves {
-            let waits = how.note_required && !has_words;
-            let click = (!waits && !held && !underway).then(|| {
-                let bead = bead.clone();
-                let number = how.number;
+        // A long uniform list stands folded behind the one control, which
+        // unfolds it: expanding is local, so its click stands even while
+        // the moves are held.
+        if detail.folded {
+            let expand = bead.clone();
+            buttons = buttons.child(folded_moves_button(
+                &bead,
+                detail.moves.len(),
                 cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
-                    this.make_move(bead.clone(), number, cx)
-                })
-            });
-            buttons = buttons.child(move_button(&bead, how, waits, click, palette));
+                    this.expand_moves(expand.clone(), cx)
+                }),
+                palette,
+            ));
+        } else {
+            for how in &detail.moves {
+                let waits = how.note_required && !has_words;
+                let click = (!waits && !held && !underway).then(|| {
+                    let bead = bead.clone();
+                    let number = how.number;
+                    cx.listener(move |this, _: &ClickEvent, _: &mut Window, cx| {
+                        this.make_move(bead.clone(), number, cx)
+                    })
+                });
+                buttons = buttons.child(move_button(&bead, how, waits, click, palette));
+            }
         }
         block = block.child(buttons);
         let focus = self.line.focus_handle(cx);
@@ -420,7 +451,10 @@ impl Footplate {
                 .gap_1()
                 .text_sm()
                 .text_color(palette.faint)
-                .child(div().child(waiting_keys(detail.moves.len())))
+                .child(div().child(match detail.folded {
+                    true => waiting_keys_folded(),
+                    false => waiting_keys(detail.moves.len()),
+                }))
                 .child(div().child("·"))
                 .child(keys_hint("keys hint waiting", palette, cx)),
         )
@@ -446,6 +480,15 @@ impl Footplate {
     /// finds the line empty is not made, and says so; so does Enter when
     /// several are offered and none is picked.
     pub(crate) fn make_picked_move(&mut self, bead: String, cx: &mut Context<Self>) {
+        // Folded moves stand unfolded first: expanding is local, so it
+        // goes even while the yard is not answering.
+        if self.model.as_ref().is_some_and(|m| m.moves_folded(&bead)) {
+            self.change(cx, |m| {
+                m.expand_moves(&bead);
+                Vec::new()
+            });
+            return;
+        }
         // Moves are held as a conversation's sends are: nothing is queued.
         if self.reconnecting() {
             return;
@@ -519,6 +562,15 @@ impl Footplate {
             Vec::new()
         });
         self.make_picked_move(bead, cx);
+    }
+
+    /// A click on the folded moves' control: the moves stand unfolded,
+    /// with none picked.
+    pub(crate) fn expand_moves(&mut self, bead: String, cx: &mut Context<Self>) {
+        self.change(cx, |m| {
+            m.expand_moves(&bead);
+            Vec::new()
+        });
     }
 
     /// The note that went with a move is not kept for the bead: it has
@@ -634,6 +686,43 @@ fn move_button(
         }))
 }
 
+/// A folded list's one control: the yard's "Move to ..." words with how
+/// many moves stand behind it. A button in the moves' own dress, since it
+/// stands where they do; a click stands them unfolded.
+fn folded_moves_button(
+    bead: &str,
+    count: usize,
+    click: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    palette: Palette,
+) -> Stateful<Div> {
+    let id = format!("waiting moves {bead}");
+    div()
+        .id(SharedString::from(id.clone()))
+        .debug_selector(|| id.clone())
+        .min_h(px(32.))
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_x_2()
+        .border_1()
+        .border_color(palette.line)
+        .text_color(palette.text)
+        .hover(|style| style.bg(palette.hover))
+        .cursor_pointer()
+        .on_click(click)
+        .child(div().min_w_0().child(MOVE_TO))
+        .child(
+            div()
+                .flex_none()
+                .text_sm()
+                .text_color(palette.faint)
+                .child(folded_count(count)),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +739,9 @@ mod tests {
         assert_eq!(waiting_keys(0), "");
         assert_eq!(waiting_keys(1), "i note · enter makes the move");
         assert_eq!(waiting_keys(3), "1-3 pick a move · i note · enter makes it");
+        assert_eq!(waiting_keys_folded(), "enter shows the moves · i note");
+        assert_eq!(MOVE_TO, "Move to ...");
+        assert_eq!(folded_count(12), "12 moves ▸");
         assert_eq!(pick_a_move(3), "pick a move first: 1-3, or the arrows");
         assert_eq!(
             note_wanted("changes: send back to shape (note required)"),

@@ -109,7 +109,9 @@ use crate::yard::Env;
 /// the line for their note are, the Lines details of the first of those beads
 /// with the same moves under its body, those details stood at their end with
 /// the move back picked and its note typed, and the same details on a yard
-/// from before the call, which say in one line who moves the stage,
+/// from before the call, which say in one line who moves the stage, and one
+/// bead served ten plain moves, open on its card stood at its end, folded
+/// behind the one control and unfolded,
 /// The stopped yard answers nothing, as the refused one answers nowhere:
 /// both open on a yard that is down, as the posed setup does. The yard at
 /// an address is opened from the settings the shot script writes; the
@@ -208,6 +210,8 @@ pub const STATES: &[&str] = &[
     "waiting",
     "waiting-folded",
     "waiting-end",
+    "waiting-many",
+    "waiting-many-open",
     "lines-waiting",
     "lines-waiting-end",
     "lines-help",
@@ -2228,6 +2232,53 @@ fn populate(yard: &Yard, state: &str) {
                 .to_string(),
             );
         }
+        "waiting-many" | "waiting-many-open" => {
+            // The Decide list with one bead parked for jo's move, served
+            // ten plain moves as a flow-less bead is: its card stands
+            // folded behind the one control, and unfolded in the open
+            // state, stood at its end where the control or the moves and
+            // the line for their note are.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}]}"#,
+            );
+            yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
+            let midnight = shot_midnight();
+            let moves: Vec<serde_json::Value> = [
+                "new", "draft", "build", "review", "decide", "fix", "verify", "publish", "sign",
+                "merged",
+            ]
+            .iter()
+            .map(|to| json!({"kind": "advance", "label": format!("Move to {to}"), "to": to}))
+            .collect();
+            yard.answer(
+                "Waiting",
+                &json!({"result": [
+                    {"bead": "lead-5gvp", "title": "A lead with no flow",
+                     "stage": "backlog", "group": "people",
+                     "since": shot_since(&midnight, 3, 9, 30), "revision": "01KJ8W3C5T0E9XRQ2NAM4PBD7F",
+                     "actions": moves}
+                ]})
+                .to_string(),
+            );
+            yard.answer(
+                "Bead",
+                &json!({"result": {
+                    "id": "lead-5gvp", "title": "A lead with no flow",
+                    "body": "A lead from the site's invite field, with no depot and no flow.",
+                    "stage": "backlog", "labels": [],
+                    "notes": [{"seq": 4, "kind": "note", "author": "yardmaster",
+                               "text": "asked for the team's size",
+                               "at": shot_since(&midnight, 3, 9, 0)}],
+                    "asks": []
+                }})
+                .to_string(),
+            );
+        }
         "weighty" => {
             // A weighty run ask's card beside a routine one's: the
             // weighty card shows its classes' lines first, and where
@@ -3592,6 +3643,22 @@ mod tests {
                     assert_eq!(bead.stage, "ready", "{state}");
                     assert_eq!(bead.notes.len(), 1, "{state}");
                     assert_eq!(loaded.flows.depots[0].flows[0].stages.len(), 6, "{state}");
+                }
+                "waiting-many" | "waiting-many-open" => {
+                    // No ask, and one bead parked for jo's move, served ten
+                    // plain moves as a flow-less bead is: the card folds
+                    // them behind the one control until it is unfolded.
+                    assert!(loaded.asks.open.is_empty(), "{state}");
+                    assert!(!loaded.waiting_too_old, "{state}");
+                    assert_eq!(loaded.parked.len(), 1, "{state}");
+                    let row = &loaded.parked[0];
+                    assert_eq!(row.bead, "lead-5gvp", "{state}");
+                    assert!(row.depot.is_empty(), "{state}");
+                    assert_eq!(row.actions.len(), 10, "{state}");
+                    assert!(crate::model::moves_fold(&row.actions), "{state}");
+                    let bead = yard.client().bead("lead-5gvp").unwrap();
+                    assert_eq!(bead.stage, "backlog", "{state}");
+                    assert_eq!(bead.notes.len(), 1, "{state}");
                 }
                 "lines-help" => {
                     // The same yard from before the call: no beads parked

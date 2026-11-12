@@ -397,8 +397,11 @@ with three beads parked for jo's move under the open ask, one of them open
 on its card with the moves the yard offers), `waiting-folded` (that list
 with the Waiting section folded to its head and count, the card still
 open), `waiting-end` (that card at its end, where the moves and
-the line for their note are), `lines-waiting` (the same bead's Lines
-details, with the same moves under its body), `lines-waiting-end` (those
+the line for their note are), `waiting-many` (one bead served ten plain
+moves, open on its card at its end, folded behind the one control),
+`waiting-many-open` (that card with the moves unfolded), `lines-waiting`
+(the same bead's Lines details, with the same moves under its body),
+`lines-waiting-end` (those
 details at their end, the move back picked and its note typed),
 `lines-help` (the same details on a yard from before the call, which say who
 moves the stage in one line), `keys` (the cheatsheet open over an open

@@ -614,6 +614,9 @@ pub struct WaitingDetail {
     /// The moves in the yard's order, each in the yard's words. None where
     /// `flow_error` stands.
     pub moves: Vec<WaitingMove>,
+    /// Whether the moves stand folded behind the one "Move to ..." control:
+    /// a long uniform list not yet unfolded.
+    pub folded: bool,
     /// Why the bead's flow does not resolve, where it does not.
     pub flow_error: String,
     /// Why entering the stage put no ask for its people, where that ask
@@ -1392,6 +1395,9 @@ pub struct Model {
     chosen: HashMap<(String, u64), u64>,
     /// The asks whose card stands expanded, by bead and ask.
     expanded: HashSet<(String, u64)>,
+    /// The parked beads whose folded moves stand unfolded, by bead. A move
+    /// made clears its bead's: the next list it is served folds again.
+    moves_expanded: HashSet<String>,
     /// The run asks whose carried texts stand shown, by bead and ask: the
     /// tap behind the yard's sentences.
     texts: HashSet<(String, u64)>,
@@ -2274,17 +2280,40 @@ impl Model {
                     note_required: how.note_required,
                 })
                 .collect(),
+            folded: self.moves_folded(bead),
             flow_error: plain(&row.flow_error),
             template_error: plain(&row.template_error),
         })
+    }
+
+    /// Whether the parked bead's moves stand folded behind the one "Move
+    /// to ..." control: a long uniform list not yet unfolded. False where
+    /// the yard parks no such bead for the person.
+    pub fn moves_folded(&self, bead: &str) -> bool {
+        match self.parked().find(|row| row.bead == bead) {
+            Some(row) => moves_fold(&row.actions) && !self.moves_expanded.contains(bead),
+            None => false,
+        }
+    }
+
+    /// Stands the parked bead's folded moves unfolded, where they fold.
+    /// One way: unfolded they stay, for as long as the bead is parked.
+    pub fn expand_moves(&mut self, bead: &str) {
+        if self.moves_folded(bead) {
+            self.moves_expanded.insert(bead.to_string());
+        }
     }
 
     /// The move Enter makes for the parked bead, by its place among the
     /// moves its row offers, from 1: the pick of a number key or the
     /// arrows, else the one move a row offers. Where several are offered
     /// and none is picked, Enter makes none: a move sends a bead on, and
-    /// a habit of Enter must not choose which.
+    /// a habit of Enter must not choose which. None while the moves stand
+    /// folded: no move can be picked until they are unfolded.
     pub fn picked_move(&self, bead: &str) -> Option<usize> {
+        if self.moves_folded(bead) {
+            return None;
+        }
         let row = self.parked().find(|row| row.bead == bead)?;
         match self.chosen.get(&(bead.to_string(), 0)) {
             Some(n) if (1..=row.actions.len() as u64).contains(n) => Some(*n as usize),
@@ -2293,8 +2322,14 @@ impl Model {
     }
 
     /// Picks a move of the parked bead with a number key. A number past
-    /// the last move changes nothing.
+    /// the last move changes nothing. On a folded card the key stands the
+    /// moves unfolded instead of picking: while folded no move can be
+    /// picked.
     pub fn choose_move(&mut self, bead: &str, number: u64) {
+        if self.moves_folded(bead) {
+            self.expand_moves(bead);
+            return;
+        }
         let last = match self.parked().find(|row| row.bead == bead) {
             Some(row) => row.actions.len() as u64,
             None => return,
@@ -2305,8 +2340,13 @@ impl Model {
     }
 
     /// Moves the pick with the arrows, around the ends: down from none
-    /// picks the first, up from none the last.
+    /// picks the first, up from none the last. On a folded card the arrows
+    /// stand the moves unfolded instead of picking.
     pub fn step_move(&mut self, bead: &str, by: isize) {
+        if self.moves_folded(bead) {
+            self.expand_moves(bead);
+            return;
+        }
         let last = match self.parked().find(|row| row.bead == bead) {
             Some(row) => row.actions.len() as isize,
             None => return,
@@ -2331,7 +2371,7 @@ impl Model {
 
     /// The move Enter makes for the open parked bead, with the revision of
     /// the row it is made from. None where nothing is open, no move is
-    /// picked, or the row offers none.
+    /// picked, the row offers none, or the moves stand folded.
     pub fn move_to_make(&self, bead: &str) -> Option<(api::Move, String)> {
         let row = self.parked().find(|row| row.bead == bead)?;
         let how = row.actions.get(self.picked_move(bead)? - 1)?;
@@ -2350,6 +2390,7 @@ impl Model {
         };
         self.parked.retain(|row| row.bead != bead);
         self.chosen.remove(&(bead.to_string(), 0));
+        self.moves_expanded.remove(bead);
         let open = self.selected == Some(Selected::Waiting(bead.to_string()));
         let mut effects = Vec::new();
         if open {
@@ -6923,6 +6964,19 @@ pub fn lines_too_old(err: &api::Error) -> bool {
 /// above, and when they change this is shown as any refusal.
 pub fn waiting_too_old(err: &api::Error) -> bool {
     matches!(err, api::Error::Refused { message, .. } if message.starts_with("no such method"))
+}
+
+/// Whether the served moves fold behind the one "Move to ..." control:
+/// more than six of them, where every one is a plain advance, with no
+/// note required and no terminal. The same predicate as the web bead
+/// page's fold (yardr's `FoldMoves`): uniformity, not flow presence, so
+/// a flow bead whose moves are all plain stages folds too, and an
+/// outcome never does.
+pub fn moves_fold(moves: &[api::Move]) -> bool {
+    moves.len() > 6
+        && moves
+            .iter()
+            .all(|m| m.kind == "advance" && !m.note_required && !m.terminal)
 }
 
 /// What the Lines pane says of a yard from before the Lines view, in
@@ -12782,6 +12836,23 @@ mod tests {
         assert!(m.waiting_folded());
     }
 
+    /// A parked row with `n` plain moves, as a flow-less bead is served
+    /// them: every one an advance to a stage, wanting no note and closing
+    /// nothing.
+    fn parked_with_plain_moves(bead: &str, title: &str, since: &str, n: usize) -> Parked {
+        Parked {
+            actions: (1..=n)
+                .map(|i| api::Move {
+                    kind: "advance".into(),
+                    label: format!("Move to stage-{i}"),
+                    to: format!("stage-{i}"),
+                    ..api::Move::default()
+                })
+                .collect(),
+            ..parked(bead, title, since)
+        }
+    }
+
     /// A parked row with two moves: the done outcome the flow names, and a
     /// move back that wants a note.
     fn parked_with_moves(bead: &str, title: &str, since: &str) -> Parked {
@@ -13002,11 +13073,22 @@ mod tests {
     /// A parked bead's card: the line that names it, the moves in the
     /// yard's words and order, and the pick Enter makes. Several moves
     /// stand unpicked until a number or the arrows pick one; a lone move
-    /// stands picked. A flow that does not resolve offers none.
+    /// stands picked. A flow that does not resolve offers none. A long
+    /// uniform list stands folded until a key unfolds it, and while folded
+    /// no move can be picked or made.
     #[test]
     fn a_parked_bead_s_card_names_it_and_picks_among_its_moves() {
         let now = DateTime::parse_from_rfc3339("2026-11-09T09:00:00Z").unwrap();
         let mut state = yard(&[]);
+        let mut outcome =
+            parked_with_plain_moves("yd-outcome", "Outcome list", "2026-11-07T09:00:00Z", 7);
+        outcome.actions[0].kind = "done".into();
+        outcome.actions[0].outcome = "done".into();
+        let mut note = parked_with_plain_moves("yd-note", "Note list", "2026-11-07T10:00:00Z", 7);
+        note.actions[3].note_required = true;
+        let mut terminal =
+            parked_with_plain_moves("yd-terminal", "Terminal list", "2026-11-07T11:00:00Z", 7);
+        terminal.actions[5].terminal = true;
         state.parked = vec![
             parked_with_moves("yd-two", "Two moves", "2026-11-06T09:00:00Z"),
             parked("yd-one", "One move", "2026-11-08T09:00:00Z"),
@@ -13019,6 +13101,12 @@ mod tests {
                 template_error: "the stage's ask template does not parse".into(),
                 ..parked("yd-template", "Template", "2026-11-08T11:00:00Z")
             },
+            parked_with_plain_moves("yd-many", "Many moves", "2026-11-05T09:00:00Z", 7),
+            parked_with_plain_moves("yd-six", "Six moves", "2026-11-05T10:00:00Z", 6),
+            parked_with_plain_moves("yd-else", "Other moves", "2026-11-05T11:00:00Z", 8),
+            outcome,
+            note,
+            terminal,
         ];
         let (mut m, _) = Model::new(state, Mode::Decisions, None);
         let two = m.waiting_detail("yd-two", &now).unwrap();
@@ -13090,6 +13178,73 @@ mod tests {
             "the stage's ask template does not parse"
         );
         assert_eq!(template.moves.len(), 1);
+        // A long uniform list stands folded: seven plain advances fold,
+        // six stay flat, and so does any list with an outcome, a note or
+        // a terminal in it, a short list, and none at all.
+        assert!(m.moves_folded("yd-many"));
+        assert!(m.moves_folded("yd-else"));
+        assert!(m.waiting_detail("yd-many", &now).unwrap().folded);
+        for bead in [
+            "yd-two",
+            "yd-one",
+            "yd-broken",
+            "yd-template",
+            "yd-six",
+            "yd-outcome",
+            "yd-note",
+            "yd-terminal",
+            "yd-gone",
+        ] {
+            assert!(!m.moves_folded(bead), "{bead}");
+        }
+        assert!(!m.waiting_detail("yd-six", &now).unwrap().folded);
+        // While folded no move can be picked or made: a number and the
+        // arrows stand the moves unfolded instead, and Enter makes none.
+        assert_eq!(m.picked_move("yd-many"), None);
+        assert_eq!(m.move_to_make("yd-many"), None);
+        assert!(!m.clear_move("yd-many"));
+        m.choose_move("yd-many", 3);
+        assert!(!m.moves_folded("yd-many"));
+        assert_eq!(m.picked_move("yd-many"), None);
+        // Unfolded they stay: the next key picks as today, and Enter
+        // makes it, with the revision of the row.
+        m.choose_move("yd-many", 3);
+        assert_eq!(m.picked_move("yd-many"), Some(3));
+        let (how, revision) = m.move_to_make("yd-many").unwrap();
+        assert_eq!((how.kind.as_str(), how.to.as_str()), ("advance", "stage-3"));
+        assert_eq!(revision, "yd-many-rev");
+        assert!(m.waiting_detail("yd-many", &now).unwrap().moves[2].chosen);
+        // A number past the last unfolds another card too, picking
+        // nothing; expanding what is flat or gone changes nothing.
+        m.choose_move("yd-else", 9);
+        assert!(!m.moves_folded("yd-else"));
+        assert_eq!(m.picked_move("yd-else"), None);
+        m.step_move("yd-else", 1);
+        assert_eq!(m.picked_move("yd-else"), Some(1));
+        m.expand_moves("yd-six");
+        m.expand_moves("yd-gone");
+        assert!(!m.moves_folded("yd-six"));
+        // A queue read again keeps the unfolding, as it keeps the pick;
+        // a move made clears both, and served again the list folds again.
+        m.waiting(vec![
+            parked_with_plain_moves("yd-many", "Many moves", "2026-11-05T09:00:00Z", 7),
+            parked_with_plain_moves("yd-else", "Other moves", "2026-11-05T11:00:00Z", 8),
+        ]);
+        assert!(!m.moves_folded("yd-many"));
+        assert_eq!(m.picked_move("yd-many"), Some(3));
+        m.moved("yd-many");
+        assert_eq!(m.picked_move("yd-many"), None);
+        m.waiting(vec![parked_with_plain_moves(
+            "yd-many",
+            "Many moves",
+            "2026-11-05T09:00:00Z",
+            7,
+        )]);
+        assert!(m.moves_folded("yd-many"));
+        // The arrows unfold it again the same way.
+        m.step_move("yd-many", -1);
+        assert!(!m.moves_folded("yd-many"));
+        assert_eq!(m.picked_move("yd-many"), None);
     }
 
     /// A move made takes the bead out of the parked beads at once, with its

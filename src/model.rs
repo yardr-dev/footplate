@@ -6267,14 +6267,20 @@ impl Model {
     }
 
     /// Whether the open row `sel` is still there in `mode`: a row of the
-    /// list as it stands (`order`), or the card of a parked bead whose
-    /// section is folded. A fold takes rows from the list and from the
-    /// keys, and no open card away: it stays through the queue being read
-    /// again and through a move, until its bead is not parked any more.
+    /// list as it stands (`order`), the card of a parked bead whose
+    /// section is folded, or the card of a dealt with ask while "Decided"
+    /// is folded and the history still holds it. A fold takes rows from
+    /// the list and from the keys, and no open card away: it stays through
+    /// the queue being read again and through a move, until its bead is
+    /// not parked any more, or its ask has left the history.
     fn stands(&self, mode: Mode, order: &[Selected], sel: &Selected) -> bool {
         order.contains(sel)
             || matches!(sel, Selected::Waiting(bead)
                 if mode == Mode::Decisions && self.waiting_folded && self.is_parked(bead))
+            || matches!(sel, Selected::Decided(bead, ask)
+                if mode == Mode::Decisions
+                    && !self.decided_expanded
+                    && self.decided.iter().any(|a| a.bead == *bead && a.ask == *ask))
     }
 
     /// When the open row is gone, falls back within its mode. In chat, a
@@ -13075,6 +13081,54 @@ mod tests {
         let (m, _) = Model::new(yard_without_waiting(), Mode::Decisions, None);
         assert!(m.waiting_too_old());
         assert_eq!(m.waiting_rows(&now), []);
+    }
+
+    /// A card open under a folded "Decided" stays open through the queue
+    /// being read again, while its ask is still in the history — as a
+    /// folded Waiting section's open card does. A history that holds the
+    /// ask no more takes the card to the first open ask.
+    #[test]
+    fn a_decided_card_open_under_a_folded_decided_stays_through_a_re_read() {
+        let mut state = yard(&[]);
+        let open = || {
+            vec![open_ask(
+                "yd-ask",
+                "Asked",
+                "",
+                3,
+                "Which first?",
+                "yardmaster",
+                "2026-11-04T09:00:00Z",
+            )]
+        };
+        state.asks.open = open();
+        state.asks.decided = week();
+        let (mut m, _) = Model::new(state, Mode::Decisions, None);
+        m.toggle_decided();
+        let card = Selected::Decided("yd-cal".into(), 7);
+        m.select(card.clone());
+        assert_eq!(m.selected(), Some(&card));
+        m.toggle_decided();
+        assert!(!m.decided_expanded());
+        assert_eq!(m.selected(), Some(&card));
+        // The queue read again keeps the open card, as does the parked
+        // queue's.
+        let _ = m.asks(Asks {
+            open: open(),
+            decided: week(),
+        });
+        assert_eq!(m.selected(), Some(&card));
+        m.waiting(Vec::new());
+        assert_eq!(m.selected(), Some(&card));
+        // A history that holds the ask no more takes the card, as it does
+        // with the rows standing: to the first open ask.
+        let mut gone = week();
+        gone.retain(|a| !(a.bead == "yd-cal" && a.ask == 7));
+        let _ = m.asks(Asks {
+            open: open(),
+            decided: gone,
+        });
+        assert_eq!(m.selected(), Some(&Selected::Decision("yd-ask".into())));
     }
 
     /// A parked bead's card: the line that names it, the moves in the

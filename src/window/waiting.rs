@@ -3,13 +3,13 @@
 //! do: pick one, write its note, make it.
 
 use gpui::{
-    ClickEvent, Context, Div, Focusable, FontWeight, MouseButton, SharedString, Stateful, Window,
-    div, prelude::*, px, rgba,
+    ClickEvent, Context, Div, Focusable, FontWeight, SharedString, Stateful, Window, div,
+    prelude::*, px, rgba,
 };
 
 use super::Footplate;
 use super::metrics::WAITING_SUB;
-use super::ui::{keys_hint, shorten};
+use super::ui::{field, keys_hint, shorten};
 use crate::api::Address;
 use crate::model::{self, Effect, Model, Selected, WaitingDetail, WaitingMove, WaitingRow};
 use crate::select;
@@ -161,6 +161,7 @@ impl Footplate {
                     .child(
                         div()
                             .line_clamp(2)
+                            .font_weight(FontWeight::MEDIUM)
                             .debug_selector(|| format!("waiting head {}", row.bead))
                             .child(row.head),
                     )
@@ -290,20 +291,29 @@ impl Footplate {
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.decision)
-            .p_4()
+            .p_4();
+        // The waiting card's frame: the bead whole with its moves, as an
+        // open card holds its disclosure's bead.
+        let card = div()
+            .debug_selector(|| format!("waiting card {bead}"))
             .flex()
             .flex_col()
-            .gap_4();
-        let list = match model.arrival_detail(bead) {
-            Some(whole) => list.child(self.bead_body(
+            .gap_2p5()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(palette.line)
+            .bg(palette.raised);
+        let card = match model.arrival_detail(bead) {
+            Some(whole) => card.child(self.bead_body(
                 select::key(("waiting", &whole.bead)),
                 &whole,
                 palette,
                 cx,
             )),
-            None => list.child(div().text_color(palette.faint).child("Reading the bead.")),
+            None => card.child(div().text_color(palette.faint).child("Reading the bead.")),
         };
-        let list = list.child(self.moves_block(&detail, palette, cx));
+        let list = list.child(card.child(self.moves_block(&detail, palette, cx)));
         pane.children(self.reconnect_strip(palette))
             .child(head)
             .child(list)
@@ -331,7 +341,7 @@ impl Footplate {
         cx: &mut Context<Self>,
     ) -> Div {
         let bead = detail.bead.clone();
-        let mut block = div().flex().flex_col().gap_2();
+        let mut block = div().flex().flex_col().gap_2p5();
         // A flow that does not resolve offers no move: the error stands
         // where the moves would, and the bead stays readable whole.
         if !detail.flow_error.is_empty() {
@@ -345,7 +355,7 @@ impl Footplate {
                 )
                 .child(
                     div()
-                        .text_sm()
+                        .text_xs()
                         .text_color(palette.faint)
                         .child(NO_MOVE_UNTIL_FIXED),
                 );
@@ -400,19 +410,8 @@ impl Footplate {
         block = block.child(buttons);
         let focus = self.line.focus_handle(cx);
         block = block.child(
-            div()
-                .debug_selector(|| format!("waiting note {bead}"))
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .border_1()
-                .border_color(palette.line)
-                .bg(palette.side)
-                .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                    window.focus(&focus);
-                    window.prevent_default();
-                })
-                .child(self.line.clone()),
+            field(focus, self.line.clone(), palette)
+                .debug_selector(|| format!("waiting note {bead}")),
         );
         // Why the yard did not take the last move, whole, or that it did
         // not answer: it is the card's, until the next move is made.
@@ -429,7 +428,7 @@ impl Footplate {
             block = block.child(
                 div()
                     .debug_selector(|| format!("waiting held {bead}"))
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .child(MOVE_HELD),
             );
@@ -437,7 +436,7 @@ impl Footplate {
             block = block.child(
                 div()
                     .debug_selector(|| format!("waiting underway {bead}"))
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .child(MOVE_UNDERWAY),
             );
@@ -449,7 +448,7 @@ impl Footplate {
                 .flex_wrap()
                 .items_baseline()
                 .gap_1()
-                .text_sm()
+                .text_xs()
                 .text_color(palette.faint)
                 .child(div().child(match detail.folded {
                     true => waiting_keys_folded(),
@@ -626,10 +625,10 @@ impl Footplate {
 }
 
 /// One move of a card as a button, in the yard's words and as it served
-/// them. The pick is the one to take: filled, and ending in the key that
-/// makes it. A move that wants words says so on its button until the line
-/// holds some, and stands faint, as a held or underway move does. A click
-/// is the move made.
+/// them. The pick is the one to take: the primary button, ending in the key
+/// that makes it; the rest are secondaries. A move that wants words says so
+/// on its button until the line holds some, and stands quiet, as a held or
+/// underway move does. A click is the move made.
 fn move_button(
     bead: &str,
     how: &WaitingMove,
@@ -660,23 +659,25 @@ fn move_button(
         .gap_x_2()
         .border_1()
         .when(how.chosen && enabled, |el| {
-            el.bg(palette.accent)
-                .border_color(palette.accent)
-                .text_color(palette.on_accent)
-                .font_weight(FontWeight::SEMIBOLD)
+            el.bg(palette.button)
+                .border_color(palette.button)
+                .text_color(palette.on_button)
+                .hover(|style| style.bg(palette.button_hover))
+                .active(|style| style.bg(palette.button_pressed))
         })
-        .when(!(how.chosen && enabled), |el| {
-            el.border_color(palette.line).text_color(match enabled {
-                true => palette.text,
-                false => palette.faint,
-            })
+        .when(!how.chosen && enabled, |el| {
+            el.bg(palette.raised)
+                .border_color(palette.strong)
+                .text_color(palette.text)
+                .hover(|style| style.bg(palette.hover))
+                .active(|style| style.bg(palette.open))
         })
-        .when(enabled && !how.chosen, |el| {
-            el.hover(|style| style.bg(palette.hover))
+        .when(!enabled, |el| {
+            el.border_color(palette.line).text_color(palette.disabled)
         })
         .when(enabled, |el| el.cursor_pointer())
         .when_some(click, |el, click| el.on_click(click))
-        .child(div().min_w_0().child(label))
+        .child(div().min_w_0().font_weight(FontWeight::MEDIUM).child(label))
         .children(waits.then(|| {
             div()
                 .flex_none()
@@ -687,8 +688,8 @@ fn move_button(
 }
 
 /// A folded list's one control: the yard's "Move to ..." words with how
-/// many moves stand behind it. A button in the moves' own dress, since it
-/// stands where they do; a click stands them unfolded.
+/// many moves stand behind it. A secondary, since it stands where the moves
+/// do; a click stands them unfolded.
 fn folded_moves_button(
     bead: &str,
     count: usize,
@@ -708,12 +709,19 @@ fn folded_moves_button(
         .justify_between()
         .gap_x_2()
         .border_1()
-        .border_color(palette.line)
+        .bg(palette.raised)
+        .border_color(palette.strong)
         .text_color(palette.text)
         .hover(|style| style.bg(palette.hover))
+        .active(|style| style.bg(palette.open))
         .cursor_pointer()
         .on_click(click)
-        .child(div().min_w_0().child(MOVE_TO))
+        .child(
+            div()
+                .min_w_0()
+                .font_weight(FontWeight::MEDIUM)
+                .child(MOVE_TO),
+        )
         .child(
             div()
                 .flex_none()

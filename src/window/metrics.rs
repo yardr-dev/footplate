@@ -90,6 +90,11 @@ pub(crate) const INPUT_KEPT: usize = SELECT_CHOICE - 14;
 /// they fit in the row; longer stage or group names end cleanly.
 pub(crate) const WAITING_SUB: usize = 33;
 
+/// A question line's minimum width in pixels: enough for the asker's
+/// source label at the root text size; its words move below the label if
+/// both do not fit.
+pub(crate) const ASK_QUESTION_MIN: f32 = 200.;
+
 /// The rail's width in pixels, fixed: room for a label under each
 /// icon, as the review has it.
 pub(crate) const RAIL: f32 = 64.;

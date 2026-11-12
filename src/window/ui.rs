@@ -1,13 +1,15 @@
 //! The small pieces the window draws with: its glyphs, the band of its
-//! top, its buttons, its segments, its checkboxes and its selects.
+//! top, its buttons, its field, its segments, its checkboxes and its
+//! selects.
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Div, FontWeight, Pixels, Rgba, SharedString, Stateful,
-    Window, div, prelude::*, px, relative, rems,
+    AnyElement, App, ClickEvent, Context, Div, Entity, FontWeight, MouseButton, Pixels, Rgba,
+    SharedString, Stateful, Window, div, prelude::*, px, relative, rems,
 };
 
 use super::Footplate;
 use super::metrics::SELECT_CHOICE;
+use crate::input::Line;
 use crate::theme::Palette;
 
 /// A rail glyph's canvas: 28 pixels, drawn from the mock's geometry
@@ -213,7 +215,7 @@ pub(crate) fn card_layer(
                 .rounded_lg()
                 .border_1()
                 .border_color(palette.line)
-                .bg(palette.side)
+                .bg(palette.raised)
                 // The kit's popover shadow, as the bar of reactions
                 // has it: the card floats over the conversation's
                 // lines, which it does not cover.
@@ -232,16 +234,21 @@ pub(crate) fn card_layer(
         )
 }
 
-/// Words that take a click, without the border: the status row at the
-/// list's head ends in one. The hover's ground is what says so.
+/// The quiet button: words that take a click, without the border. The
+/// status row at the list's head ends in one, in the title bar's strip, so
+/// it stands at its words' height and not the control's: any taller and the
+/// band stands past the strip. The hover's ground is what says so, with the
+/// words in the text colour. Pressed takes no step: gpui styles one only on
+/// an element with an id, and this helper names none.
 pub(crate) fn quiet_button(text: String, palette: Palette) -> Div {
     div()
-        .px_1()
+        .px_2()
         .rounded_md()
         .text_size(rems(0.8))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(palette.faint)
         .cursor_pointer()
-        .hover(|style| style.bg(palette.hover))
+        .hover(|style| style.bg(palette.hover).text_color(palette.text))
         .child(text)
 }
 
@@ -251,22 +258,31 @@ pub(crate) fn quiet_button(text: String, palette: Palette) -> Div {
 pub(crate) fn send_held(palette: Palette) -> impl IntoElement {
     div()
         .debug_selector(|| "send held".to_string())
-        .text_sm()
+        .text_xs()
         .text_color(palette.faint)
         .child("sends when the yard answers")
 }
 
-/// A small button beside the send button, without what it does: Later and
-/// Decline, with their keys.
+/// The secondary button at the card's smaller padding: Later and
+/// Decline beside the send button, with their keys, and the small bordered
+/// controls everywhere else. Raised, with the strong border and the text
+/// colour. Pressed takes no step: gpui styles one only on an element with
+/// an id, and this helper names none.
 pub(crate) fn small_button(text: String, palette: Palette) -> Div {
     div()
+        .min_h(px(32.))
+        .flex()
+        .items_center()
+        .justify_center()
         .px_2()
         .py_1()
         .rounded_md()
         .border_1()
-        .border_color(palette.line)
+        .border_color(palette.strong)
+        .bg(palette.raised)
         .text_sm()
-        .text_color(palette.faint)
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette.text)
         .cursor_pointer()
         .hover(|style| style.bg(palette.hover))
         .child(text)
@@ -375,6 +391,25 @@ pub(crate) fn shorten(text: &str, budget: usize) -> String {
         Some((end, _)) => format!("{}…", &text[..end]),
         None => text.to_string(),
     }
+}
+
+/// The window's field: what is typed in, on the side ground with the
+/// hairline border at three by two of padding, as the design system records
+/// the window's form. A press in it focuses the line it holds. The caller
+/// names it and gives it its keys.
+pub(crate) fn field(focus: gpui::FocusHandle, input: Entity<Line>, palette: Palette) -> Div {
+    div()
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(palette.line)
+        .bg(palette.side)
+        .on_mouse_down(MouseButton::Left, move |_, window, _| {
+            window.focus(&focus);
+            window.prevent_default();
+        })
+        .child(input)
 }
 
 /// A Select's field, as the design system has it: 32 px high, the choice and

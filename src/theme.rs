@@ -1,5 +1,8 @@
 //! The window's colours, for a light and a dark desktop. They say nothing
-//! the words do not.
+//! the words do not. The grounds, borders, secondary text and signals are
+//! the design tokens' whole (`tokens/colors.css` in yardr-design); the
+//! primary text stands a shade off the token's ink, as the settlement left
+//! it.
 
 use gpui::{App, Global, Rgba, Window, WindowAppearance, rgb, rgba};
 use serde::{Deserialize, Serialize};
@@ -81,9 +84,7 @@ pub fn yard_color(name: &str, dark: bool) -> Rgba {
 const YARD_DARK_COLORS: [u32; 3] = [0xeba17e, 0xe2794a, 0xd3602f];
 const YARD_LIGHT_COLORS: [u32; 3] = [0xd3602f, 0xb54e22, 0x8f3c19];
 
-/// A linked name's peer suffix in either look: the dark one is the
-/// review's peer colour, and the light one darkened past text contrast
-/// on the list's grounds.
+/// A linked name's peer suffix in either look: the token's `--text-peer`.
 const PEER_DARK: u32 = 0xb693f5;
 const PEER_LIGHT: u32 = 0x6440b8;
 
@@ -125,38 +126,65 @@ pub struct Palette {
     /// Whether the grounds are dark: a yard's colour is the one that
     /// reads on them.
     pub dark: bool,
-    /// The conversation's ground, and the list's.
+    /// The conversation's ground, and the list's: the token's app surface.
     pub ground: Rgba,
+    /// The sunken ground: the rail, a field, a run or setup block.
     pub side: Rgba,
+    /// The raised ground: an ask card's frame, the centred card over the
+    /// window, a secondary button.
+    pub raised: Rgba,
+    /// The hairline: bands, separators, card and field borders.
     pub line: Rgba,
+    /// The strong border: a secondary button's edge.
+    pub strong: Rgba,
+    /// The primary text, kept a shade off the token's ink.
     pub text: Rgba,
+    /// The secondary text: quiet words, counts, metadata.
     pub faint: Rgba,
-    /// The open row, and a row under the pointer.
+    /// Text gone quiet where nothing answers: a disabled button's words.
+    /// Faint says secondary; this says none.
+    pub disabled: Rgba,
+    /// The open row, filled.
     pub open: Rgba,
+    /// A row's ground under the pointer where a fill says so; rows
+    /// themselves are told by their hairline alone.
     pub hover: Rgba,
     /// The yard-rust fill for what waits on the person reading (unread
-    /// mail, open asks, a bead held by them) and controls that say yes:
-    /// the primary button, chosen segment and checked box. Text on the
-    /// fill uses `on_accent`; waiting text uses `text_accent`.
+    /// mail, open asks, a bead held by them) and the states that say yes:
+    /// the chosen segment, the checked box, the rail's waiting badge. The
+    /// filled button takes `button` instead: a button and a state never
+    /// share a fill. Text on the fill uses `on_accent`; waiting text uses
+    /// `text_accent`.
     pub accent: Rgba,
     pub on_accent: Rgba,
+    /// The filled button's fill, one step deeper than the accent, with
+    /// white on it: the token's primary button.
+    pub button: Rgba,
+    pub on_button: Rgba,
+    /// The filled button under the pointer, and pressed: the token's
+    /// primary hover and pressed steps.
+    pub button_hover: Rgba,
+    pub button_pressed: Rgba,
     /// A yard-rust text step at contrast on the window's surfaces: rust
-    /// 300 on dark (open rows are lighter than dusk) and rust 700 on light.
+    /// 400 on dark and rust 700 on light, the token's steps on the token's
+    /// grounds.
     pub text_accent: Rgba,
+    /// The error red: refusals, failures, the token's signal red.
     pub warn: Rgba,
     /// Links: in messages, ask and bead ids, and the small controls that
     /// open an address or reset one (Open, run, reveal, reset). Blue in
-    /// either look, at text contrast on every ground. No design token
-    /// names a blue, so these two are the pass's own, held by the test
-    /// below.
+    /// either look, at text contrast on every ground: the token's
+    /// `--text-link`, held by the test below.
     pub link: Rgba,
     /// A linked name's peer suffix (`@airy`), in its own colour, so what
     /// crosses a link reads apart from this yard's own names.
     pub peer: Rgba,
-    /// The status row's dot where the yard runs.
+    /// The status row's dot where the yard runs: the token's signal green.
     pub ok: Rgba,
+    /// The accent's tint under a selection: the token's `--selection`.
     pub selection: Rgba,
-    /// The ground under code, over whatever the text stands on.
+    /// The ground under code, over whatever the text stands on: the
+    /// token's `--code-ground`.
     pub code: Rgba,
     /// The colour of the kit's popover shadow, under what floats over the
     /// window's content: the bar of reactions over a mail.
@@ -177,20 +205,27 @@ impl Palette {
         if look.dark(desktop) {
             Palette {
                 dark: true,
-                ground: rgb(0x1e2024),
-                side: rgb(0x17181b),
-                line: rgb(0x33363c),
+                ground: rgb(0x161718),
+                side: rgb(0x101112),
+                raised: rgb(0x1c1d1f),
+                line: rgb(0x27282b),
+                strong: rgb(0x333538),
                 text: rgb(0xe3e5e8),
-                faint: rgb(0x8d939c),
-                open: rgb(0x2c3038),
-                hover: rgb(0x23262c),
+                faint: rgb(0xabadb0),
+                disabled: rgb(0x808286),
+                open: rgb(0x2a2b2e),
+                hover: rgb(0x232426),
                 accent: rgb(0xd3602f),
                 on_accent: rgb(0x161718),
-                text_accent: rgb(0xeba17e),
-                warn: rgb(0xf0764f),
+                button: rgb(0xb54e22),
+                on_button: rgb(0xffffff),
+                button_hover: rgb(0xc0552a),
+                button_pressed: rgb(0x8f3c19),
+                text_accent: rgb(0xe2794a),
+                warn: rgb(0xe5675a),
                 link: rgb(0x7aa2f7),
                 peer: rgb(PEER_DARK),
-                ok: rgb(0x7fb069),
+                ok: rgb(0x4cc38a),
                 selection: rgba(0xd3602f55),
                 code: rgba(0xffffff14),
                 shadow: rgba(0x04050766),
@@ -198,20 +233,27 @@ impl Palette {
         } else {
             Palette {
                 dark: false,
-                ground: rgb(0xfbfaf8),
-                side: rgb(0xf0eeea),
-                line: rgb(0xd9d5ce),
+                ground: rgb(0xf7f7f6),
+                side: rgb(0xededeb),
+                raised: rgb(0xffffff),
+                line: rgb(0xe2e2df),
+                strong: rgb(0xcfcfcb),
                 text: rgb(0x22242a),
-                faint: rgb(0x6e727a),
-                open: rgb(0xe0dcd4),
-                hover: rgb(0xe8e5df),
+                faint: rgb(0x5b5e64),
+                disabled: rgb(0x8e9196),
+                open: rgb(0xe2e2df),
+                hover: rgb(0xededeb),
                 accent: rgb(0xd3602f),
                 on_accent: rgb(0x161718),
+                button: rgb(0xb54e22),
+                on_button: rgb(0xffffff),
+                button_hover: rgb(0xc0552a),
+                button_pressed: rgb(0x8f3c19),
                 text_accent: rgb(0x8f3c19),
-                warn: rgb(0xb3401c),
+                warn: rgb(0xb3382c),
                 link: rgb(0x1a56c8),
                 peer: rgb(PEER_LIGHT),
-                ok: rgb(0x3d8b4f),
+                ok: rgb(0x1f9a60),
                 selection: rgba(0xd3602f40),
                 code: rgba(0x0000000f),
                 shadow: rgba(0x1414141f),
@@ -236,9 +278,52 @@ mod tests {
         let light = Palette::of(Look::Light, WindowAppearance::Light);
         let dark = Palette::of(Look::Dark, WindowAppearance::Light);
         assert_ne!(light, dark);
-        // Dark text on a light ground, and the other way round.
-        assert_eq!((light.ground, light.text), (rgb(0xfbfaf8), rgb(0x22242a)));
-        assert_eq!((dark.ground, dark.text), (rgb(0x1e2024), rgb(0xe3e5e8)));
+        // Dark text on a light ground, and the other way round. The
+        // grounds are the tokens' whole; the primary text stands a shade
+        // off the token's ink, as the settlement left it.
+        assert_eq!((light.ground, light.text), (rgb(0xf7f7f6), rgb(0x22242a)));
+        assert_eq!((dark.ground, dark.text), (rgb(0x161718), rgb(0xe3e5e8)));
+        assert_eq!(
+            (
+                light.side,
+                light.raised,
+                light.line,
+                light.strong,
+                light.open,
+                light.hover
+            ),
+            (
+                rgb(0xededeb),
+                rgb(0xffffff),
+                rgb(0xe2e2df),
+                rgb(0xcfcfcb),
+                rgb(0xe2e2df),
+                rgb(0xededeb)
+            )
+        );
+        assert_eq!(
+            (
+                dark.side,
+                dark.raised,
+                dark.line,
+                dark.strong,
+                dark.open,
+                dark.hover
+            ),
+            (
+                rgb(0x101112),
+                rgb(0x1c1d1f),
+                rgb(0x27282b),
+                rgb(0x333538),
+                rgb(0x2a2b2e),
+                rgb(0x232426)
+            )
+        );
+        assert_eq!(
+            (light.faint, light.disabled),
+            (rgb(0x5b5e64), rgb(0x8e9196))
+        );
+        assert_eq!((dark.faint, dark.disabled), (rgb(0xabadb0), rgb(0x808286)));
 
         for desktop in DESKTOPS {
             assert_eq!(Palette::of(Look::Light, desktop), light, "{desktop:?}");
@@ -322,7 +407,7 @@ mod tests {
 
     #[test]
     fn links_are_blue_at_text_contrast_on_every_ground_in_either_look() {
-        // The review's blue for links; no design token names one.
+        // The token's --text-link in either look.
         let dark = Palette::of(Look::Dark, WindowAppearance::Dark);
         let light = Palette::of(Look::Light, WindowAppearance::Light);
         assert_eq!((dark.link, light.link), (rgb(0x7aa2f7), rgb(0x1a56c8)));
@@ -367,14 +452,42 @@ mod tests {
             assert_ne!(palette.accent, palette.ok);
             assert_ne!(palette.accent, palette.warn);
         }
-        // The running dot stays green.
+        // The filled button is the token's primary, one step deeper than
+        // the accent with white on it: a button and a state never share a
+        // fill. Its hover and pressed steps are the token's, in both looks.
+        for look in [Look::Dark, Look::Light] {
+            let palette = Palette::of(look, WindowAppearance::Dark);
+            assert_eq!(palette.button, rgb(0xb54e22));
+            assert_eq!(palette.on_button, rgb(0xffffff));
+            assert_eq!(palette.button_hover, rgb(0xc0552a));
+            assert_eq!(palette.button_pressed, rgb(0x8f3c19));
+            assert!(
+                contrast(palette.on_button, palette.button) >= 4.5,
+                "{:?} on {:?}",
+                palette.on_button,
+                palette.button
+            );
+            assert_ne!(palette.button, palette.accent);
+            assert_ne!(palette.button_hover, palette.button);
+            assert_ne!(palette.button_pressed, palette.button);
+        }
+        // The running dot stays green: the token's signal green.
         assert_eq!(
             Palette::of(Look::Dark, WindowAppearance::Dark).ok,
-            rgb(0x7fb069)
+            rgb(0x4cc38a)
         );
         assert_eq!(
             Palette::of(Look::Light, WindowAppearance::Light).ok,
-            rgb(0x3d8b4f)
+            rgb(0x1f9a60)
+        );
+        // The error red is the token's signal red.
+        assert_eq!(
+            Palette::of(Look::Dark, WindowAppearance::Dark).warn,
+            rgb(0xe5675a)
+        );
+        assert_eq!(
+            Palette::of(Look::Light, WindowAppearance::Light).warn,
+            rgb(0xb3382c)
         );
     }
 
@@ -382,7 +495,7 @@ mod tests {
     fn text_accent_uses_the_readable_yard_rust_step_in_either_look() {
         let dark = Palette::of(Look::Dark, WindowAppearance::Dark);
         let light = Palette::of(Look::Light, WindowAppearance::Light);
-        assert_eq!(dark.text_accent, rgb(0xeba17e));
+        assert_eq!(dark.text_accent, rgb(0xe2794a));
         assert_eq!(light.text_accent, rgb(0x8f3c19));
         for palette in [dark, light] {
             for ground in [palette.side, palette.ground, palette.hover, palette.open] {
@@ -398,8 +511,7 @@ mod tests {
 
     #[test]
     fn the_peer_suffix_reads_on_every_list_ground_in_either_look() {
-        // The dark peer is the review's own; the light one is darkened
-        // past text contrast.
+        // The token's --text-peer in either look.
         assert_eq!((PEER_DARK, PEER_LIGHT), (0xb693f5, 0x6440b8));
         for look in [Look::Dark, Look::Light] {
             let palette = Palette::of(look, WindowAppearance::Dark);

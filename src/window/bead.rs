@@ -672,12 +672,12 @@ impl Footplate {
     }
 
     /// The composer's one button, at its bottom right, in the shape of
-    /// `button`: Send in the accent, as the card's send button is; Voice and
-    /// Stop bordered; a disabled Send faint, with no tap. The words are the
-    /// design system's plainest, as it has no mark for voice or send. A tap
-    /// sends as Enter does, or starts or ends the session. A press here
-    /// claims no focus of its own: the composer's frame has it for the line,
-    /// so what is typed stays there.
+    /// `button`: Send the primary button, as the card's send button is;
+    /// Voice and Stop secondaries; a disabled Send quiet, with no tap. The
+    /// words are the design system's plainest, as it has no mark for voice
+    /// or send. A tap sends as Enter does, or starts or ends the session. A
+    /// press here claims no focus of its own: the composer's frame has it
+    /// for the line, so what is typed stays there.
     fn composer_control(
         &self,
         button: Button,
@@ -714,17 +714,22 @@ impl Footplate {
             .text_sm()
             .map(|el| match button {
                 Button::Send => el
-                    .bg(palette.accent)
-                    .border_color(palette.accent)
-                    .text_color(palette.on_accent)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer(),
-                Button::SendDisabled => el.border_color(palette.line).text_color(palette.faint),
-                Button::Voice | Button::Stop => el
-                    .border_color(palette.line)
-                    .text_color(palette.text)
+                    .bg(palette.button)
+                    .border_color(palette.button)
+                    .text_color(palette.on_button)
+                    .font_weight(FontWeight::MEDIUM)
                     .cursor_pointer()
-                    .hover(|style| style.bg(palette.hover)),
+                    .hover(|style| style.bg(palette.button_hover))
+                    .active(|style| style.bg(palette.button_pressed)),
+                Button::SendDisabled => el.border_color(palette.line).text_color(palette.disabled),
+                Button::Voice | Button::Stop => el
+                    .bg(palette.raised)
+                    .border_color(palette.strong)
+                    .text_color(palette.text)
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(palette.hover))
+                    .active(|style| style.bg(palette.open)),
             })
             .when_some(tip, |el, tip| {
                 el.tooltip(move |_, cx| cx.new(|_| RailTip(tip.clone())).into())

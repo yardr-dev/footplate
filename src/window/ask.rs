@@ -2,7 +2,7 @@
 //! its buttons, and the texts a run or a setup holds.
 
 use gpui::{
-    App, ClickEvent, Context, Div, FontWeight, SharedString, Stateful, Window, div, prelude::*,
+    App, ClickEvent, Context, Div, FontWeight, SharedString, Stateful, Window, div, prelude::*, px,
 };
 
 use super::{APPROVE_KEY, Footplate, small_button};
@@ -12,13 +12,15 @@ use crate::theme::Palette;
 
 /// A section's head in the left list: its title on the left, its count
 /// on the right, quiet. "Decisions" counts the open ones, "Crew" the
-/// mail that is not read.
+/// mail that is not read. At least the section's height, and taller where
+/// the text wants it.
 pub(crate) fn section_head(
     title: &'static str,
     count: String,
     palette: Palette,
 ) -> impl IntoElement {
     div()
+        .min_h(px(32.))
         .px_3()
         .pt_2()
         .pb_1()
@@ -77,7 +79,7 @@ fn head_title(title: &'static str, shown: String) -> Div {
 fn head_count(title: &'static str, count: String, palette: Palette) -> Div {
     div()
         .debug_selector(move || format!("section {title} count"))
-        .text_sm()
+        .text_xs()
         .text_color(palette.faint)
         .flex_none()
         .child(count)
@@ -646,9 +648,10 @@ pub(crate) fn approve_button(
     card_button(id, label, palette, click)
 }
 
-/// One filled button, standing as the one to take, with what a click on
-/// it does: a card's that sends, or the away screen's that sets a yard up.
-/// Without that it is drawn faint, and takes no click.
+/// The primary button: one filled button, standing as the one to take,
+/// with what a click on it does: a card's that sends or approves, or the
+/// away screen's that sets a yard up. Without that it is drawn quiet, and
+/// takes no click.
 pub(crate) fn card_button(
     id: String,
     text: String,
@@ -659,18 +662,23 @@ pub(crate) fn card_button(
     div()
         .id(SharedString::from(id.clone()))
         .debug_selector(|| id.clone())
+        .min_h(px(32.))
+        .flex()
+        .items_center()
+        .justify_center()
         .px_3()
         .py_1()
         .rounded_md()
         .when(enabled, |el| {
-            el.bg(palette.accent)
-                .text_color(palette.on_accent)
-                .font_weight(FontWeight::SEMIBOLD)
+            el.bg(palette.button)
+                .text_color(palette.on_button)
+                .font_weight(FontWeight::MEDIUM)
                 .cursor_pointer()
+                .hover(|style| style.bg(palette.button_hover))
+                .active(|style| style.bg(palette.button_pressed))
         })
         .when(!enabled, |el| {
-            el.bg(palette.side)
-                .text_color(palette.faint)
+            el.text_color(palette.disabled)
                 .border_1()
                 .border_color(palette.line)
         })

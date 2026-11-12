@@ -6307,7 +6307,7 @@ impl Footplate {
             .h_full()
             .flex()
             .flex_col()
-            .bg(palette.side)
+            .bg(palette.ground)
             .border_r_1()
             .border_color(palette.line)
             .children(match (banded, status.is_empty()) {

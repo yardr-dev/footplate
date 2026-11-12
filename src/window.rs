@@ -8384,6 +8384,9 @@ yardr.dev
             notice(&view, cx) == "fence.png is marked and cannot go: remove it, then send"
         });
         assert_eq!(yard.asked("AddNote").len(), 1);
+        // The card stands taller than the viewport: scroll its end into
+        // view, as a reader does, so the click lands.
+        scroll_on(cx, "question bead-a 5", gpui::point(px(0.), px(-600.)));
         click_remove(cx, 3);
         wait(cx, "no files after remove", |cx| {
             card_attached(&view, cx, "bead-a", 5).is_empty()
@@ -8490,7 +8493,9 @@ yardr.dev
             notice(&view, cx) == "a decline carries no file: remove it, then send"
         });
         assert_eq!(yard.asked("DeclineAsk").len(), 0);
-        // The page removed, the decline goes with the words.
+        // The page removed, the decline goes with the words. The card
+        // stands taller than the viewport: scroll its end into view first.
+        scroll_on(cx, "question bead-a 5", gpui::point(px(0.), px(-600.)));
         click_remove(cx, 2);
         wait(cx, "no pages on the decline", |cx| {
             card_attached(&view, cx, "bead-a", 5).is_empty()
@@ -8570,7 +8575,9 @@ yardr.dev
         // The marked one removed and the yard taking blobs, the note is
         // refused for its files instead: a yardr from before notes
         // carried any. That is said as what it is, and the words and the
-        // page are back, the page unmarked.
+        // page are back, the page unmarked. The card stands taller than
+        // the viewport: scroll its end into view first.
+        scroll_on(cx, "question bead-a 5", gpui::point(px(0.), px(-600.)));
         click_remove(cx, 1);
         view.update(cx, |v, cx| v.dropped(&[mockup], cx));
         wait(cx, "the page again", |cx| {
@@ -10464,6 +10471,9 @@ yardr.dev
         // Decline with an empty line asks for words, as the key does.
         view.update(cx, |v, cx| v.select_ask("bead-a".into(), 5, cx));
         assert_eq!(typed(&view, cx), "");
+        // The card stands taller than the viewport: scroll its end into
+        // view, as a reader does, so the click lands.
+        scroll_on(cx, "question bead-a 5", gpui::point(px(0.), px(-600.)));
         click_on(cx, "decline bead-a 5");
         cx.simulate_input("the greeting can wait");
         assert_eq!(typed(&view, cx), "the greeting can wait");
@@ -30170,7 +30180,8 @@ yardr.dev
         let file = dir.path().join("footplate/settings.json");
         let yard = Yard::start();
         let question = format!(
-            "Take more?\n{}when you approve, the yard runs this as mckean, and nothing else:",
+            "Take more mail from airy? {}\n{}when you approve, the yard runs this as mckean, and nothing else:",
+            "more words ".repeat(40),
             "more words ".repeat(40)
         );
         let context = format!(
@@ -30178,12 +30189,18 @@ yardr.dev
             "more words ".repeat(40)
         );
         let (view, cx) = opened_on_a_run_ask_about(&yard, &question, &[&context], &file, cx);
+        cx.simulate_resize(gpui::size(px(WINDOW_MIN), px(360.)));
 
         let question_label = bounds_of(cx, "asker label run question bead-s 7 1");
         let question_words = bounds_of(cx, "asker words run question bead-s 7 1");
         assert!(
-            question_words.left() >= question_label.right(),
-            "question words {question_words:?} overlap label {question_label:?}"
+            question_words.left() >= question_label.right()
+                || question_words.top() >= question_label.bottom(),
+            "question words overlap their label: {question_words:?} and {question_label:?}"
+        );
+        assert!(
+            question_words.size.width > px(60.),
+            "question words are squeezed beside the asker's label: {question_words:?}"
         );
         assert!(
             question_words.size.height > question_label.size.height,
@@ -30193,8 +30210,9 @@ yardr.dev
         let context_label = bounds_of(cx, "asker label run context bead-s 7 0");
         let context_words = bounds_of(cx, "asker words run context bead-s 7 0");
         assert!(
-            context_words.left() >= context_label.right(),
-            "context words {context_words:?} overlap label {context_label:?}"
+            context_words.left() >= context_label.right()
+                || context_words.top() >= context_label.bottom(),
+            "context words overlap their label: {context_words:?} and {context_label:?}"
         );
         assert!(
             context_words.size.height > context_label.size.height,

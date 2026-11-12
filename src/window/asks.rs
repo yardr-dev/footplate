@@ -23,9 +23,10 @@ use super::ask::{
 };
 use super::expanded_text_key;
 use super::keys::{APPROVE_KEY, SETUP_SECRET_CONTEXT};
+use super::metrics::ASK_QUESTION_MIN;
 use super::rail::{RailTip, UnsentNote, post_note};
 use super::state::Adding;
-use super::ui::{keys_hint, send_held, small_button};
+use super::ui::{field, keys_hint, send_held, small_button};
 use super::words::{decided_words, left_words, waiting_words};
 use super::{AskAbout, Decline, Expand, FocusFilter, FocusWords};
 use crate::api::{self};
@@ -2110,34 +2111,12 @@ impl Footplate {
         }
         if decided > 0 {
             let open = model.decided_expanded();
+            // The dealt-with stands against what is above it, with no gap:
+            // the fold's own top margin is for a head that starts a section.
             body = body.child(
-                div()
-                    .id("decided")
-                    .debug_selector(|| "decided toggle".to_string())
-                    .mx_1()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .hover(|style| style.bg(palette.hover))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_decided(cx)))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(palette.faint)
-                            .child(format!("{} Decided", if open { "▾" } else { "▸" })),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_sm()
-                            .text_color(palette.faint)
-                            .child(decided_words(decided)),
-                    ),
+                fold_head("decided", "Decided", decided_words(decided), open, palette)
+                    .mt(px(0.))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_decided(cx))),
             );
             if open {
                 body = body.child(self.decided_filter(palette, cx));
@@ -2244,25 +2223,14 @@ impl Footplate {
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let field = self.filter.clone();
-        let focus = field.focus_handle(cx);
-        div()
+        let input = self.filter.clone();
+        let focus = input.focus_handle(cx);
+        field(focus, input, palette)
             .id("decided filter")
             .debug_selector(|| "decided filter".to_string())
             .mx_1()
             .mt_1()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(palette.line)
-            .bg(palette.side)
             .text_sm()
-            .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                window.focus(&focus);
-                window.prevent_default();
-            })
-            .child(field)
     }
 
     /// The history's chips: All with the four outcomes after it, each with
@@ -2339,6 +2307,7 @@ impl Footplate {
             .child(
                 div()
                     .line_clamp(2)
+                    .font_weight(FontWeight::MEDIUM)
                     .debug_selector(|| format!("decision head {}", row.bead))
                     .child(row.head),
             );
@@ -2348,6 +2317,7 @@ impl Footplate {
                 .child(
                     div()
                         .line_clamp(2)
+                        .font_weight(FontWeight::MEDIUM)
                         .debug_selector(|| format!("decision ask {seq} {}", row.bead))
                         .child(ask.head.clone()),
                 )
@@ -2447,7 +2417,13 @@ impl Footplate {
                     .justify_between()
                     .gap_2()
                     .debug_selector(|| "grants head".to_string())
-                    .child(div().flex_1().truncate().child("Grants")),
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Grants"),
+                    ),
             )
             .child(
                 div()
@@ -2503,7 +2479,13 @@ impl Footplate {
                     .justify_between()
                     .gap_2()
                     .debug_selector(|| "teammates head".to_string())
-                    .child(div().flex_1().truncate().child("Teammates")),
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Teammates"),
+                    ),
             )
             .child(
                 div()
@@ -2554,7 +2536,13 @@ impl Footplate {
                     .justify_between()
                     .gap_2()
                     .debug_selector(|| "pairing head".to_string())
-                    .child(div().flex_1().truncate().child("Pair a phone")),
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Pair a phone"),
+                    ),
             )
             .child(
                 div()
@@ -2608,6 +2596,7 @@ impl Footplate {
                     .child(
                         div()
                             .truncate()
+                            .font_weight(FontWeight::MEDIUM)
                             .debug_selector(|| format!("decided head {} {}", row.bead, row.ask))
                             .child(row.head),
                     )
@@ -2696,6 +2685,7 @@ impl Footplate {
                     .child(
                         div()
                             .truncate()
+                            .font_weight(FontWeight::MEDIUM)
                             .debug_selector(|| {
                                 format!("decided fold head {} {}", fold.bead, fold.ask)
                             })
@@ -2835,7 +2825,18 @@ impl Footplate {
         } else {
             ask.chosen
         };
-        let mut card = div().flex().flex_col().gap_2();
+        // The Ask card's frame: raised and bordered, at the reading pane's
+        // measures. Everything the card says stands inside it.
+        let mut card = div()
+            .debug_selector(|| format!("card {bead_id} {ask_seq}"))
+            .flex()
+            .flex_col()
+            .gap_2p5()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(palette.line)
+            .bg(palette.raised);
         // How the card approves: nowhere where the yard takes no approval
         // from this window, after the ask's number is typed back where a
         // weighty card has no gate.
@@ -2877,15 +2878,19 @@ impl Footplate {
             )
             .into_any_element()
         };
+        // The asker's label and the age both need room beside the question.
+        // At a narrow window let the age wrap before the label squeezes the
+        // words down to a few pixels.
         card = card.child(
             div()
                 .flex()
+                .flex_wrap()
                 .justify_between()
                 .gap_2()
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
+                        .min_w(px(ASK_QUESTION_MIN))
                         .debug_selector(|| format!("question {bead_id} {ask_seq}"))
                         .text_lg()
                         .font_weight(FontWeight::SEMIBOLD)
@@ -2894,7 +2899,8 @@ impl Footplate {
                 .child(
                     div()
                         .flex_none()
-                        .text_sm()
+                        .ml_auto()
+                        .text_xs()
                         .text_color(palette.faint)
                         .child(asked_age(&ask.waits)),
                 ),
@@ -2902,7 +2908,7 @@ impl Footplate {
         // The asker. The recommendation stands on its own option, below.
         card = card.child(
             div()
-                .text_sm()
+                .text_xs()
                 .text_color(palette.faint)
                 .child(format!("asked by {}", ask.asker)),
         );
@@ -2911,18 +2917,19 @@ impl Footplate {
         // under the words.
         for (line, text) in ask.context.iter().enumerate() {
             if asker_marked {
-                card = card.child(self.marked_asker_line(
+                card = card.child(div().text_xs().child(self.marked_asker_line(
                     card_key,
                     "context",
                     line,
                     format!("run context {bead_id} {ask_seq} {line}"),
                     text,
                     &ask.asker,
-                ));
+                )));
             } else {
                 card = card.child(
                     div()
                         .debug_selector(|| format!("context {bead_id} {ask_seq} {line}"))
+                        .text_xs()
                         .child(select::text(
                             expanded_text_key(card_key, "context", line, text),
                             text.clone(),
@@ -2955,16 +2962,19 @@ impl Footplate {
                         .text_sm()
                         .text_color(palette.faint)
                         .cursor_pointer()
+                        .hover(|style| style.text_color(palette.text))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.expand_for(bead_click.clone(), ask_seq, cx)
                         }))
                         .child(format!("{mark} bead details (e)")),
                 )
+                // One line to select and copy whole, so the bead's id keeps
+                // the line's quiet colour rather than the link's.
                 .child(
                     div()
                         .debug_selector(|| format!("ask line {bead_id} {ask_seq}"))
                         .min_w_0()
-                        .text_sm()
+                        .text_xs()
                         .text_color(palette.faint)
                         .child(select::verbatim(line_key, line, &self.selection)),
                 ),
@@ -3021,10 +3031,8 @@ impl Footplate {
                     } else {
                         "○"
                     };
-                    let text = format!(
-                        "{} {}. {} — {}",
-                        marker, option.number, option.label, option.consequence
-                    );
+                    let pick = format!("{} {}. {}", marker, option.number, option.label);
+                    let consequence = format!("— {}", option.consequence);
                     let n = option.number;
                     let bead_click = bead_id.clone();
                     card = card.child(
@@ -3033,26 +3041,51 @@ impl Footplate {
                             .debug_selector(|| format!("pick {bead_id} {ask_seq} {n}"))
                             .cursor_pointer()
                             .rounded_md()
+                            .border_1()
+                            .border_color(rgba(0x00000000))
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_baseline()
                             .when(n == answered, |el| el.bg(palette.open))
                             .when(n != answered, |el| {
-                                el.hover(|style| style.bg(palette.hover))
+                                el.hover(|style| style.border_color(palette.line))
                             })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.pick_for(bead_click.clone(), ask_seq, n, cx)
                             }))
-                            .child(text),
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(format!("{pick} ")),
+                            )
+                            .child(div().text_xs().text_color(palette.faint).child(consequence)),
                     );
                     // The recommended one with its why, under its own row: the
                     // one place the card names the recommendation.
                     if ask.recommend != 0 && n == ask.recommend {
                         marked = true;
-                        card = card.child(div().text_sm().child(recommended_line(&ask.why)));
+                        card = card.child(
+                            div()
+                                .ml_6()
+                                .text_xs()
+                                .text_color(palette.faint)
+                                .child(recommended_line(&ask.why)),
+                        );
                     }
                 }
                 // A recommendation the options do not hold stands past them, as
                 // nothing else names it.
                 if ask.recommend != 0 && !marked {
-                    card = card.child(div().text_sm().child(recommended_line(&ask.why)));
+                    card = card.child(
+                        div()
+                            .ml_6()
+                            .text_xs()
+                            .text_color(palette.faint)
+                            .child(recommended_line(&ask.why)),
+                    );
                 }
             }
         }
@@ -3067,11 +3100,11 @@ impl Footplate {
             // that sends nowhere draws no field: its approval goes in a
             // terminal, and a decline's words take the line.
             let secret_field = (ask.secret.is_some() || ask.setup.is_some()) && !declining && sends;
-            let field = match secret_field {
+            let input = match secret_field {
                 true => self.secret.clone(),
                 false => self.line.clone(),
             };
-            let focus = field.focus_handle(cx);
+            let focus = input.focus_handle(cx);
             let kind = if secret_field { "secret" } else { "words" };
             // Where this yard takes no approval from this window, the
             // card says where it does, in place of the control. Where a
@@ -3112,24 +3145,13 @@ impl Footplate {
             card = card.when(
                 (ask.run.is_none() || ask.setup.is_some() || declining) && (sends || declining),
                 |card| {
-                    let boxed = div()
+                    let boxed = field(focus, input, palette)
                         .debug_selector(|| format!("{kind} {bead_id} {ask_seq}"))
                         // A setup ask's account field takes its approval's key
                         // too, with what the field holds.
                         .when(ask.setup.is_some() && secret_field, |el| {
                             el.key_context(SETUP_SECRET_CONTEXT)
-                        })
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(palette.line)
-                        .bg(palette.side)
-                        .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                            window.focus(&focus);
-                            window.prevent_default();
-                        })
-                        .child(field);
+                        });
                     match toggle {
                         Some(toggle) => card.child(
                             div()
@@ -3243,6 +3265,7 @@ impl Footplate {
             card = card.child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .when_some(send, |el, (id, text, enabled)| {
@@ -3302,7 +3325,7 @@ impl Footplate {
                     .flex_wrap()
                     .items_baseline()
                     .gap_1()
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .children(prose.then(|| div().child(keys)))
                     .children(prose.then(|| div().child("·")))
@@ -3350,11 +3373,10 @@ impl Footplate {
             }))
     }
 
-    /// One run asker's line with the trusted label in its own column, so
-    /// soft-wrapped words remain to the right of the label. The words
-    /// select and copy, drawn as they were written with no block in
-    /// them; the label stays plain, so a copy of the words does not
-    /// carry it.
+    /// One run asker's line with the trusted label beside its words where
+    /// they fit, and above them where they do not. The words select and
+    /// copy, drawn as they were written with no block in them; the label
+    /// stays plain, so a copy of the words does not carry it.
     pub(crate) fn marked_asker_line(
         &self,
         card_key: u64,
@@ -3372,6 +3394,7 @@ impl Footplate {
         let key = expanded_text_key(card_key, section, index, &words);
         div()
             .flex()
+            .flex_wrap()
             .items_start()
             .child(
                 div()
@@ -3382,7 +3405,10 @@ impl Footplate {
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    // A label and a too-narrow word column split the text
+                    // into letters. Wrap the words below the label while
+                    // there is still room for a word at their side.
+                    .min_w(px(80.))
                     .debug_selector(move || words_id.clone())
                     .child(select::verbatim(key, words, &self.selection)),
             )
@@ -3409,7 +3435,7 @@ impl Footplate {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(select::text(key, secret.line.clone(), &self.selection)),
             )
-            .child(div().text_sm().text_color(palette.faint).child(SECRET_GOES))
+            .child(div().text_xs().text_color(palette.faint).child(SECRET_GOES))
     }
 
     /// The head of a teammate invite or removal ask's block: which it is,
@@ -3425,7 +3451,7 @@ impl Footplate {
     ) -> impl IntoElement + use<> {
         let card_key = select::key((bead, ask));
         let kind = teammate_kind(teammate).to_string();
-        let mut head = div().flex().flex_col().gap_1().child(
+        let mut head = div().flex().flex_col().gap_2().child(
             div()
                 .debug_selector(|| format!("teammate kind {bead} {ask}"))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -3462,7 +3488,7 @@ impl Footplate {
             head = head.child(
                 div()
                     .debug_selector(|| format!("teammate correction {bead} {ask}"))
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .child(select::text(
                         expanded_text_key(card_key, "teammate correction", 0, TEAMMATE_CORRECTION),
@@ -3503,14 +3529,15 @@ impl Footplate {
         };
         let mut block = div()
             .debug_selector(|| format!("run {bead} {ask}"))
-            .p_3()
+            .px_3()
+            .py_2p5()
             .rounded_md()
             .border_1()
             .border_color(palette.line)
             .bg(palette.side)
             .flex()
             .flex_col()
-            .gap_1();
+            .gap_2();
         if let Some(teammate) = teammate_of(run) {
             block = block.child(self.teammate_head(bead, ask, &teammate, palette));
         }
@@ -3518,7 +3545,7 @@ impl Footplate {
             .child(
                 div()
                     .debug_selector(|| over.clone())
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .child(over.clone()),
             )
@@ -3538,6 +3565,7 @@ impl Footplate {
             block = block.child(
                 div()
                     .debug_selector(|| format!("run description {bead} {ask}"))
+                    .text_xs()
                     .child(select::text(key, line, &self.selection)),
             );
         }
@@ -3547,6 +3575,7 @@ impl Footplate {
             block = block.child(
                 div()
                     .debug_selector(|| format!("run does {bead} {ask} {ix}"))
+                    .text_xs()
                     .child(select::text(key, line, &self.selection)),
             );
         }
@@ -3578,7 +3607,7 @@ impl Footplate {
         let (bead, ask) = at;
         let (back, back_by) = back;
         let card_key = select::key((bead, ask));
-        let mut end = div().flex().flex_col().gap_1();
+        let mut end = div().flex().flex_col().gap_2();
         // The ask's own texts, behind one tap: the approval is live
         // whether or not it was opened.
         let texts_shown = self
@@ -3591,7 +3620,7 @@ impl Footplate {
                 div()
                     .id(SharedString::from(format!("texts {bead} {ask}")))
                     .debug_selector(|| format!("texts {bead} {ask}"))
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -3605,7 +3634,7 @@ impl Footplate {
                 end = end
                     .child(
                         div()
-                            .text_sm()
+                            .text_xs()
                             .text_color(palette.faint)
                             .child(text.heading.clone()),
                     )
@@ -3626,7 +3655,7 @@ impl Footplate {
             end = end
                 .child(
                     div()
-                        .text_sm()
+                        .text_xs()
                         .text_color(palette.faint)
                         .child(take_back_label(&model::plain(back_by))),
                 )
@@ -3668,24 +3697,26 @@ impl Footplate {
         let summary_key = expanded_text_key(card_key, "summary", 0, &summary);
         let mut block = div()
             .debug_selector(|| format!("setup {bead} {ask}"))
-            .p_3()
+            .px_3()
+            .py_2p5()
             .rounded_md()
             .border_1()
             .border_color(palette.line)
             .bg(palette.side)
             .flex()
             .flex_col()
-            .gap_1()
+            .gap_2()
             .child(
                 div()
                     .debug_selector(|| over.clone())
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .child(over.clone()),
             )
             .child(
                 div()
                     .debug_selector(|| format!("setup summary {bead} {ask}"))
+                    .text_xs()
                     .child(select::text(summary_key, summary, &self.selection)),
             );
         for (ix, does) in setup.does.iter().enumerate() {
@@ -3694,6 +3725,7 @@ impl Footplate {
             block = block.child(
                 div()
                     .debug_selector(|| format!("setup does {bead} {ask} {ix}"))
+                    .text_xs()
                     .child(select::text(key, line, &self.selection)),
             );
         }
@@ -3724,7 +3756,7 @@ impl Footplate {
         if setup.candidates.is_empty() {
             return choice.into_any_element();
         }
-        choice = choice.child(div().text_sm().text_color(palette.faint).child(SETUP_TAKE));
+        choice = choice.child(div().text_xs().text_color(palette.faint).child(SETUP_TAKE));
         for candidate in &setup.candidates {
             let is_taken = candidate.source == taken;
             let text = candidate_choice_line(candidate, taken);
@@ -3739,8 +3771,14 @@ impl Footplate {
                     .debug_selector(|| format!("account {bead} {ask} {}", candidate.source))
                     .cursor_pointer()
                     .rounded_md()
+                    .border_1()
+                    .border_color(rgba(0x00000000))
+                    .px_2()
+                    .py_1()
                     .when(is_taken, |el| el.bg(palette.open))
-                    .when(!is_taken, |el| el.hover(|style| style.bg(palette.hover)))
+                    .when(!is_taken, |el| {
+                        el.hover(|style| style.border_color(palette.line))
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.take_account_for(bead_click.clone(), ask, source.clone(), cx)
                     }))
@@ -3787,28 +3825,17 @@ impl Footplate {
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let field = self.typeback.clone();
-        let focus = field.focus_handle(cx);
+        let input = self.typeback.clone();
+        let focus = input.focus_handle(cx);
         div()
             .flex()
             .flex_col()
             .gap_1()
             .child(div().child(typeback_line(ask, verb)))
             .child(
-                div()
+                field(focus, input, palette)
                     .debug_selector(|| format!("typeback {bead} {ask}"))
-                    .key_context(SETUP_SECRET_CONTEXT)
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(palette.line)
-                    .bg(palette.side)
-                    .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                        window.focus(&focus);
-                        window.prevent_default();
-                    })
-                    .child(field),
+                    .key_context(SETUP_SECRET_CONTEXT),
             )
     }
 
@@ -3863,16 +3890,18 @@ impl Footplate {
                     )
                     .child(card_head(&self.yard, &detail.bead, &format!("ask {ask}"))),
             );
+        // The decided card's frame: raised and bordered, as an open
+        // card's. Everything the card says stands inside it.
         let mut body = div()
-            .id("decided")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.decision)
-            .p_4()
+            .debug_selector(|| format!("decided card {bead} {ask}"))
             .flex()
             .flex_col()
-            .gap_2();
+            .gap_2p5()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(palette.line)
+            .bg(palette.raised);
         // The question, and what was decided with who and when.
         let card_key = select::key((bead, ask));
         let asker_marked = detail.run.is_some() || detail.setup.is_some();
@@ -3944,18 +3973,19 @@ impl Footplate {
             // The context, the options to pick again, the recommendation.
             for (line, text) in detail.context.iter().enumerate() {
                 if asker_marked {
-                    body = body.child(self.marked_asker_line(
+                    body = body.child(div().text_xs().child(self.marked_asker_line(
                         card_key,
                         "context",
                         line,
                         format!("run decided context {bead} {ask} {line}"),
                         text,
                         &detail.asker,
-                    ));
+                    )));
                 } else {
                     body = body.child(
                         div()
                             .debug_selector(|| format!("context {bead} {ask} {line}"))
+                            .text_xs()
                             .child(select::text(
                                 expanded_text_key(card_key, "context", line, text),
                                 text.clone(),
@@ -3992,10 +4022,8 @@ impl Footplate {
                     // the highlighted one, and the button says what it sends.
                     let picked = option.number == detail.picked;
                     let marker = if picked { "●" } else { "○" };
-                    let text = format!(
-                        "{} {}. {} — {}",
-                        marker, option.number, option.label, option.consequence
-                    );
+                    let pick = format!("{} {}. {}", marker, option.number, option.label);
+                    let consequence = format!("— {}", option.consequence);
                     let n = option.number;
                     body = body.child(
                         div()
@@ -4003,16 +4031,37 @@ impl Footplate {
                             .debug_selector(|| format!("pick {bead} {ask} {n}"))
                             .cursor_pointer()
                             .rounded_md()
-                            .when(picked, |el| {
-                                el.font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(palette.text_accent)
-                            })
+                            .border_1()
+                            .border_color(rgba(0x00000000))
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .items_baseline()
                             .when(n == detail.chosen, |el| el.bg(palette.open))
                             .when(n != detail.chosen, |el| {
-                                el.hover(|style| style.bg(palette.hover))
+                                el.hover(|style| style.border_color(palette.line))
                             })
                             .on_click(cx.listener(move |this, _, _, cx| this.pick(n, cx)))
-                            .child(text),
+                            .child(
+                                div()
+                                    .when(picked, |el| {
+                                        el.font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(palette.text_accent)
+                                    })
+                                    .when(!picked, |el| el.font_weight(FontWeight::MEDIUM))
+                                    .child(format!("{pick} ")),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(match picked {
+                                        true => palette.text_accent,
+                                        false => palette.faint,
+                                    })
+                                    .child(consequence),
+                            ),
                     );
                     // The words sent with the pick stand under it.
                     if picked && !detail.words.is_empty() {
@@ -4022,7 +4071,9 @@ impl Footplate {
                 if detail.recommend != 0 {
                     body = body.child(
                         div()
-                            .text_sm()
+                            .ml_6()
+                            .text_xs()
+                            .text_color(palette.faint)
                             .child(format!("recommended: {}, {}", detail.recommend, detail.why)),
                     );
                 }
@@ -4120,11 +4171,11 @@ impl Footplate {
             // typed in sight. A card that sends nowhere draws no field.
             let setup_field = setup_approving && detail.setup.is_some() && sends;
             let secret_field = (detail.secret.is_some() && sends) || setup_field;
-            let field = match secret_field {
+            let input = match secret_field {
                 true => self.secret.clone(),
                 false => self.line.clone(),
             };
-            let focus = field.focus_handle(cx);
+            let focus = input.focus_handle(cx);
             let kind = if secret_field { "secret" } else { "words" };
             let words = detail.secret.is_none() && detail.run.is_none() && detail.setup.is_none();
             let fielded = !taken_back && sends && (words || giving.is_some() || setup_field);
@@ -4133,22 +4184,11 @@ impl Footplate {
             let toggle = secret_field
                 .then(|| show_button(format!("show {bead} {ask}"), self.secret_shown, palette, cx));
             body = body.when(fielded, |body| {
-                let boxed = div()
+                let boxed = field(focus, input, palette)
                     .debug_selector(|| format!("{kind} {bead} {ask}"))
                     // A setup ask's account field takes its approval's key
                     // too, with what the field holds.
-                    .when(setup_field, |el| el.key_context(SETUP_SECRET_CONTEXT))
-                    .px_3()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(palette.line)
-                    .bg(palette.side)
-                    .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                        window.focus(&focus);
-                        window.prevent_default();
-                    })
-                    .child(field);
+                    .when(setup_field, |el| el.key_context(SETUP_SECRET_CONTEXT));
                 match toggle {
                     Some(toggle) => body.child(
                         div()
@@ -4243,7 +4283,7 @@ impl Footplate {
                     .flex_wrap()
                     .items_baseline()
                     .gap_1()
-                    .text_sm()
+                    .text_xs()
                     .text_color(palette.faint)
                     .children(prose.then(|| div().child(keys)))
                     .children(prose.then(|| div().child("·")))
@@ -4278,7 +4318,16 @@ impl Footplate {
         }
         pane.children(self.reconnect_strip(palette))
             .child(head)
-            .child(body)
+            .child(
+                div()
+                    .id("decided")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.decision)
+                    .p_4()
+                    .child(body),
+            )
             .when(!model.notice.is_empty(), |el| {
                 el.child(
                     div()

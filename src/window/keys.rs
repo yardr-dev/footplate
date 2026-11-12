@@ -56,7 +56,7 @@ impl KeysView {
             KeysView::Settings => "the settings",
             KeysView::Conversation => "this conversation",
             KeysView::Card => "this card",
-            KeysView::Waiting => "this waiting bead",
+            KeysView::Waiting => "this bead to move",
             KeysView::Moves => "this bead's moves",
             KeysView::Grants => "Grants",
             KeysView::Teammates => "Teammates",

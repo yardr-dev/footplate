@@ -11,13 +11,23 @@ use crate::model::{
 };
 use crate::theme::Palette;
 
-/// What a head says waits in it, the Decisions head's and a backlog
-/// column's: the number with "waiting", or that none does.
+/// What a backlog column's head says waits in it: the number with
+/// "waiting", or that none does. Decide's heads do not use it. The
+/// Decisions head says [`decide_words`] and the fold of the beads parked
+/// for the person's move says [`bead_words`], so that one word does not
+/// name two things there.
 pub(crate) fn waiting_words(waiting: usize) -> String {
     plural(waiting, "none waiting", "waiting", "waiting")
 }
 
-/// What a stage's head says stands on it: the number with "bead".
+/// What the Decisions head says is open: the number with "to decide", or
+/// that none is.
+pub(crate) fn decide_words(decisions: usize) -> String {
+    plural(decisions, "none to decide", "to decide", "to decide")
+}
+
+/// What a stage's head says stands on it, and the fold of the beads parked
+/// for the person's move says stands in it: the number with "bead".
 pub(crate) fn bead_words(beads: usize) -> String {
     plural(beads, "", "bead", "beads")
 }

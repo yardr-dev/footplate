@@ -308,8 +308,10 @@ pub(crate) enum SwitchRead {
 pub(crate) struct Counts {
     pub(crate) mail: usize,
     pub(crate) decisions: usize,
-    /// The beads parked for the person's move: they wait on them as an ask
-    /// does, and are counted with the decisions.
+    /// The beads parked for the person's move: theirs to move when they
+    /// open Decide, so they stand in the words of the tile's tooltip, the
+    /// switcher and the tray, and in no number that calls the person
+    /// ([`Counts::waiting`], the Decide tile's badge).
     pub(crate) parked: usize,
     pub(crate) notices: usize,
     pub(crate) changed: usize,
@@ -361,12 +363,13 @@ impl Counts {
         }
     }
 
-    /// How many things of the yard wait for the person: the mail that is
-    /// not read, the cards to decide and the beads parked for their move. A
-    /// notice of the yard asks nothing of them, and neither does a bead
-    /// that changed.
+    /// How many things of the yard call the person: the mail that is not
+    /// read and the cards to decide. A notice of the yard asks nothing of
+    /// them, and neither does a bead that changed. A bead parked for their
+    /// move waits on them but is no call. It stands in Decide for when they
+    /// open it, and no number that draws the eye counts it.
     pub(crate) fn waiting(&self) -> usize {
-        self.mail + self.decisions + self.parked
+        self.mail + self.decisions
     }
 
     /// In words.
@@ -374,7 +377,7 @@ impl Counts {
         let parts: Vec<String> = [
             count_words(self.mail, "mail", "mail"),
             count_words(self.decisions, "decision", "decisions"),
-            count_words(self.parked, "waiting", "waiting"),
+            count_words(self.parked, "to move", "to move"),
             count_words(self.notices, "notice", "notices"),
         ]
         .into_iter()
@@ -388,12 +391,13 @@ impl Counts {
 
     /// What the switcher's row carries of these counts: the waiting
     /// number with the tooltip's words. The tooltip numbers each kind,
-    /// decisions first and the beads parked after them; a notice asks
-    /// nothing, so it does not add to the waiting number.
+    /// decisions first and the beads to move after them; a notice asks
+    /// nothing and a bead to move is no call, so neither adds to the
+    /// waiting number.
     pub(crate) fn switcher(&self) -> (String, String) {
         let words = dotted([
             count_words(self.decisions, "decision", "decisions"),
-            count_words(self.parked, "waiting", "waiting"),
+            count_words(self.parked, "to move", "to move"),
             count_words(self.mail, "mail", "mail"),
             count_words(self.notices, "notice", "notices"),
         ]);
@@ -402,21 +406,23 @@ impl Counts {
     }
 
     /// What the rail's tile of `mode` carries of these counts: the
-    /// badge's label with the tooltip's words, or none where the tile
-    /// carries nothing. Chat carries the unread mail, decisions the open
-    /// asks and the beads parked for the person's move, each numbered apart
-    /// in the tooltip, the timetable the person's beads added or closed
-    /// since they last had it open; nothing is carried where nothing
+    /// badge's label, if it has a badge, with the tooltip's words, or none
+    /// where the tile carries nothing. Chat carries the unread mail,
+    /// decisions the open asks, the timetable the person's beads added or
+    /// closed since they last had it open; nothing is carried where nothing
     /// waits, and the notices are no glyph's. Above nine the badge says 9+,
-    /// and the tooltip still says the number.
-    pub(crate) fn rail(&self, mode: Mode) -> Option<(String, String)> {
+    /// and the tooltip still says the number. The beads parked for the
+    /// person's move stand in decisions' tooltip after the asks, and are
+    /// no badge's number: with no ask open, that tile has its words and no
+    /// badge.
+    pub(crate) fn rail(&self, mode: Mode) -> Option<(Option<String>, String)> {
         let (n, words) = match mode {
             Mode::Chat => (self.mail, count_words(self.mail, "mail", "mail")),
             Mode::Decisions => (
-                self.decisions + self.parked,
+                self.decisions,
                 dotted([
                     count_words(self.decisions, "decision", "decisions"),
-                    count_words(self.parked, "waiting", "waiting"),
+                    count_words(self.parked, "to move", "to move"),
                 ]),
             ),
             Mode::Timetable => (
@@ -424,10 +430,10 @@ impl Counts {
                 count_words(self.changed, "bead changed", "beads changed"),
             ),
         };
-        let label = match n > 9 {
+        let label = (n > 0).then(|| match n > 9 {
             true => "9+".to_string(),
             false => n.to_string(),
-        };
+        });
         words.map(|words| (label, words))
     }
 }

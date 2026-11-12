@@ -154,11 +154,14 @@ fn unit(glyphs: usize, size: u32) -> u32 {
     (size * 2 / 3 / 7).min(size / glyphs.saturating_mul(4).saturating_add(1))
 }
 
-/// The item's tooltip, in words: how many things wait, and `what` they are
-/// as the switcher says it of a yard ("2 mail, 1 decision").
+/// The item's tooltip, in words: how many things call the person, and
+/// `what` they are as the switcher says it of a yard ("2 mail, 1 decision").
+/// With no call but beads parked for a move, `what` still says how many are
+/// to move.
 pub fn tip(waiting: usize, what: &str) -> String {
     match waiting {
-        0 => "nothing waiting".to_string(),
+        0 if what == "nothing waiting" => "nothing waiting".to_string(),
+        0 => what.to_string(),
         1 => format!("1 wait: {what}"),
         n => format!("{n} wait: {what}"),
     }
@@ -934,6 +937,7 @@ mod tests {
     #[test]
     fn the_tooltip_says_in_words_how_many_wait_and_what_they_are() {
         assert_eq!(tip(0, "nothing waiting"), "nothing waiting");
+        assert_eq!(tip(0, "6 to move"), "6 to move");
         assert_eq!(tip(1, "1 decision"), "1 wait: 1 decision");
         assert_eq!(tip(3, "2 mail, 1 decision"), "3 wait: 2 mail, 1 decision");
     }

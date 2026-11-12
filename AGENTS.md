@@ -42,8 +42,9 @@ The window, its state and the yard:
     counts (a section head, and the one that folds its rows), its buttons,
     and the texts a run or a setup holds.
   - `src/window/asks.rs`: the decisions' views: the decisions list with its
-    Waiting section (the rows are `waiting.rs`'s; its head folds them away)
-    and its decided history (a page at a time, a row for more),
+    "Beads to move" section, which the code still calls Waiting (the rows
+    are `waiting.rs`'s; its head folds them away) and its decided history
+    (a page at a time, a row for more),
     each open ask's card with its secret, run and setup blocks, and what the
     cards do (answer, approve, give, decline, put aside).
   - `src/window/bead.rs`: one bead's views: the bead whole (in the reading
@@ -96,13 +97,13 @@ The window, its state and the yard:
     gpui 0.2.2's `truncate()` clips mid-glyph, with no ellipsis, in a flex item
     that shrinks, so a row whose text may outrun it shortens the string too.
   - `src/window/waiting.rs`: the parked beads' views: a bead's row in the
-    Waiting section of the decisions list, the card that offers the moves
+    "Beads to move" section of the decisions list, the card that offers the moves
     the yard serves it (`Waiting`'s actions, one button each, with the line
     for their note), and what the moves do: pick, note, make (`MoveBead`),
     with a refusal and an unanswered call said on the card. The pick and the
     rows are the model's (`src/model.rs`); a card's note is kept under ask 0,
     which no ask has. The moves block is the Lines bead detail's too, for a
-    bead in the Waiting rows (`waiting_card` answers for both, so the keys
+    bead in the rows of that section (`waiting_card` answers for both, so the keys
     and the note are one), and on a yard from before the call the one
     stage-help line stands in its place (`Model::stage_help`).
   - `src/window/words.rs`: the window's words for its rows (what its heads

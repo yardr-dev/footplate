@@ -400,7 +400,7 @@ look-alike row, its first page of fifty and a row for the rest),
 page's last rows, where the more row is), `waiting` (the Decide list
 with three beads parked for jo's move under the open ask, one of them open
 on its card with the moves the yard offers), `waiting-folded` (that list
-with the Waiting section folded to its head and count, the card still
+with the "Beads to move" section folded to its head and count, the card still
 open), `waiting-end` (that card at its end, where the moves and
 the line for their note are), `waiting-many` (one bead served ten plain
 moves, open on its card at its end, folded behind the one control),
@@ -512,13 +512,13 @@ options have no icon, so the program sees to it when it starts
   one: see "Building".
 
   The dock's icon also carries a number, when something waits for you: the
-  mail you have not read, the cards to decide and the beads parked for your
-  move, over every yard footplate follows. They are the numbers the switcher
-  says per yard, summed; the
-  notices of a yard are not in it. It changes as they do, with the window
-  behind another or hidden, and it is gone when nothing waits. A yard that
-  is not reached counts what it last had (`src/dock.rs`). There is no
-  setting for it, and no count on a Linux taskbar.
+  mail you have not read and the cards to decide, over every yard footplate
+  follows. They are the numbers the switcher says per yard, summed; the
+  notices of a yard are not in it, nor are the beads parked for your move.
+  It changes as they do, with the window behind another or hidden, and it
+  is gone when nothing waits. A yard that is not reached counts what it
+  last had (`src/dock.rs`). There is no setting for it, and no count on a
+  Linux taskbar.
 - Linux: a desktop shows the icon and the name of the desktop entry whose id
   is the window's (`footplate`). There is no installer to put one there, so
   footplate writes its own, for you alone: `footplate.desktop` under

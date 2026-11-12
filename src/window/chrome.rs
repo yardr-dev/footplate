@@ -6196,16 +6196,19 @@ impl Footplate {
                 Mode::Timetable => track_glyph(color).into_any_element(),
             };
             // The tile's badge: the count's label at its top right,
-            // and the count in words in its tooltip.
-            let badge = counts.and_then(|counts| counts.rail(m));
+            // and the count in words in its tooltip. A tile may have
+            // its words and no badge. The beads to move stand in
+            // Decide's tooltip and call the person with no number.
+            let said = counts.and_then(|counts| counts.rail(m));
             let tip = match live {
                 true => format!("{} ({}+[ or {}+])", m.label(), SECONDARY, SECONDARY),
                 false => "the yard is away".to_string(),
             };
-            let tip = match badge.as_ref() {
+            let tip = match said.as_ref() {
                 Some((_, words)) => format!("{tip} — {words}"),
                 None => tip,
             };
+            let badge = said.and_then(|(label, _)| label);
             let id = format!("rail {}", m.name());
             let label = format!("{} label", id);
             rail =
@@ -6256,7 +6259,7 @@ impl Footplate {
                         // theirs read in the accent, as the jump button's
                         // count does; changed beads ask nothing of them,
                         // so Lines' badge stays muted, as the yard row's.
-                        .children(badge.map(|(label, _)| {
+                        .children(badge.map(|label| {
                             let waiting = m != Mode::Timetable;
                             div()
                                 .debug_selector(move || format!("rail badge {}", m.name()))

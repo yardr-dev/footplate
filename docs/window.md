@@ -12,20 +12,26 @@ you, oldest first and grouped by topic where a topic has two asks or more
 "Everything else"), each row the question wrapped to two lines, then whose
 it is, what it wants and how long it waits, and the bead's id small at its
 end; a bead with several open asks is one row, with each ask beneath its
-title in the same shape. Under them, on a yard that serves `Waiting`, stands
-the Waiting section: the beads parked for your move, longest waiting first,
-one row each. A bead is parked for you when it is open in a stage that a
-manual group works, you are one of that group's members (or the group lists
-none), and no question of yours is open on it. It stands there or among the
-open questions, never in both. A row shows the bead's title, wrapped to two
-lines, then its stage, its group and how long it has waited, with the bead's
-id small at its end. Where the parked beads belong to more than one depot,
-the depot's name joins that line. The section's head counts them (`3
-waiting`, `none waiting`); a click on it folds the rows away and leaves the
-head with its count, and another click stands them again. The section
-stands open at first, and a fold lasts until the window is closed. The keys
-that step through the list skip the rows of a folded section, and a parked
-bead's card that is open stays open. A yard from before the call has no
+title in the same shape. The Decisions head counts the beads with an open
+ask (`2 to decide`, `none to decide`). Under them, on a yard that serves
+`Waiting`, stands the "Beads to move" section: the beads parked for your
+move, longest waiting first, one row each. A bead is parked for you when
+it is open in a stage that a manual group works, you are one of that
+group's members (or the group lists none), and no question of yours is
+open on it. It stands there or among the open questions, never in both. A
+row shows the bead's title, wrapped to two lines, then its stage, its
+group and how long it has waited, with the bead's id small at its end.
+Where the parked beads belong to more than one depot, the depot's name
+joins that line. The section's head counts them (`3 beads`, `0 beads`); a
+click on it folds the rows away and leaves the head with its count, and
+another click stands them again. The section stands open at first, and a
+fold lasts until the window is closed. They are yours to move when you
+open Decide, and they call you with no number. The Decide tile's badge
+counts the open questions, and the dock's number counts those and the mail
+you have not read. The beads to move stand in words, as `6 to move`, in the
+tile's tooltip, the switcher's row and the menu bar's. The keys that step
+through the list skip the rows of a folded section, and a parked bead's
+card that is open stays open. A yard from before the call has no
 section and says nothing about one. Under them, folded, "Decided" with the
 answered, declined and put-aside asks and the ones taken back, newest
 first. Open, the history stands grouped by the day it was asked, with the
@@ -196,26 +202,28 @@ unfold them, with none picked; then the keys above pick among them as ever.
 The yard checks the move in its own write: the bead must still be as the
 card read it, the move must be one the yard offers you, and a note must be
 there where one is required. The card says what the yard refuses in the
-yard's own words, and the waiting beads and the bead are read again. A call
+yard's own words, and the beads to move and the bead are read again. A call
 that ends without an answer is said not to be known to have moved the bead,
 and it is not made again. A bead whose flow does not resolve offers no move:
 the card shows the yard's words where the moves would be, and the bead stays
 readable whole. A move made takes the bead out of the section at once and
-opens the next waiting row. While the yard is reconnecting the moves stand
-faint, and nothing is queued. `i` types in the line, and `esc` leaves it,
-then the pick, then the words. What is typed stays with its bead.
+opens the next row of beads to move. While the yard is reconnecting the
+moves stand faint, and nothing is queued. `i` types in the line, and `esc`
+leaves it, then the pick, then the words. What is typed stays with its
+bead.
 
 The same moves end the details of the bead in Lines. A bead found on the
-panel, the board, a line or No line, whose row stands in the Waiting section,
-ends its details, under its body and notes, with the card's moves and its line
-for the note, from the same read: the same buttons in the yard's words, the
-same keys (the cheatsheet names them), the same refusals and the same note,
-which is the bead's wherever it is typed. Nothing else decides it: a bead in a
-stage of people that the yard does not park for you, or that has a question of
-yours open on it, ends with no moves. A move made leaves the bead open, since
-it is the bead you are reading: its moves go with its row, its route and notes
-follow the yard's events, and the back link still leads to the panel, board,
-line or No line it was opened from. The drawer that opens beside a
+panel, the board, a line or No line, whose row stands in the "Beads to
+move" section, ends its details, under its body and notes, with the card's
+moves and its line for the note, from the same read: the same buttons in
+the yard's words, the same keys (the cheatsheet names them), the same
+refusals and the same note, which is the bead's wherever it is typed.
+Nothing else decides it: a bead in a stage of people that the yard does not
+park for you, or that has a question of yours open on it, ends with no
+moves. A move made leaves the bead open, since it is the bead you are
+reading: its moves go with its row, its route and notes follow the yard's
+events, and the back link still leads to the panel, board, line or No line
+it was opened from. The drawer that opens beside a
 conversation shows the bead whole without the moves, since the line there is
 the conversation's; its Open shows the bead full width, with them.
 
@@ -379,7 +387,7 @@ its card under "Decided".
 | `pageup`, `pagedown` | scroll the open conversation, card or yard row by a page, with the focus anywhere |
 | `cmd+home` (`ctrl+home` on Linux) | the oldest loaded message; the newest is `cmd+end`, on a card or the yard row too |
 | a click on "Decided" | folds it open, shut |
-| a click on the Waiting head | folds the rows of the section away, leaving the head with its count, or stands them again |
+| a click on the "Beads to move" head | folds the rows of the section away, leaving the head with its count, or stands them again |
 | a click on "Show more", under the opened history | draws the next fifty of its asks |
 | a click on a folded history row | opens it to show its rows, shut |
 | `/`, in decisions | opens the history with its filter typed in; `esc` leaves the filter, and what is typed stands |
@@ -587,9 +595,9 @@ quits whatever the setting says: there it switches
 
 On macOS footplate has an item in the menu bar: its mark, which is always
 there, and beside it the number of things that wait for you, while any do.
-It is the number on the dock's icon (mail you have not read, the cards to
-decide and the beads parked for your move, over every yard footplate
-follows), and changes as that does. A click opens a menu:
+It is the number on the dock's icon (mail you have not read and the cards to
+decide, over every yard footplate follows; the beads parked for your move are
+not in it), and changes as that does. A click opens a menu:
 
 ```text
 mac · 1 mail
@@ -625,8 +633,7 @@ A tray draws the icon and no title, so the count is on the icon:
 - nothing waits: footplate's mark alone;
 - one to nine wait: the mark with the number on it, white on a red badge
   in its lower right corner. The number is the one of the Mac's item:
-  mail you have not read, the cards to decide and the beads parked for your
-  move, over every yard;
+  mail you have not read and the cards to decide, over every yard;
 - ten or more wait: a white plus on the badge, where the number would
   take two digits. A badge that wide would cover the stem of the Y, so
   the plus has the width of one digit;
@@ -636,7 +643,10 @@ A tray draws the icon and no title, so the count is on the icon:
 The icon is offered at 16, 22, 24, 32, 48 and 64 pixels, each with its own
 sign, and the tray takes the one it draws. The tooltip says it in words
 and has the exact count: "12 wait: 9 mail, 3 decisions", or "nothing
-waiting".
+waiting". The beads parked for your move stand in its words after the
+decisions ("4 wait: 3 mail, 1 decision, 6 to move") and in no number; with
+nothing but them, it says "6 to move" and draws no number. The menu's row
+for the yard says how many are to move too.
 
 A click on the item shows the window, as "Show window" in its menu does; a
 yard's row shows it on that yard. Whether the window then comes to the

@@ -360,7 +360,7 @@ pub fn load(client: &Client, name: &str) -> Result<State, Trouble> {
         Err(err) if model::waiting_too_old(&err) => (Vec::new(), None, true),
         Err(err) => (
             Vec::new(),
-            Some(format!("the waiting beads could not be read: {err}")),
+            Some(format!("the beads to move could not be read: {err}")),
             false,
         ),
     };
@@ -893,7 +893,7 @@ mod tests {
                 .parked_notice
                 .as_deref()
                 .unwrap()
-                .starts_with("the waiting beads could not be read: "),
+                .starts_with("the beads to move could not be read: "),
             "{:?}",
             state.parked_notice
         );

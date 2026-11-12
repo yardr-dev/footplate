@@ -1367,11 +1367,11 @@ mod tests {
     use super::state::{Counts, pairing_failure, rail_counts, waiting};
     use super::ui::shorten;
     use super::words::{
-        LineCounts, answered_words, ask_words, bead_back_name, bead_sub, bead_words, decided_words,
-        flow_words, footplate_words, headcode_color, line_counts, more_words, remark_color,
-        stage_group_words, stage_lamp, stage_state, unread_words, waiting_words, waits_for_seat,
-        worked_first, worker_words, working_group_words, working_tip, working_words, yardr_place,
-        yardr_words,
+        LineCounts, answered_words, ask_words, bead_back_name, bead_sub, bead_words, decide_words,
+        decided_words, flow_words, footplate_words, headcode_color, line_counts, more_words,
+        remark_color, stage_group_words, stage_lamp, stage_state, unread_words, waiting_words,
+        waits_for_seat, worked_first, worker_words, working_group_words, working_tip,
+        working_words, yardr_place, yardr_words,
     };
     use super::*;
     use crate::api::{Flow, FlowBead, FlowDepot, FlowStage};
@@ -13596,13 +13596,22 @@ yardr.dev
     }
 
     /// A section's head says what waits in it: the number with its
-    /// words, or that none does. The Crew head says unread, the folded
+    /// words, or that none does. A backlog column's head says waiting, the
+    /// Decisions head what is to decide, and the fold of the beads parked
+    /// for the person's move how many beads it holds, so that "waiting"
+    /// names none of Decide's two. The Crew head says unread, the folded
     /// Decided decided.
     #[test]
     fn a_section_s_head_counts_what_waits_in_it() {
         assert_eq!(waiting_words(0), "none waiting");
         assert_eq!(waiting_words(1), "1 waiting");
         assert_eq!(waiting_words(12), "12 waiting");
+        assert_eq!(decide_words(0), "none to decide");
+        assert_eq!(decide_words(1), "1 to decide");
+        assert_eq!(decide_words(12), "12 to decide");
+        assert_eq!(bead_words(0), "0 beads");
+        assert_eq!(bead_words(1), "1 bead");
+        assert_eq!(bead_words(6), "6 beads");
         assert_eq!(unread_words(0), "none unread");
         assert_eq!(unread_words(1), "1 unread");
         assert_eq!(unread_words(12), "12 unread");
@@ -20266,9 +20275,10 @@ yardr.dev
     }
 
     /// The rail's chat and decisions tiles carry what waits in the open
-    /// yard: its unread mail, and its open asks with the beads parked for
-    /// the person's move, each at its tile's top right. The timetable
-    /// carries none.
+    /// yard: its unread mail, and its open asks, each at its tile's top
+    /// right. The beads parked for the person's move stand in the Decide
+    /// tile's tooltip and in no badge, and in no number of the dock. The
+    /// timetable carries none.
     #[gpui::test]
     fn the_rail_s_chat_and_decisions_carry_what_waits(cx: &mut TestAppContext) {
         let yard = Yard::start();
@@ -20288,14 +20298,15 @@ yardr.dev
                 })
             })
         });
-        // The tile says each apart under one number, and the dock's icon
-        // is told the mail with both.
+        // The tile's badge is the ask and its tooltip says the beads to
+        // move after it, and the dock's icon is told the mail and the
+        // ask. The parked beads call it no more than a notice does.
         let counts = view.read_with(cx, |v, _| Counts::of(v.model.as_ref().unwrap()));
         assert_eq!(
             counts.rail(Mode::Decisions),
-            Some(("3".to_string(), "1 decision · 2 waiting".to_string()))
+            Some((Some("1".to_string()), "1 decision · 2 to move".to_string()))
         );
-        wait(cx, "the dock's number", |cx| badge_of(&view, cx) == 4);
+        wait(cx, "the dock's number", |cx| badge_of(&view, cx) == 2);
         assert_eq!(yard.asked("Waiting"), [json!({"name": "jo"})]);
         assert!(drawn(cx, "rail badge chat"));
         assert!(drawn(cx, "rail badge decisions"));
@@ -20311,6 +20322,37 @@ yardr.dev
                 "the {mode} badge stands off its glyph's corner: {badge:?} {tile:?}"
             );
         }
+        // With beads to move alone there is no badge and the dock has no
+        // number, whether Decide is open or not. Keep this as another step
+        // of the rail test: a view's debug bounds retain what it once drew,
+        // so this case gets a fresh window of its own.
+        let parked_yard = Yard::start();
+        a_yard_with_long_moves(&parked_yard);
+        let (parked_view, cx) = cx.add_window_view(|window, cx| {
+            let view = Footplate::new(parked_yard.client(), "jo".into(), window, cx);
+            window.focus(&view.line.focus_handle(cx));
+            view
+        });
+        wait(cx, "the beads to move", |cx| {
+            parked_view.read_with(cx, |v, _| {
+                v.model.as_ref().is_some_and(|m| m.parked_count() == 4)
+            })
+        });
+        let counts = parked_view.read_with(cx, |v, _| Counts::of(v.model.as_ref().unwrap()));
+        assert_eq!((counts.mail, counts.decisions, counts.parked), (0, 0, 4));
+        // The tile's tooltip says them, and no badge is drawn.
+        assert_eq!(
+            counts.rail(Mode::Decisions),
+            Some((None, "4 to move".to_string()))
+        );
+        assert!(drawn(cx, "rail decisions"));
+        assert!(!drawn(cx, "rail badge decisions"));
+        assert_eq!(badge_of(&parked_view, cx), 0);
+        // Decide opened has them in its fold, and still no badge.
+        to_decisions(&parked_view, cx);
+        wait(cx, "the fold", |cx| drawn(cx, "section Beads to move"));
+        assert!(!drawn(cx, "rail badge decisions"));
+        assert_eq!(badge_of(&parked_view, cx), 0);
     }
 
     /// While the yard is away the rail's glyphs carry no count: there
@@ -21101,16 +21143,16 @@ yardr.dev
         );
 
         // A bead parked for the person's move in the yard that was left is
-        // counted with the decisions: in the switcher's words, after them,
-        // and in the icon's number. No notification tells of it: counting
-        // it is all that is done.
+        // said as one to move, in the switcher's words after the decisions,
+        // and is in no number, so the icon's stays as it was. No
+        // notification tells of it.
         let waits = badge_of(&view, cx);
         near.answer("Waiting", &waiting_of(&["yd-notes"]));
         near.emit(r#"{"seq": 23, "kind": "advanced", "actor": "yardmaster", "bead": "yd-notes", "data": {}, "at": "2026-10-08T09:33:00Z"}"#);
         wait(cx, "the parked bead in the yard that was left", |cx| {
-            state_of(&view, cx, "this machine") == "2 mail, 1 waiting"
+            state_of(&view, cx, "this machine") == "2 mail, 1 to move"
         });
-        assert_eq!(badge_of(&view, cx), waits + 1);
+        assert_eq!(badge_of(&view, cx), waits);
         assert_eq!(tellings(cx), []);
 
         // A notification of a yard that is listed no longer opens nothing:
@@ -21213,23 +21255,25 @@ yardr.dev
         // In words it is of every yard at once.
         assert_eq!(tip_of(&view, cx).as_deref(), Some("4 wait: 4 mail"));
 
-        // The beads parked for the person's move are said as the decisions
-        // are: in the number, and in the words after them.
+        // The beads parked for the person's move are said in the words, as
+        // ones to move, after the mail and the decisions, and are not in
+        // the number, which stays as it was.
         second.answer("Waiting", &waiting_of(&["yd-notes", "yd-fares"]));
         second.emit(r#"{"seq": 22, "kind": "advanced", "actor": "yardmaster", "bead": "yd-notes", "data": {}, "at": "2026-10-08T09:34:00Z"}"#);
         wait(cx, "the parked beads in the second home's yard", |cx| {
-            badge_of(&view, cx) == 6
+            tray_of(&view, cx)
+                .is_some_and(|(_, rows)| rows.get(1).is_some_and(|row| row.ends_with("2 to move")))
         });
         assert_eq!(
             tray_of(&view, cx),
             said(
-                "6",
-                ["this machine · 1 mail", "second home · 3 mail, 2 waiting"]
+                "4",
+                ["this machine · 1 mail", "second home · 3 mail, 2 to move"]
             )
         );
         assert_eq!(
             tip_of(&view, cx).as_deref(),
-            Some("6 wait: 4 mail, 2 waiting")
+            Some("4 wait: 4 mail, 2 to move")
         );
 
         // The row of the yard that is not open shows the window on it, on
@@ -21695,19 +21739,19 @@ yardr.dev
         // The beads parked for the person's move are reloaded by the next
         // event, and that read fails the same way: it is no verdict that
         // the yard has no such call, so it is made again after a while,
-        // once, and the switcher counts the bead then.
+        // once, and the switcher says the bead then.
         let parked = second.asked("Waiting").len();
         second.answer("Waiting", &waiting_of(&["yd-notes"]));
         second.answer_once_status("Waiting", 500, "{}");
         second.emit(r#"{"seq": 22, "kind": "noted", "actor": "yardmaster", "bead": "bead-s", "data": {"note": 8}, "at": "2026-10-08T09:32:00Z"}"#);
         wait(cx, "the read of the parked beads that failed", |cx| {
-            notice(cx).starts_with("the waiting beads could not be read")
+            notice(cx).starts_with("the beads to move could not be read")
         });
         assert_eq!(second.asked("Waiting").len(), parked + 1);
         assert_eq!(state_of(&view, cx, "second home"), "2 mail, 1 decision");
         cx.executor().advance_clock(session::RETRY);
-        wait(cx, "the parked bead counted in the second home", |cx| {
-            state_of(&view, cx, "second home") == "2 mail, 1 decision, 1 waiting"
+        wait(cx, "the parked bead said in the second home", |cx| {
+            state_of(&view, cx, "second home") == "2 mail, 1 decision, 1 to move"
         });
         assert_eq!(second.asked("Waiting").len(), parked + 2);
         cx.executor().advance_clock(session::RETRY + session::RETRY);
@@ -22072,7 +22116,7 @@ yardr.dev
     }
 
     #[test]
-    fn what_waits_over_the_yards_is_their_mail_decisions_and_parked_beads_summed() {
+    fn what_waits_over_the_yards_is_their_mail_and_decisions_summed() {
         let counts = |mail, decisions, notices, changed| {
             Some(Counts {
                 mail,
@@ -22082,7 +22126,8 @@ yardr.dev
                 changed,
             })
         };
-        // The beads parked for your move wait on you as a question does.
+        // The beads parked for your move wait on you, but are no call as a
+        // question is: they add to no number.
         let parked = |parked| {
             Some(Counts {
                 parked,
@@ -22106,9 +22151,17 @@ yardr.dev
         // nothing from the others.
         assert_eq!(waiting([counts(2, 1, 0, 0), None, counts(0, 3, 0, 0)]), 6);
         assert_eq!(waiting([None]), 0);
-        // The parked beads are summed with the rest, over the yards.
-        assert_eq!(waiting([parked(3)]), 3);
-        assert_eq!(waiting([counts(2, 1, 5, 3), parked(4), None]), 7);
+        // The parked beads are summed with nothing, alone, beside the rest
+        // of a yard, or over the yards.
+        assert_eq!(waiting([parked(3)]), 0);
+        assert_eq!(
+            waiting([Some(Counts {
+                parked: 6,
+                ..counts(0, 1, 0, 0).unwrap()
+            })]),
+            1
+        );
+        assert_eq!(waiting([counts(2, 1, 5, 3), parked(4), None]), 3);
     }
 
     #[test]
@@ -22124,21 +22177,22 @@ yardr.dev
         assert_eq!(counts(2, 1, 0, 3).line(), "2 mail, 1 decision");
         assert_eq!(counts(1, 0, 1, 0).line(), "1 mail, 1 notice");
         assert_eq!(counts(0, 3, 12, 0).line(), "3 decisions, 12 notices");
-        // The beads parked for your move stand after the decisions.
+        // The beads parked for your move stand after the decisions, as
+        // beads to move: "waiting" is not their word.
         let parked = |parked| Counts {
             parked,
             ..counts(1, 2, 1, 0)
         };
         assert_eq!(parked(0).line(), "1 mail, 2 decisions, 1 notice");
-        assert_eq!(parked(1).line(), "1 mail, 2 decisions, 1 waiting, 1 notice");
-        assert_eq!(parked(3).line(), "1 mail, 2 decisions, 3 waiting, 1 notice");
+        assert_eq!(parked(1).line(), "1 mail, 2 decisions, 1 to move, 1 notice");
+        assert_eq!(parked(3).line(), "1 mail, 2 decisions, 3 to move, 1 notice");
         assert_eq!(
             Counts {
                 parked: 3,
                 ..Counts::default()
             }
             .line(),
-            "3 waiting"
+            "3 to move"
         );
     }
 
@@ -22177,8 +22231,8 @@ yardr.dev
                 "1 decision · 1 mail · 1 notice".to_string()
             )
         );
-        // The beads parked for your move add to the number, and stand in
-        // the words after the decisions.
+        // The beads parked for your move add nothing to the number, and
+        // stand in the words after the decisions.
         let parked = |parked| Counts {
             parked,
             ..counts(1, 2, 1)
@@ -22186,8 +22240,8 @@ yardr.dev
         assert_eq!(
             parked(3).switcher(),
             (
-                "6".to_string(),
-                "2 decisions · 3 waiting · 1 mail · 1 notice".to_string()
+                "3".to_string(),
+                "2 decisions · 3 to move · 1 mail · 1 notice".to_string()
             )
         );
         assert_eq!(
@@ -22203,7 +22257,7 @@ yardr.dev
                 ..Counts::default()
             }
             .switcher(),
-            ("1".to_string(), "1 waiting".to_string())
+            ("0".to_string(), "1 to move".to_string())
         );
     }
 
@@ -22223,27 +22277,26 @@ yardr.dev
             notices,
             changed,
         };
+        // A tile with a badge: its label, and the tooltip's words.
+        let badged = |label: &str, words: &str| Some((Some(label.to_string()), words.to_string()));
         // Chat carries the unread mail, decisions the open asks, the
         // timetable the changed beads: the badge's label with the
         // tooltip's words. None at 0, and each tile none of the other's.
         assert_eq!(counts(0, 0, 0, 0).rail(Mode::Chat), None);
         assert_eq!(counts(0, 0, 0, 0).rail(Mode::Decisions), None);
         assert_eq!(counts(0, 0, 0, 0).rail(Mode::Timetable), None);
-        assert_eq!(
-            counts(1, 0, 0, 0).rail(Mode::Chat),
-            Some(("1".to_string(), "1 mail".to_string()))
-        );
+        assert_eq!(counts(1, 0, 0, 0).rail(Mode::Chat), badged("1", "1 mail"));
         assert_eq!(
             counts(0, 1, 0, 0).rail(Mode::Decisions),
-            Some(("1".to_string(), "1 decision".to_string()))
+            badged("1", "1 decision")
         );
         assert_eq!(
             counts(0, 0, 0, 1).rail(Mode::Timetable),
-            Some(("1".to_string(), "1 bead changed".to_string()))
+            badged("1", "1 bead changed")
         );
         assert_eq!(
             counts(0, 0, 0, 2).rail(Mode::Timetable),
-            Some(("2".to_string(), "2 beads changed".to_string()))
+            badged("2", "2 beads changed")
         );
         assert_eq!(counts(1, 0, 0, 0).rail(Mode::Decisions), None);
         assert_eq!(counts(0, 1, 0, 0).rail(Mode::Chat), None);
@@ -22251,45 +22304,57 @@ yardr.dev
         // Above nine the badge says 9+, and the tooltip the number.
         assert_eq!(
             counts(10, 0, 0, 0).rail(Mode::Chat),
-            Some(("9+".to_string(), "10 mail".to_string()))
+            badged("9+", "10 mail")
         );
         assert_eq!(
             counts(0, 12, 0, 0).rail(Mode::Decisions),
-            Some(("9+".to_string(), "12 decisions".to_string()))
+            badged("9+", "12 decisions")
         );
         assert_eq!(
             counts(0, 0, 0, 11).rail(Mode::Timetable),
-            Some(("9+".to_string(), "11 beads changed".to_string()))
+            badged("9+", "11 beads changed")
         );
         // The notices are no tile's.
         assert_eq!(counts(0, 0, 5, 0).rail(Mode::Chat), None);
         assert_eq!(counts(0, 0, 5, 0).rail(Mode::Decisions), None);
         assert_eq!(counts(0, 0, 5, 0).rail(Mode::Timetable), None);
-        // The Decide tile carries the decisions and the beads parked for
-        // the move together, its tooltip numbering each apart; the other
-        // tiles carry none of them.
+        // The Decide tile's badge is the open asks alone. The beads parked
+        // for the move stand in its tooltip after them, as beads to move,
+        // and are no badge's number; the other tiles carry none of them.
         let parked = |decisions, parked| Counts {
             parked,
             ..counts(0, decisions, 0, 0)
         };
         assert_eq!(
             parked(2, 3).rail(Mode::Decisions),
-            Some(("5".to_string(), "2 decisions · 3 waiting".to_string()))
-        );
-        assert_eq!(
-            parked(0, 1).rail(Mode::Decisions),
-            Some(("1".to_string(), "1 waiting".to_string()))
+            badged("2", "2 decisions · 3 to move")
         );
         assert_eq!(
             parked(1, 0).rail(Mode::Decisions),
-            Some(("1".to_string(), "1 decision".to_string()))
+            badged("1", "1 decision")
         );
         assert_eq!(
-            parked(4, 8).rail(Mode::Decisions),
-            Some(("9+".to_string(), "4 decisions · 8 waiting".to_string()))
+            parked(1, 6).rail(Mode::Decisions),
+            badged("1", "1 decision · 6 to move")
+        );
+        assert_eq!(
+            parked(10, 2).rail(Mode::Decisions),
+            badged("9+", "10 decisions · 2 to move")
+        );
+        // With no ask open the tile has its words and no badge, however
+        // many beads wait for the move.
+        assert_eq!(
+            parked(0, 1).rail(Mode::Decisions),
+            Some((None, "1 to move".to_string()))
+        );
+        assert_eq!(
+            parked(0, 12).rail(Mode::Decisions),
+            Some((None, "12 to move".to_string()))
         );
         assert_eq!(parked(2, 3).rail(Mode::Chat), None);
         assert_eq!(parked(2, 3).rail(Mode::Timetable), None);
+        assert_eq!(parked(0, 3).rail(Mode::Chat), None);
+        assert_eq!(parked(0, 3).rail(Mode::Timetable), None);
     }
 
     #[test]
@@ -34391,13 +34456,13 @@ yardr.dev
         cx.simulate_resize(gpui::size(px(1280.), px(800.)));
         to_decisions(&view, cx);
         wait(cx, "the section", |cx| {
-            drawn(cx, "section Waiting") && drawn(cx, "waiting row bead-q")
+            drawn(cx, "section Beads to move") && drawn(cx, "waiting row bead-q")
         });
         assert!(drawn(cx, "section Decisions"));
         // Asks first, the parked beads under them, the dealt with last.
         let (asks_at, head, first, second, decided) = (
             bounds_of(cx, "decision row bead-a"),
-            bounds_of(cx, "section Waiting"),
+            bounds_of(cx, "section Beads to move"),
             bounds_of(cx, "waiting row bead-p"),
             bounds_of(cx, "waiting row bead-q"),
             bounds_of(cx, "decided toggle"),
@@ -34417,10 +34482,13 @@ yardr.dev
             second.bottom() <= decided.top() + slack,
             "{second:?} {decided:?}"
         );
-        // The head carries the number in quiet words, at its right.
-        let count = bounds_of(cx, "section Waiting count");
+        // The head carries the number in quiet words, at its right: the
+        // fold's are of beads, and the Decisions head's of what is to
+        // decide, so that "waiting" names neither.
+        let count = bounds_of(cx, "section Beads to move count");
         assert!(head.right() <= count.left() && count.right() <= second.right());
-        assert_eq!(words::waiting_words(2), "2 waiting");
+        assert_eq!(words::bead_words(2), "2 beads");
+        assert_eq!(words::decide_words(1), "1 to decide");
         // The bead with a question stands once, among the asks, though the
         // queue lists it too.
         assert!(!drawn(cx, "waiting row bead-a"));
@@ -34450,8 +34518,8 @@ yardr.dev
         assert!(bounds_of(cx, "decided toggle").top() <= folded.bottom() + slack);
         assert!(bounds_of(cx, "decided toggle").top() < before.top());
         let (title, count) = (
-            bounds_of(cx, "section Waiting"),
-            bounds_of(cx, "section Waiting count"),
+            bounds_of(cx, "section Beads to move"),
+            bounds_of(cx, "section Beads to move count"),
         );
         assert!(folded.left() <= title.left() && title.right() <= count.left());
         assert!(count.right() <= folded.right() && count.top() >= folded.top());
@@ -34964,20 +35032,22 @@ yardr.dev
         let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
         to_decisions(&view, cx);
         wait(cx, "the asks", |cx| drawn(cx, "decision row bead-a"));
-        assert!(!drawn(cx, "section Waiting"));
-        assert!(!drawn(cx, "section Waiting count"));
+        assert!(!drawn(cx, "section Beads to move"));
+        assert!(!drawn(cx, "section Beads to move count"));
         assert_eq!(notice(&view, cx), "");
         view.read_with(cx, |v, _| {
             let m = v.model.as_ref().unwrap();
             assert!(m.waiting_too_old());
             assert_eq!(m.parked_count(), 0);
         });
-        // A yard that serves it, with none waiting, has the head and says
+        // A yard that serves it, with no bead parked, has the head and says
         // so.
         yard.answer("Waiting", r#"{"result": []}"#);
         yard.emit(r#"{"seq": 30, "kind": "advanced", "actor": "yardmaster", "bead": "bead-z", "at": "2026-10-08T09:30:00Z", "data": {}}"#);
-        wait(cx, "the section's head", |cx| drawn(cx, "section Waiting"));
-        assert_eq!(words::waiting_words(0), "none waiting");
+        wait(cx, "the section's head", |cx| {
+            drawn(cx, "section Beads to move")
+        });
+        assert_eq!(words::bead_words(0), "0 beads");
     }
 
     /// The board and the flows the beads of `a_yard_with_parked_beads`

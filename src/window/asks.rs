@@ -27,7 +27,7 @@ use super::metrics::ASK_QUESTION_MIN;
 use super::rail::{RailTip, UnsentNote, post_note};
 use super::state::{Adding, ApprovalPairing};
 use super::ui::{field, keys_hint, send_held, small_button};
-use super::words::{decided_words, left_words, waiting_words};
+use super::words::{bead_words, decide_words, decided_words, left_words};
 use super::{AskAbout, Decline, Expand, FocusFilter, FocusWords};
 use crate::api::{self};
 use crate::draft::{self, Attachment};
@@ -2288,7 +2288,8 @@ impl Footplate {
 
     /// Decisions' list: the open questions, each with what it wants,
     /// grouped by topic where a topic has two asks or more, with the
-    /// Waiting section under them, which folds to its head, and the
+    /// "Beads to move" section under them (the rows of the beads parked
+    /// for the person's move), which folds to its head, and the
     /// Decided toggle at the list's end: decided asks are unbounded
     /// history, and without the toggle they would push open decisions
     /// off a short list. Open, the history has its filter with its chips,
@@ -2305,7 +2306,7 @@ impl Footplate {
         let mut body = self.list_body();
         let decisions = model.decisions_count();
         let decided = model.decided_count();
-        body = body.child(section_head("Decisions", waiting_words(decisions), palette));
+        body = body.child(section_head("Decisions", decide_words(decisions), palette));
         for group in model.decision_groups(&now) {
             // A topic above a single ask is noise: the head stands only
             // where two asks or more share the topic.
@@ -2330,16 +2331,19 @@ impl Footplate {
             }
         }
         // The beads parked for the person's move stand under the asks: a
-        // question asks for words, a parked bead for a move. A yard from
-        // before the call has no section, and nothing said of it. Folded,
-        // the head stands with its count, and the rows go.
+        // question asks for words, a parked bead for a move. The fold is
+        // named for what the person does with them, "Beads to move". The
+        // head above it counts what is "to decide", and one word,
+        // "waiting", would name both. A yard from before the call has no
+        // section, and nothing said of it. Folded, the head stands with its
+        // count, and the rows go.
         if !model.waiting_too_old() {
             let folded = model.waiting_folded();
             body = body.child(
                 fold_head(
                     "waiting",
-                    "Waiting",
-                    waiting_words(model.parked_count()),
+                    "Beads to move",
+                    bead_words(model.parked_count()),
                     !folded,
                     palette,
                 )

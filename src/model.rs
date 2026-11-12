@@ -2103,7 +2103,8 @@ impl Model {
         }
     }
 
-    /// How many beads have open asks: the Decisions head's count.
+    /// How many beads have open asks: the Decisions head's count, and the
+    /// Decide tile's badge.
     pub fn decisions_count(&self) -> usize {
         self.decision_beads().len()
     }
@@ -2120,8 +2121,10 @@ impl Model {
             .filter(move |row| !asked.contains(row.bead.as_str()))
     }
 
-    /// How many beads are parked for the person's move: what the Decide
-    /// tile, the switcher and the dock count with the decisions.
+    /// How many beads are parked for the person's move: what the fold of
+    /// beads to move counts, and what the Decide tile's tooltip, the
+    /// switcher and the tray say "to move". No number that calls the
+    /// person (a badge, the dock's) counts them.
     pub fn parked_count(&self) -> usize {
         self.parked().count()
     }
@@ -2193,7 +2196,7 @@ impl Model {
                 self.reselect()
             }
             false => {
-                self.notice = format!("the waiting beads could not be read: {err}");
+                self.notice = format!("the beads to move could not be read: {err}");
                 Vec::new()
             }
         }
@@ -2580,15 +2583,16 @@ impl Model {
 
     /// The beads that wait on the person reading. Where the yard serves
     /// `Waiting` they are the beads with an open ask to them, oldest first,
-    /// and then the beads parked for their move: the number Decide counts,
-    /// the yard saying whose move it is, a stage of several people
-    /// included. A yard from before the call says nothing of it, and the
-    /// beads Lines shows stand in, in the board's order first and then the
-    /// complete Flows order. Arrivals is capped, so the flows also supply
-    /// waits beyond the rows the table can show. A bead waits on them
-    /// there where its remark names them alone, or where they have an open
-    /// ask on it; a wait naming several people counts only with an open
-    /// ask on that bead.
+    /// and then the beads parked for their move, the yard saying whose move
+    /// it is, a stage of several people included. A yard from before the
+    /// call says nothing of it, and the beads Lines shows stand in, in the
+    /// board's order first and then the complete Flows order. Arrivals is
+    /// capped, so the flows also supply waits beyond the rows the table can
+    /// show. A bead waits on them there where its remark names them alone,
+    /// or where they have an open ask on it; a wait naming several people
+    /// counts only with an open ask on that bead. This is Lines' own
+    /// "waiting on you", which the rail's badge and the dock's number do
+    /// not take: they count what calls the person (`Counts::waiting`).
     pub fn waiting_on_you(&self) -> Vec<(&str, &str)> {
         fn include<'a>(
             waiting: &mut Vec<(&'a str, &'a str)>,
@@ -13489,7 +13493,7 @@ mod tests {
             assert_eq!(m.parked_count(), 1);
             assert_eq!(
                 m.notice,
-                format!("the waiting beads could not be read: {err}")
+                format!("the beads to move could not be read: {err}")
             );
             m.notice.clear();
         }

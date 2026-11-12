@@ -26306,6 +26306,78 @@ yardr.dev
         assert!(!drawn(cx, "setup install claude") && !drawn(cx, "setup shadow claude"));
     }
 
+    /// The Needs step looks again by itself: the countdown stands at the
+    /// foot while something is missing, the check runs with no click, and
+    /// what arrived is said in words. herdr missing, then found.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn the_needs_step_looks_again_by_itself_and_says_what_arrived(cx: &mut TestAppContext) {
+        use crate::setup::standin;
+        use firstrun::Step;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (means, program, _) = stand_in_means(dir.path(), true);
+        let home = dir.path().join("home");
+        standin::answers(&program, "doctor", 1, &standin::doctor_bare(&home));
+        let (view, cx) = no_yard(dir.path(), cx);
+        view.update(cx, |v, _| v.means = means);
+        click_on(cx, "way here");
+        at_step(&view, cx, Step::Needs);
+        wait(cx, "the countdown to the next look", |cx| {
+            drawn(cx, "setup again")
+        });
+        // Ten seconds on, the check runs with no click: doctor is asked
+        // anew, and with nothing arrived, nothing is said.
+        let asked = standin::calls(&program).len();
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+        }
+        wait(cx, "the re-check with no click", |_| {
+            standin::calls(&program).len() > asked
+        });
+        at_step(&view, cx, Step::Needs);
+        assert_eq!(setup_said(&view, cx), "");
+        // herdr is installed: the next look, twice as long after, says so.
+        standin::answers(&program, "doctor", 0, &standin::doctor_other(&home));
+        for _ in 0..20 {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+        }
+        wait(cx, "herdr said to be installed", |cx| {
+            setup_said(&view, cx) == "herdr is installed."
+        });
+
+        // A failed re-check after the requirements were met leaves the last
+        // Doctor on screen, but it must still look again: that answer was
+        // unknown, not ready.
+        let mut ready = standin::doctor_other(&home);
+        ready["machine"][3]["any_of"][0]["found"] = json!(true);
+        standin::answers(&program, "doctor", 0, &ready);
+        click_on(cx, "setup check");
+        at_step(&view, cx, Step::Needs);
+        assert!(drawn(cx, "setup go on"));
+
+        standin::answers(
+            &program,
+            "doctor",
+            1,
+            &json!({"error": "yardr doctor failed temporarily."}),
+        );
+        let asked = standin::calls(&program).len();
+        click_on(cx, "setup check");
+        wait(cx, "the failed check and its countdown", |cx| {
+            !setup_said(&view, cx).is_empty() && drawn(cx, "setup again")
+        });
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+        }
+        wait(cx, "the re-check after the failed ready check", |_| {
+            standin::calls(&program).len() > asked
+        });
+    }
+
     /// A file that runs at `place`, made as a fetch leaves one.
     #[cfg(unix)]
     fn keep_runnable(place: &std::path::Path) {

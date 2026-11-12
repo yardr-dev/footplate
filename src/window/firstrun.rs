@@ -19,7 +19,7 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, AnyWindowHandle, App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable,
@@ -292,6 +292,11 @@ pub struct FirstRun {
     page: Option<String>,
     code: Entity<Line>,
     _leading: Option<Task<()>>,
+    /// The automatic re-check's countdown: its stored spawn, the seconds
+    /// until it looks again, and the delay the next one waits.
+    _again: Option<Task<()>>,
+    again_in: Option<u64>,
+    again_after: u64,
     folder: Entity<Line>,
     depot: Entity<Line>,
     base: Entity<Line>,
@@ -306,6 +311,13 @@ pub struct FirstRun {
     /// keys when it comes, which is with no key or click of its own.
     handle: AnyWindowHandle,
 }
+
+/// The first automatic re-check waits this long, in seconds, after a
+/// check that leaves something missing; each following one waits twice as
+/// long, up to [`AGAIN_CAP`]. Installs take minutes, and the button is the
+/// fast path.
+const AGAIN_FIRST: u64 = 10;
+const AGAIN_CAP: u64 = 120;
 
 impl EventEmitter<Ended> for FirstRun {}
 
@@ -399,6 +411,10 @@ impl FirstRun {
         this.shadowed = doctor.shadowed(|_| true);
         this.doctor = Some(doctor);
         this.step = Step::Needs;
+        // Posed as a check that found herdr new, with the next look counting
+        // down: no command runs, and no timer ticks.
+        this.said = Some("herdr is installed.".to_string());
+        this.again_in = Some(7);
         this
     }
 
@@ -450,6 +466,9 @@ impl FirstRun {
             page: None,
             code,
             _leading: None,
+            _again: None,
+            again_in: None,
+            again_after: AGAIN_FIRST,
             folder: field("/Users/jo/essays", "", cx),
             depot: field("essays", "", cx),
             base: field("main", "", cx),
@@ -542,12 +561,15 @@ impl FirstRun {
         self.check(cx);
     }
 
-    /// Step 1: what the machine has, as doctor says it.
+    /// Step 1: what the machine has, as doctor says it. The automatic
+    /// re-check stops: this check looks now, and what follows it is
+    /// scheduled anew.
     fn check(&mut self, cx: &mut Context<Self>) {
         let Some(mut yardr) = self.yardr.clone() else {
             return;
         };
         self.step = Step::Needs;
+        self.stop_looking();
         // Only a Mac fetches programs to `~/.local/bin`. The login shell
         // is asked here, beside doctor, and not when "go on" is pressed;
         // so is the file a fetch left, which the rows would otherwise read
@@ -566,17 +588,79 @@ impl FirstRun {
                 };
                 (yardr, doctor, reach, shadowed)
             },
-            |this, (yardr, doctor, reach, shadowed), _| {
+            |this, (yardr, doctor, reach, shadowed), cx| {
                 this.yardr = Some(yardr);
                 this.reach = reach;
                 this.shadowed = shadowed;
-                match doctor {
-                    Ok(doctor) => this.doctor = Some(doctor),
-                    Err(why) => this.said = Some(why),
-                }
+                let ready = match doctor {
+                    Ok(doctor) => {
+                        let ready = doctor.ready();
+                        if let Some(words) = arrival_words(this.doctor.as_ref(), &doctor) {
+                            this.said = Some(words);
+                        }
+                        this.doctor = Some(doctor);
+                        ready
+                    }
+                    Err(why) => {
+                        this.said = Some(why);
+                        false
+                    }
+                };
+                this.look_again(cx, ready);
             },
             cx,
         );
+    }
+
+    /// "Check again": looks now, and the automatic re-check waits 10s anew.
+    fn check_again(&mut self, cx: &mut Context<Self>) {
+        self.again_after = AGAIN_FIRST;
+        self.check(cx);
+    }
+
+    /// Looks again by itself after a check that leaves something missing:
+    /// the countdown stands at the foot, and the check runs with no click.
+    /// Where all is installed, nothing is scheduled. A check that failed
+    /// counts as missing: doctor is asked anew.
+    fn look_again(&mut self, cx: &mut Context<Self>, ready: bool) {
+        if ready {
+            return;
+        }
+        let wait = self.again_after;
+        self.again_after = (wait * 2).min(AGAIN_CAP);
+        self.again_in = Some(wait);
+        self._again = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let fire = this.update(cx, |this, cx| match this.again_in {
+                    Some(left) if left > 1 => {
+                        this.again_in = Some(left - 1);
+                        cx.notify();
+                        None
+                    }
+                    Some(_) => {
+                        this.again_in = None;
+                        Some(true)
+                    }
+                    None => Some(false),
+                });
+                match fire {
+                    Ok(Some(true)) => {
+                        this.update(cx, |this, cx| this.check(cx)).ok();
+                        break;
+                    }
+                    Ok(None) => {}
+                    _ => break,
+                }
+            }
+        }));
+    }
+
+    /// The automatic re-check stops: the countdown leaves the foot, and
+    /// its spawn is dropped.
+    fn stop_looking(&mut self) {
+        self._again = None;
+        self.again_in = None;
     }
 
     /// Installs the program of doctor's row `program` the way yardr names
@@ -588,7 +672,7 @@ impl FirstRun {
         };
         if program == "git" && self.means.apple {
             self.said = Some(match setup::apple_tools() {
-                Ok(()) => "Apple's installer is asked for git: it shows its own window. When it is done, check again.".to_string(),
+                Ok(()) => "Apple's installer is asked for git: it shows its own window. When it is done, the page looks again by itself.".to_string(),
                 Err(why) => why,
             });
             cx.notify();
@@ -669,6 +753,7 @@ impl FirstRun {
         if !self.doctor.as_ref().is_some_and(Doctor::ready) {
             return;
         }
+        self.stop_looking();
         if self.reach.is_some() {
             self.step = Step::Terminal;
             self.said = None;
@@ -1317,7 +1402,7 @@ impl FirstRun {
                     if self.busy.is_none() {
                         body.push(
                             self.button("setup check".to_string(), "check again", palette)
-                                .on_click(cx.listener(|this, _, _, cx| this.check(cx)))
+                                .on_click(cx.listener(|this, _, _, cx| this.check_again(cx)))
                                 .into_any_element(),
                         );
                     }
@@ -1347,7 +1432,7 @@ impl FirstRun {
                         .gap_2()
                         .child(
                             self.button("setup check".to_string(), "check again", palette)
-                                .on_click(cx.listener(|this, _, _, cx| this.check(cx))),
+                                .on_click(cx.listener(|this, _, _, cx| this.check_again(cx))),
                         )
                         .child(
                             self.button("setup go on".to_string(), "go on", palette)
@@ -1360,7 +1445,7 @@ impl FirstRun {
                 );
                 if !ready {
                     body.push(faint(
-                        "Going on needs git, herdr and one harness installed. Check again once they are.",
+                        "Going on needs git, herdr and one harness installed. The page looks again by itself.",
                     ));
                 }
             }
@@ -1851,6 +1936,30 @@ impl FirstRun {
     }
 }
 
+/// What the new check found that the last one did not, in words: git,
+/// herdr and harnesses by program ("herdr is installed."). None where
+/// nothing arrived, or where no check came before.
+fn arrival_words(before: Option<&Doctor>, after: &Doctor) -> Option<String> {
+    let before = before?;
+    let found_before = |program: &str| {
+        before
+            .rows()
+            .iter()
+            .any(|item| item.program.as_str() == program && item.found)
+    };
+    let names: Vec<&str> = after
+        .rows()
+        .iter()
+        .filter(|item| item.found && !found_before(item.program.as_str()))
+        .map(|item| item.program.as_str())
+        .collect();
+    match names.split_last() {
+        None => None,
+        Some((last, [])) => Some(format!("{last} is installed.")),
+        Some((last, rest)) => Some(format!("{} and {last} are installed.", rest.join(", "))),
+    }
+}
+
 impl Render for FirstRun {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Palette::now(window, cx);
@@ -1929,6 +2038,12 @@ impl Render for FirstRun {
                             div()
                                 .debug_selector(|| "setup said".to_string())
                                 .child(said.clone())
+                        }))
+                        .children(self.again_in.map(|left| {
+                            div()
+                                .debug_selector(|| "setup again".to_string())
+                                .text_color(palette.faint)
+                                .child(format!("Looking again in {left}s"))
                         })),
                 ),
             )
@@ -2017,5 +2132,82 @@ impl FirstRun {
     /// The PATH of what is started.
     pub fn path(&self) -> Option<std::ffi::OsString> {
         self.yardr.as_ref().map(|yardr| yardr.path.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A doctor whose machine holds `items`, each found or not; a harness
+    /// carries its kind. Read as JSON, as yardr's answer is.
+    fn doctor(items: &[(&str, bool, Option<&str>)]) -> Doctor {
+        let machine: Vec<serde_json::Value> = items
+            .iter()
+            .map(|(program, found, harness)| {
+                serde_json::json!({
+                    "program": program,
+                    "found": found,
+                    "harness": harness,
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({"machine": machine})).unwrap()
+    }
+
+    #[test]
+    fn arrival_words_names_each_arrival_in_its_own_shape() {
+        let git = doctor(&[("git", true, None)]);
+        assert_eq!(
+            arrival_words(
+                Some(&git),
+                &doctor(&[("git", true, None), ("herdr", true, None)])
+            ),
+            Some("herdr is installed.".to_string())
+        );
+        let herdr = doctor(&[("herdr", true, None)]);
+        assert_eq!(
+            arrival_words(
+                Some(&herdr),
+                &doctor(&[("git", true, None), ("herdr", true, None)])
+            ),
+            Some("git is installed.".to_string())
+        );
+        let bare = doctor(&[("git", true, None), ("herdr", true, None)]);
+        assert_eq!(
+            arrival_words(
+                Some(&bare),
+                &doctor(&[
+                    ("git", true, None),
+                    ("herdr", true, None),
+                    ("claude", true, Some("claude")),
+                ])
+            ),
+            Some("claude is installed.".to_string())
+        );
+    }
+
+    #[test]
+    fn arrival_words_joins_several_and_says_nothing_otherwise() {
+        let bare = doctor(&[("git", true, None)]);
+        assert_eq!(
+            arrival_words(
+                Some(&bare),
+                &doctor(&[
+                    ("git", true, None),
+                    ("herdr", true, None),
+                    ("claude", true, Some("claude")),
+                    ("codex", true, Some("codex")),
+                ])
+            ),
+            Some("herdr, claude and codex are installed.".to_string())
+        );
+        // Nothing arrived: still missing, or as it was.
+        assert_eq!(arrival_words(Some(&bare), &bare), None);
+        // The first check has no check before it: nothing is new.
+        assert_eq!(
+            arrival_words(None, &doctor(&[("git", true, None), ("herdr", true, None)])),
+            None
+        );
     }
 }

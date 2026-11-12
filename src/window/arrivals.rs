@@ -20,14 +20,37 @@ use super::panel::{
 use super::rail::RailTip;
 use super::screen::screen_control;
 use super::words::{
-    LineCounts, bead_words, flow_words, headcode_color, lamp_dot, landed_age, line_counts,
-    more_words, remark_color, stage_group_words, stage_lamp, stage_state, waiting_words,
-    waits_for_seat, worked_first, worker_words, working_tip, working_words,
+    LineCounts, bead_words, decide_move_words, flow_words, headcode_color, lamp_dot, landed_age,
+    line_counts, more_words, remark_color, stage_group_words, stage_lamp, stage_state,
+    waiting_words, waits_for_seat, worked_first, worker_words, working_tip, working_words,
 };
 use crate::api::{Arrival, Flow, FlowBead, FlowDepot, FlowLanding, FlowStage};
 use crate::model::{self, Mode, Model, Selected, short_bead, stage_age, you_first};
 use crate::select;
 use crate::theme::Palette;
+
+/// Lines' waiting words, worded: the accent run with the quiet run after
+/// it, each where any are. A yard from before `Waiting` keeps its one
+/// accent line from the remarks of the beads it shows, worded by `old`,
+/// which the panel's summary and the board's banner word apart; one that
+/// serves the call counts the open asks with the beads to move after
+/// them. The panel and the banner draw the same pair, so the two never
+/// disagree.
+fn lines_waits_words(
+    model: &Model,
+    old: impl Fn(usize) -> String,
+) -> (Option<String>, Option<String>) {
+    match model.waiting_too_old() {
+        true => {
+            let waiting = model.waiting_on_you().len();
+            match waiting > 0 {
+                true => (Some(old(waiting)), None),
+                false => (None, None),
+            }
+        }
+        false => decide_move_words(model.decisions_count(), model.parked_count()),
+    }
+}
 
 impl Footplate {
     pub(crate) fn toggle_quiet(&mut self, cx: &mut Context<Self>) {
@@ -358,13 +381,15 @@ impl Footplate {
             .child(word)
     }
 
-    /// The panel's summary words: how many beads are being worked, wait
-    /// on the reader, and are held, each where any are, in quiet words.
+    /// The panel's summary words: how many beads are being worked and are
+    /// held, each where any are, in quiet words.
     /// The worked words split by served kind where two or more kinds
     /// work, and hovering them lists each working group with its seats.
     /// The waiting words open the decisions mode, as the board's banner
-    /// count does. None where nothing is worked, waited or held, and
-    /// never on the departures board, whose banner counts the waits.
+    /// does: the calls in the accent with the beads to move after them
+    /// in quiet words, or the old yard's one accent line. None where
+    /// nothing is worked, waited or held, and never on the departures
+    /// board, whose banner counts the waits.
     pub(crate) fn panel_summary(
         &self,
         model: &Model,
@@ -375,9 +400,10 @@ impl Footplate {
             return None;
         }
         let working = model.working_count();
-        let waiting = model.waiting_on_you().len();
         let held = model.held_count();
-        if working == 0 && waiting == 0 && held == 0 {
+        let (accent, quiet) =
+            lines_waits_words(model, |waiting| format!("{waiting} waiting on you"));
+        if working == 0 && held == 0 && accent.is_none() && quiet.is_none() {
             return None;
         }
         let mut parts: Vec<AnyElement> = Vec::new();
@@ -395,22 +421,34 @@ impl Footplate {
                     .into_any_element(),
             );
         }
-        if waiting > 0 {
-            parts.push(
-                div()
-                    .id("panel waits")
-                    .debug_selector(|| "panel waits".to_string())
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.text_accent)
-                    .cursor_pointer()
-                    .on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.set_mode(Mode::Decisions, window, cx)
-                        }),
-                    )
-                    .child(format!("{waiting} waiting on you"))
-                    .into_any_element(),
-            );
+        if accent.is_some() || quiet.is_some() {
+            let mut waits = div()
+                .id("panel waits")
+                .debug_selector(|| "panel waits".to_string())
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .cursor_pointer()
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.set_mode(Mode::Decisions, window, cx)),
+                );
+            let both = accent.is_some() && quiet.is_some();
+            if let Some(words) = accent {
+                waits = waits.child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.text_accent)
+                        .child(words),
+                );
+            }
+            if both {
+                waits = waits.child(div().text_color(palette.faint).child("·"));
+            }
+            if let Some(words) = quiet {
+                waits = waits.child(div().text_color(palette.faint).child(words));
+            }
+            parts.push(waits.into_any_element());
         }
         if held > 0 {
             parts.push(
@@ -457,9 +495,9 @@ impl Footplate {
             .flex()
             .flex_col()
             .gap_3();
-        let waiting = model.waiting_on_you().len();
-        if waiting > 0 {
-            list = list.child(self.waits_banner(waiting, palette, cx));
+        let (accent, quiet) = lines_waits_words(model, waits_head);
+        if accent.is_some() || quiet.is_some() {
+            list = list.child(self.waits_banner(accent, quiet, palette, cx));
         }
         let rows = model.arrival_rows();
         if rows.is_empty() {
@@ -1146,28 +1184,50 @@ impl Footplate {
     }
 
     /// The beads that wait on the person reading, above the table:
-    /// how many, as one quiet link. A click opens the decisions mode,
-    /// as Enter does with the focus on it.
+    /// the calls in the accent with the beads to move after them in
+    /// quiet words, or the old yard's one accent line, as one link. A
+    /// click opens the decisions mode, as Enter does with the focus on
+    /// it.
     pub(crate) fn waits_banner(
         &self,
-        waiting: usize,
+        accent: Option<String>,
+        quiet: Option<String>,
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        div()
+        let mut banner = div()
             .id("waits banner")
             .debug_selector(|| "waits banner".to_string())
             .text_sm()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(palette.text_accent)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
             .cursor_pointer()
             .track_focus(&self.waits_focus)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, _| window.focus(&this.waits_focus)),
             )
-            .on_click(cx.listener(|this, _, window, cx| this.set_mode(Mode::Decisions, window, cx)))
-            .child(waits_head(waiting))
+            .on_click(
+                cx.listener(|this, _, window, cx| this.set_mode(Mode::Decisions, window, cx)),
+            );
+        let both = accent.is_some() && quiet.is_some();
+        if let Some(words) = accent {
+            banner = banner.child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.text_accent)
+                    .child(words),
+            );
+        }
+        if both {
+            banner = banner.child(div().text_color(palette.faint).child("·"));
+        }
+        if let Some(words) = quiet {
+            banner = banner.child(div().text_color(palette.faint).child(words));
+        }
+        banner
     }
 
     /// One line's flows: each flow a section with its stages in travel

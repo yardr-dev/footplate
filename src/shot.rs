@@ -222,6 +222,8 @@ pub const STATES: &[&str] = &[
     "lines-waiting",
     "lines-waiting-end",
     "lines-help",
+    "lines-panel",
+    "lines-departures",
     "keys",
     "about",
     "about-missing",
@@ -2158,7 +2160,7 @@ fn populate(yard: &Yard, state: &str) {
             yard.answer("Bead", &bead_links());
         }
         "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting" | "lines-waiting-end"
-        | "lines-help" => {
+        | "lines-help" | "lines-panel" | "lines-departures" => {
             // The Decide list: one open ask, and under it three beads
             // parked for jo's move, the longest waiting first: a bead with
             // a move forward and a move back that wants a note, one with
@@ -2170,7 +2172,9 @@ fn populate(yard: &Yard, state: &str) {
             // that bead's details instead, from the board: the same moves
             // under its body, and on a yard from before the call, which
             // serves no `Waiting`, the one line that says who moves its
-            // stage.
+            // stage. The panel and departures shots open the arrivals pane
+            // over the same yard instead: its summary line and its banner
+            // count the open ask with the three parked beads after it.
             yard.answer(
                 "UserInbox",
                 r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
@@ -2513,6 +2517,27 @@ fn populate(yard: &Yard, state: &str) {
                  "platform": "new", "line": "yardr", "expected": "—",
                  "remark": "held by jo", "tone": "red", "held_by": "jo"},
             ], "platforms": ["new", "review", "review-security"]}})
+            .to_string(),
+        );
+    }
+    if state == "lines-panel" || state == "lines-departures" {
+        // The board these states shoot answers over the shared one: the
+        // three beads parked for jo's move, remarked as the yard prints
+        // them. The window draws the panel on the arrivals row, and the
+        // board with its banner under Departures.
+        yard.answer(
+            "Arrivals",
+            &json!({"result": {"rows": [
+                {"bead": "plantime-4f2a", "title": "Release the autumn timetable",
+                 "platform": "ready", "line": "plantime", "expected": "—",
+                 "remark": "waits for jo", "tone": "amber"},
+                {"bead": "plantime-9c1e", "title": "Fold the October small fixes",
+                 "platform": "siding", "line": "plantime", "expected": "—",
+                 "remark": "waits for jo", "tone": "amber"},
+                {"bead": "plantime-d3a7", "title": "Take the new fares live",
+                 "platform": "production-approval", "line": "plantime", "expected": "—",
+                 "remark": "waits for jo", "tone": "amber"},
+            ], "platforms": ["ready", "siding", "production-approval"]}})
             .to_string(),
         );
     }
@@ -3152,7 +3177,7 @@ mod tests {
                     assert_eq!(loaded.asks.decided.len(), 156, "{state}")
                 }
                 "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting"
-                | "lines-waiting-end" | "lines-help" => {
+                | "lines-waiting-end" | "lines-help" | "lines-panel" | "lines-departures" => {
                     assert_eq!(loaded.asks.decided.len(), 12, "{state}")
                 }
                 "pair-qr" | "pair-ended" => {
@@ -3794,7 +3819,7 @@ mod tests {
                     assert!(!telling.text("until").is_empty(), "{state}");
                 }
                 "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting"
-                | "lines-waiting-end" => {
+                | "lines-waiting-end" | "lines-panel" | "lines-departures" => {
                     // One open ask, and three beads parked for jo's move,
                     // the longest waiting first, with the moves the yard
                     // offers each: the first open on its card, where the
@@ -3814,6 +3839,22 @@ mod tests {
                     assert_eq!(bead.stage, "ready", "{state}");
                     assert_eq!(bead.notes.len(), 1, "{state}");
                     assert_eq!(loaded.flows.depots[0].flows[0].stages.len(), 6, "{state}");
+                    // The panel and departures shots draw their own board
+                    // over the shared one: the three parked beads, in the
+                    // same order.
+                    if *state == "lines-panel" || *state == "lines-departures" {
+                        let rows: Vec<&str> = loaded
+                            .arrivals
+                            .rows
+                            .iter()
+                            .map(|row| row.bead.as_str())
+                            .collect();
+                        assert_eq!(
+                            rows,
+                            ["plantime-4f2a", "plantime-9c1e", "plantime-d3a7"],
+                            "{state}"
+                        );
+                    }
                 }
                 "waiting-many" | "waiting-many-open" => {
                     // No ask, and one bead parked for jo's move, served ten

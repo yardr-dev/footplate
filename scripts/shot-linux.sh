@@ -106,7 +106,10 @@
 # `lines-waiting` (the same bead's Lines details, with the same moves under
 # its body), `lines-waiting-end` (those details at their end, the move
 # back picked and its note typed), `lines-help` (the same details on a yard
-# from before the call, which say who moves the stage in one line), `keys`
+# from before the call, which say who moves the stage in one line), `lines-panel`
+# (the arrivals panel over that yard, its summary line counting the open ask
+# with the three parked beads after it), `lines-departures` (that yard's board
+# with its banner, counting the same), `keys`
 # (the cheatsheet open over an open card), `about` (the About card open over the yardmaster's
 # conversation, naming footplate's version and the kept yardr's),
 # `about-missing` (that card with no yardr on the machine), `feedback` (the
@@ -150,7 +153,7 @@ set -e
 caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image image-menu refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open lines-waiting lines-waiting-end lines-help keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page mail image image-menu refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open lines-waiting lines-waiting-end lines-help lines-panel lines-departures keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;

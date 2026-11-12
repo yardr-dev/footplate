@@ -56,8 +56,10 @@ pub(crate) fn reading_row(row: AnyElement, apart: bool) -> AnyElement {
     }
 }
 
-/// What the board's banner says waits on the person reading: `1 waits
-/// on you`, `2 wait on you`.
+/// What the board's banner says waits on the person reading, on a yard
+/// from before `Waiting`: `1 waits on you`, `2 wait on you`. One that
+/// serves the call counts the open asks with the beads to move after
+/// them instead.
 pub(crate) fn waits_head(waiting: usize) -> String {
     match waiting {
         1 => "1 waits on you".to_string(),

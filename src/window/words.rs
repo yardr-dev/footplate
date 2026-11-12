@@ -26,6 +26,21 @@ pub(crate) fn decide_words(decisions: usize) -> String {
     plural(decisions, "none to decide", "to decide", "to decide")
 }
 
+/// What Lines' waiting words say on a yard that serves `Waiting`: the
+/// calls in the accent ("N to decide", the Decide badge's own count)
+/// with the beads to move after them in quiet words ("N to move"), each
+/// where any are. The panel's summary and the board's banner draw the
+/// same pair, so the two never disagree; a yard from before the call
+/// keeps `waits_head`'s words instead.
+pub(crate) fn decide_move_words(
+    decisions: usize,
+    parked: usize,
+) -> (Option<String>, Option<String>) {
+    let decide = (decisions > 0).then(|| decide_words(decisions));
+    let to_move = count_words(parked, "to move", "to move");
+    (decide, to_move)
+}
+
 /// What a stage's head says stands on it, and the fold of the beads parked
 /// for the person's move says stands in it: the number with "bead".
 pub(crate) fn bead_words(beads: usize) -> String {

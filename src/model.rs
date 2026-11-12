@@ -232,8 +232,8 @@ fn line_transit_words(transit: usize) -> String {
 
 /// Whether the remark is a wait that names `me`: `waits for` with `me`
 /// among the comma-separated names. Nobody where `me` is empty. The rows
-/// draw with this; what counts toward "waiting on you" is alone or asked
-/// ([`Model::waiting_on_you`]), not this.
+/// draw with this; what counts toward "waiting on you" on a yard from
+/// before `Waiting` is alone or asked ([`Model::waiting_on_you`]), not this.
 pub fn waits_on_you(remark: &str, me: &str) -> bool {
     waits_names(remark).is_some_and(|names| !me.is_empty() && names.contains(&me))
 }
@@ -2581,18 +2581,17 @@ impl Model {
         None
     }
 
-    /// The beads that wait on the person reading. Where the yard serves
-    /// `Waiting` they are the beads with an open ask to them, oldest first,
-    /// and then the beads parked for their move, the yard saying whose move
-    /// it is, a stage of several people included. A yard from before the
-    /// call says nothing of it, and the beads Lines shows stand in, in the
-    /// board's order first and then the complete Flows order. Arrivals is
-    /// capped, so the flows also supply waits beyond the rows the table can
-    /// show. A bead waits on them there where its remark names them alone,
-    /// or where they have an open ask on it; a wait naming several people
-    /// counts only with an open ask on that bead. This is Lines' own
-    /// "waiting on you", which the rail's badge and the dock's number do
-    /// not take: they count what calls the person (`Counts::waiting`).
+    /// The beads that wait on the person reading, on a yard from before
+    /// the `Waiting` call. The yard says nothing of whose move it is, so
+    /// the beads Lines shows stand in, in the board's order first and then
+    /// the complete Flows order. Arrivals is capped, so the flows also
+    /// supply waits beyond the rows the table can show. A bead waits on
+    /// them there where its remark names them alone, or where they have an
+    /// open ask on it; a wait naming several people counts only with an
+    /// open ask on that bead. On a yard that serves `Waiting` Lines counts
+    /// the open asks and the beads parked for the move instead (the badge's
+    /// own [`Model::decisions_count`] and [`Model::parked_count`]), and
+    /// reads nothing here.
     pub fn waiting_on_you(&self) -> Vec<(&str, &str)> {
         fn include<'a>(
             waiting: &mut Vec<(&'a str, &'a str)>,
@@ -2610,18 +2609,6 @@ impl Model {
 
         let mut waiting = Vec::new();
         let mut seen = HashSet::new();
-        if !self.waiting_too_old {
-            for ask in &self.open {
-                if seen.insert(ask.bead.as_str()) {
-                    waiting.push((ask.bead.as_str(), ask.bead_title.as_str()));
-                }
-            }
-            waiting.extend(
-                self.parked()
-                    .map(|row| (row.bead.as_str(), row.title.as_str())),
-            );
-            return waiting;
-        }
         let asked: HashSet<&str> = self.open.iter().map(|ask| ask.bead.as_str()).collect();
         for row in &self.arrivals {
             include(
@@ -11525,7 +11512,8 @@ mod tests {
     /// A bead waits on the reader where its remark names them alone, or
     /// where they have an open ask on it: a wait for several without an
     /// ask counts nothing, with one it counts, as does an ask on a bead
-    /// whose remark waits on no one.
+    /// whose remark waits on no one. Where the yard serves `Waiting` the
+    /// asks and the parked beads count apart instead.
     #[test]
     fn a_bead_waits_on_you_alone_or_asked() {
         let (mut m, _) = Model::new(yard_without_waiting(), Mode::Timetable, None);
@@ -11585,28 +11573,18 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(waiting, ["yd-alone", "yd-multi", "yd-plain"]);
 
-        // A yard that serves Waiting says whose move it is, and the
-        // remarks stand for nothing: the beads with an open ask, then the
-        // beads parked for the reader, a wait for several included. A wait
-        // for them alone that the yard does not park (a backlog bead, say)
-        // counts no more, and a bead with an ask and a row counts once.
+        // A yard that serves Waiting says whose move it is, and Lines
+        // counts the open asks with the beads parked for the move after
+        // them, never the remarks: the two asks above with the one parked
+        // bead no ask stands on. A bead with an ask and a row counts once,
+        // among the asks alone.
         m.waiting(vec![
             parked("yd-multi", "Both wait", "2026-10-10T08:00:00Z"),
             parked("yd-other", "Not named alone", "2026-10-10T09:00:00Z"),
         ]);
         assert!(!m.waiting_too_old());
-        assert_eq!(
-            m.waiting_on_you(),
-            [
-                ("yd-multi", "Both wait"),
-                ("yd-plain", "Plain moves"),
-                ("yd-other", "Not named alone")
-            ]
-        );
-        assert_eq!(
-            m.waiting_on_you().len(),
-            m.decisions_count() + m.parked_count()
-        );
+        assert_eq!(m.decisions_count(), 2);
+        assert_eq!(m.parked_count(), 1);
     }
 
     /// A bead the board no longer serves — beyond its cap — is detailed

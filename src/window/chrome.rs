@@ -6875,8 +6875,9 @@ fn shot_section() -> Option<Section> {
 /// decided pairing card for the pair-qr and pair-ended shots, the board for the
 /// arrivals and departures shots, one arrival's bead for the arrival
 /// shot, yardr's line for the flow shot, the first parked bead's card for
-/// the waiting shots, the many-move bead's card for the waiting-many shots
-/// and the yard row for the delivery shot, else none. A
+/// the waiting shots, the arrivals pane for the lines-panel and
+/// lines-departures shots, the many-move bead's card for the waiting-many
+/// shots and the yard row for the delivery shot, else none. A
 /// debug build's alone.
 fn shot_selected() -> Option<Selected> {
     // The card shots open their cards, in decisions: a debug build's
@@ -6913,7 +6914,11 @@ fn shot_selected() -> Option<Selected> {
         Ok("pair-qr") | Ok("pair-ended") => {
             return Some(Selected::Decided("bead-s".into(), 7));
         }
-        Ok("arrivals") | Ok("departures") | Ok("old-lines") => return Some(Selected::Arrivals),
+        Ok("arrivals")
+        | Ok("departures")
+        | Ok("old-lines")
+        | Ok("lines-panel")
+        | Ok("lines-departures") => return Some(Selected::Arrivals),
         Ok("arrival") => return Some(Selected::Bead("yd-zulu".into())),
         Ok("flow") => return Some(Selected::Line("yardr".into())),
         Ok("grants") => return Some(Selected::Grants),
@@ -6926,11 +6931,14 @@ fn shot_selected() -> Option<Selected> {
 }
 
 /// Whether a screenshot state opens the arrivals pane on the
-/// departures board: the departures shot, under the toggle. A debug
+/// departures board: the departures shots, under the toggle. A debug
 /// build's alone.
 #[cfg(debug_assertions)]
 fn shot_departures() -> bool {
-    std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("departures")
+    matches!(
+        std::env::var("FOOTPLATE_SHOT").as_deref(),
+        Ok("departures") | Ok("lines-departures")
+    )
 }
 
 /// The selection the plain-select shot poses: the open card's first

@@ -409,8 +409,10 @@ moves, open on its card at its end, folded behind the one control),
 `lines-waiting-end` (those
 details at their end, the move back picked and its note typed),
 `lines-help` (the same details on a yard from before the call, which say who
-moves the stage in one line), `keys` (the cheatsheet open over an open
-card),
+moves the stage in one line), `lines-panel` (the arrivals panel over that
+yard, its summary line counting the open ask with the three parked beads
+after it), `lines-departures` (that yard's board with its banner, counting
+the same), `keys` (the cheatsheet open over an open card),
 `about` (the About card open over the yardmaster's conversation,
 naming footplate's version and the yardr's, with its path), `about-missing`
 (that card with no yardr on the machine), `feedback` (the Feedback form open over

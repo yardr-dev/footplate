@@ -1367,11 +1367,11 @@ mod tests {
     use super::state::{Counts, pairing_failure, rail_counts, waiting};
     use super::ui::shorten;
     use super::words::{
-        LineCounts, answered_words, ask_words, bead_back_name, bead_sub, bead_words, decide_words,
-        decided_words, flow_words, footplate_words, headcode_color, line_counts, more_words,
-        remark_color, stage_group_words, stage_lamp, stage_state, unread_words, waiting_words,
-        waits_for_seat, worked_first, worker_words, working_group_words, working_tip,
-        working_words, yardr_place, yardr_words,
+        LineCounts, answered_words, ask_words, bead_back_name, bead_sub, bead_words,
+        decide_move_words, decide_words, decided_words, flow_words, footplate_words,
+        headcode_color, line_counts, more_words, remark_color, stage_group_words, stage_lamp,
+        stage_state, unread_words, waiting_words, waits_for_seat, worked_first, worker_words,
+        working_group_words, working_tip, working_words, yardr_place, yardr_words,
     };
     use super::*;
     use crate::api::{Flow, FlowBead, FlowDepot, FlowStage};
@@ -15557,9 +15557,10 @@ yardr.dev
     /// stands as the yard printed it, and counts toward no "waiting on
     /// you". That is all a yard from before `Waiting` can say. One that
     /// serves it says whose move it is: with the same bead parked for the
-    /// person among several, it counts and the banner stands once the
-    /// bead's next event has the queue read, and the click opens the
-    /// decisions mode.
+    /// person among several, the banner stands once the bead's next event
+    /// has the queue read, with the parked bead's quiet words alone and
+    /// no call in the accent, and the click opens the decisions mode, as
+    /// the panel's summary stands with the same words.
     #[gpui::test]
     fn a_wait_for_several_without_an_open_ask_banners_nothing(cx: &mut TestAppContext) {
         let yard = Yard::start();
@@ -15585,11 +15586,8 @@ yardr.dev
             view.read_with(cx, |v, _| {
                 let model = v.model.as_ref().unwrap();
                 !model.waiting_too_old()
-                    && model
-                        .waiting_on_you()
-                        .iter()
-                        .map(|(bead, _)| *bead)
-                        .eq(["yd-zulu"])
+                    && model.decisions_count() == 0
+                    && model.parked_count() == 1
             })
         });
         wait(cx, "the banner", |cx| drawn(cx, "waits banner"));
@@ -15597,6 +15595,12 @@ yardr.dev
         wait(cx, "the decisions mode", |cx| {
             rail_mode(&view, cx) == Mode::Decisions
         });
+        // Back on the panel, the summary stands too, with the parked
+        // bead's quiet words alone.
+        to_timetable(&view, cx);
+        click_on(cx, "row arrivals");
+        click_on(cx, "arrivals panel");
+        wait(cx, "the panel's quiet words", |cx| drawn(cx, "panel waits"));
     }
 
     /// The banner holds fifty-five waits on its one line: the head
@@ -15646,13 +15650,31 @@ yardr.dev
         });
     }
 
-    /// The banner counts what waits: one waits, two wait. Quiet
+    /// The banner counts what waits: one waits, two wait. Where the
+    /// yard serves `Waiting` the calls stand in the accent with the beads
+    /// to move after them in quiet words, each where any are. Quiet
     /// says folded or open with how many lines stand under it.
     #[test]
     fn the_banner_counts_what_waits_on_you() {
         assert_eq!(waits_head(1), "1 waits on you");
         assert_eq!(waits_head(2), "2 wait on you");
         assert_eq!(waits_head(55), "55 wait on you");
+        assert_eq!(
+            decide_move_words(1, 6),
+            (
+                Some("1 to decide".to_string()),
+                Some("6 to move".to_string())
+            )
+        );
+        assert_eq!(
+            decide_move_words(2, 0),
+            (Some("2 to decide".to_string()), None)
+        );
+        assert_eq!(
+            decide_move_words(0, 3),
+            (None, Some("3 to move".to_string()))
+        );
+        assert_eq!(decide_move_words(0, 0), (None, None));
         assert_eq!(quiet_head(false, 1), "▸ Quiet · 1");
         assert_eq!(quiet_head(true, 5), "▾ Quiet · 5");
     }
@@ -35139,19 +35161,16 @@ yardr.dev
         wait(cx, "the panel", |cx| {
             drawn(cx, "panel headcode bead-p") && drawn(cx, "panel waits")
         });
-        // What waits on jo is one number: the question and the two parked
-        // beads, as the panel's summary and the board's banner count it and
-        // as the rail, the switcher and Decide's section do.
+        // What waits on jo is the question with the two parked beads
+        // after it, as the panel's summary and the board's banner count
+        // and word it, the rail's badge counting the question alone.
         let waiting = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
             view.read_with(cx, |v, _| {
                 let m = v.model.as_ref().unwrap();
-                (
-                    m.waiting_on_you().len(),
-                    m.decisions_count() + m.parked_count(),
-                )
+                (m.decisions_count(), m.parked_count())
             })
         };
-        assert_eq!(waiting(&view, cx), (3, 3));
+        assert_eq!(waiting(&view, cx), (1, 2));
         let back_to = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
             view.read_with(cx, |v, _| v.model.as_ref().unwrap().bead_back())
         };
@@ -35190,7 +35209,7 @@ yardr.dev
         wait(cx, "the board", |cx| {
             drawn(cx, "arrival bead-p") && drawn(cx, "waits banner")
         });
-        assert_eq!(waiting(&view, cx), (3, 3));
+        assert_eq!(waiting(&view, cx), (1, 2));
 
         click_on(cx, "arrival bead-p");
         wait(cx, "the bead", |cx| {
@@ -35282,7 +35301,7 @@ yardr.dev
             assert!(!v.ask_words.contains_key(&("bead-p".into(), 0)));
         });
         assert_eq!(typed(&view, cx), "");
-        assert_eq!(waiting(&view, cx), (2, 2));
+        assert_eq!(waiting(&view, cx), (1, 1));
         assert_eq!(
             view.read_with(cx, |v, _| v.keys_view()),
             KeysView::Timetable

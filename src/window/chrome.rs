@@ -19,7 +19,7 @@ use gpui::{
     img, prelude::*, px, relative, rems, rgba,
 };
 
-use crate::api::{self, Address, Client};
+use crate::api::{self, Address, Client, Reach};
 use crate::draft;
 use crate::fetch::Seen;
 use crate::input;
@@ -2212,8 +2212,9 @@ impl Footplate {
     }
 
     /// Asks whether the web view answers at the shown yard's base
-    /// address: a page carries Open when it does, and how to start it
-    /// when it does not. Once per yard and address while it answers; a
+    /// address: a page carries Open when it does, how to start it when it
+    /// does not, and that it is behind a login when it answers one the
+    /// browser cannot pass. Once per yard and address while it answers; a
     /// "no" is asked again on a timer while a file's or page's row is
     /// drawn. Off the window's thread, as a call. Where the yard has no
     /// view nothing is asked, and nowhere is probed for it.
@@ -2231,33 +2232,33 @@ impl Footplate {
             ViewUp::Asked(asked_) | ViewUp::Answered(asked_, _) if asked_ == &asked => return,
             _ => {}
         }
-        // The page shot shows the row with Open and run, and the mail,
-        // image and image-menu shots the mail's row with Open and its image: the
-        // view is taken as answering at its address, so the shot is the
-        // row and not the probe. A debug build's alone; where the
-        // address reads as none, the probe below says so.
+        // The page shot shows the row with Open and run, the mail, image
+        // and image-menu shots the mail's row with Open and its image, the
+        // mail-edge shot that row at a far address, and the mail-refused
+        // shot the row of a view behind a login: the view is taken as
+        // answering, or refused, at its address, so the shot is the row and
+        // not the probe. A debug build's alone; where the address reads as
+        // none, the probe below says so.
         #[cfg(debug_assertions)]
-        if matches!(
-            std::env::var("FOOTPLATE_SHOT").as_deref(),
-            Ok("page") | Ok("mail") | Ok("image") | Ok("image-menu")
-        ) && api::Address::parse_view(&asked.base).is_ok()
+        if let Some(staged) = shot_view()
+            && api::Address::parse_view(&asked.base).is_ok()
         {
-            self.view_up = ViewUp::Answered(asked, true);
+            self.view_up = ViewUp::Answered(asked, staged);
             return;
         }
         self.view_up = ViewUp::Asked(asked.clone());
         cx.spawn(async move |this, cx| {
             let base = asked.base.clone();
-            let up = cx
+            let reach = cx
                 .background_executor()
                 .spawn(async move {
-                    api::Address::parse_view(&base).is_ok_and(|address| reaches(&address))
+                    api::Address::parse_view(&base).map_or(Reach::Down, |address| reaches(&address))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if matches!(&this.view_up, ViewUp::Asked(now) if now == &asked) {
-                    this.view_up = ViewUp::Answered(asked.clone(), up);
-                    if !up {
+                    this.view_up = ViewUp::Answered(asked.clone(), reach);
+                    if reach != Reach::Up {
                         this.view_retry(asked, cx);
                     }
                     cx.notify();
@@ -2268,15 +2269,17 @@ impl Footplate {
         .detach();
     }
 
-    /// Asks the web view again after a "no" at `asked`, in PROBE_AGAIN:
-    /// a view started after the first probe is found without a restart.
-    /// Only while a file's or page's row is drawn; a "yes" is never
-    /// asked again, and neither is another yard or address.
+    /// Asks the web view again after a "no" at `asked`, a refusal of a
+    /// login included, in PROBE_AGAIN: a view started after the first probe
+    /// is found without a restart. Only while a file's or page's row is
+    /// drawn; a "yes" is never asked again, and neither is another yard or
+    /// address.
     pub(crate) fn view_retry(&mut self, asked: Probe, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PROBE_AGAIN).await;
             this.update(cx, |this, cx| {
-                if !matches!(&this.view_up, ViewUp::Answered(now, false) if now == &asked) {
+                if !matches!(&this.view_up, ViewUp::Answered(now, reach) if now == &asked && *reach != Reach::Up)
+                {
                     return;
                 }
                 // The timer ticks on while the answer is "no"; the asking
@@ -2293,13 +2296,15 @@ impl Footplate {
         .detach();
     }
 
-    /// Whether the web view answers at the shown yard's address, if that
-    /// was asked: what a page is drawn with.
-    pub(crate) fn view_up_now(&self) -> Option<bool> {
+    /// How the web view answers at the shown yard's address, if that was
+    /// asked: what a page is drawn with.
+    pub(crate) fn view_up_now(&self) -> Option<Reach> {
         let base = self.view_base()?;
         let yard = self.yard_identity(&self.yard)?;
         match &self.view_up {
-            ViewUp::Answered(asked, up) if asked.yard == yard && asked.base == base => Some(*up),
+            ViewUp::Answered(asked, reach) if asked.yard == yard && asked.base == base => {
+                Some(*reach)
+            }
             _ => None,
         }
     }
@@ -2328,29 +2333,31 @@ impl Footplate {
         }
         // The page shot shows the row with Open and run: both are taken
         // as answering at their addresses, so the shot is the row and
-        // not the probes. A debug build's alone; where an address reads
-        // as none, the probe below says so.
+        // not the probes. The edge shots take the origin as not answering,
+        // since the edge serves none, and reach no host. A debug build's
+        // alone; where an address reads as none, the probe below says so.
         #[cfg(debug_assertions)]
-        if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("page") && self.run_address().is_some()
+        if let Some(staged) = shot_run()
+            && self.run_address().is_some()
         {
-            self.run_up = ViewUp::Answered(asked, true);
+            self.run_up = ViewUp::Answered(asked, staged);
             return;
         }
         self.run_up = ViewUp::Asked(asked.clone());
         let run_setting = self.run_set();
         let view_setting = self.view_base().unwrap_or_default();
         cx.spawn(async move |this, cx| {
-            let up = cx
+            let reach = cx
                 .background_executor()
                 .spawn(async move {
                     run_address_of(&run_setting, &view_setting)
-                        .is_some_and(|address| reaches(&address))
+                        .map_or(Reach::Down, |address| reaches(&address))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if matches!(&this.run_up, ViewUp::Asked(now) if now == &asked) {
-                    this.run_up = ViewUp::Answered(asked.clone(), up);
-                    if !up {
+                    this.run_up = ViewUp::Answered(asked.clone(), reach);
+                    if reach != Reach::Up {
                         this.run_retry(asked, cx);
                     }
                     cx.notify();
@@ -2361,15 +2368,17 @@ impl Footplate {
         .detach();
     }
 
-    /// Asks the sandbox origin again after a "no" at `asked`, in
-    /// PROBE_AGAIN: an origin started after the first probe is found
-    /// without a restart. Only while a file's or page's row is drawn; a
-    /// "yes" is never asked again, and neither is another yard or base.
+    /// Asks the sandbox origin again after a "no" at `asked`, a refusal of
+    /// a login included, in PROBE_AGAIN: an origin started after the first
+    /// probe is found without a restart. Only while a file's or page's row
+    /// is drawn; a "yes" is never asked again, and neither is another yard
+    /// or base.
     pub(crate) fn run_retry(&mut self, asked: Probe, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PROBE_AGAIN).await;
             this.update(cx, |this, cx| {
-                if !matches!(&this.run_up, ViewUp::Answered(now, false) if now == &asked) {
+                if !matches!(&this.run_up, ViewUp::Answered(now, reach) if now == &asked && *reach != Reach::Up)
+                {
                     return;
                 }
                 // The timer ticks on while the answer is "no"; the asking
@@ -2386,16 +2395,16 @@ impl Footplate {
         .detach();
     }
 
-    /// Whether the sandbox origin answers at the shown yard's run base,
-    /// if that was asked: what a note's page is drawn with.
-    pub(crate) fn run_up_now(&self) -> Option<bool> {
+    /// How the sandbox origin answers at the shown yard's run base, if that
+    /// was asked: what a note's page is drawn with.
+    pub(crate) fn run_up_now(&self) -> Option<Reach> {
         let yard = self.yard_identity(&self.yard)?;
         let asked = Probe {
             yard,
             base: self.run_asked(),
         };
         match &self.run_up {
-            ViewUp::Answered(now, up) if now == &asked => Some(*up),
+            ViewUp::Answered(now, reach) if now == &asked => Some(*reach),
             _ => None,
         }
     }
@@ -4992,7 +5001,9 @@ impl Footplate {
         };
         let help = match entry.usual_view(&self.env.socket) {
             Some(_) => "Where a note's pages open. Default: the usual address.",
-            None => "Where a note's pages open. Empty means no web view.",
+            None => {
+                "Where a note's pages open. A yard behind the edge takes its browser address, with ?yard=<name>. Empty means no web view."
+            }
         };
         let focus = self.view.focus_handle(cx);
         let overridden = !entry.web_view.trim().is_empty();
@@ -5502,7 +5513,7 @@ impl Footplate {
         // The probe answered at this address, so it parses: the same
         // reading, not another.
         match (self.view_base(), self.view_up_now()) {
-            (Some(base), Some(true)) => Some(
+            (Some(base), Some(Reach::Up)) => Some(
                 Address::parse_view(&base)
                     .expect("the web view answered at this address")
                     .telemetry_url(),
@@ -6860,6 +6871,37 @@ impl Footplate {
     }
 }
 
+/// What a screenshot state takes the web view as at its address, in place
+/// of asking: answering for the page, mail, image, image-menu, mail-edge
+/// and settings-connection-edge shots, behind a login for the
+/// mail-refused one, else none. A debug build's alone.
+#[cfg(debug_assertions)]
+fn shot_view() -> Option<Reach> {
+    match std::env::var("FOOTPLATE_SHOT").as_deref() {
+        Ok("page")
+        | Ok("mail")
+        | Ok("image")
+        | Ok("image-menu")
+        | Ok("mail-edge")
+        | Ok("settings-connection-edge") => Some(Reach::Up),
+        Ok("mail-refused") => Some(Reach::Refused),
+        _ => None,
+    }
+}
+
+/// What a screenshot state takes the sandbox origin as at its address, in
+/// place of asking: answering for the page shot; not answering for the
+/// edge shots, whose address is no host the shot may call, and whose run
+/// the edge does not serve; else none. A debug build's alone.
+#[cfg(debug_assertions)]
+fn shot_run() -> Option<Reach> {
+    match std::env::var("FOOTPLATE_SHOT").as_deref() {
+        Ok("page") => Some(Reach::Up),
+        Ok("mail-edge") | Ok("settings-connection-edge") => Some(Reach::Down),
+        _ => None,
+    }
+}
+
 /// The settings' section a screenshot state opens on: this window for
 /// the `settings` shot, the named one for a `settings-<section>` shot,
 /// the yards one for the rename shot too, else none. A debug build's
@@ -6874,7 +6916,7 @@ fn shot_section() -> Option<Section> {
         Ok("member-pair") => Some(Section::Yards),
         Ok("settings-agents") => Some(Section::Agents),
         Ok("settings-notifications") => Some(Section::Notifications),
-        Ok("settings-connection") => Some(Section::Connection),
+        Ok("settings-connection") | Ok("settings-connection-edge") => Some(Section::Connection),
         Ok("settings-voice") | Ok("settings-voice-list") | Ok("settings-voice-microphone") => {
             Some(Section::Voice)
         }

@@ -1805,6 +1805,39 @@ pub struct Address {
     port: u16,
     /// What stands before `/user/`, with no slash at its end.
     path: String,
+    /// The yard the edge is to open, from the web view's `?yard=<name>`;
+    /// empty where the address has none. Only the web view's address
+    /// takes one: it is what the browser enters a yard behind the edge by.
+    yard: String,
+}
+
+/// How the web view answered a probe of its address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// It answered, and what it serves is the browser's to open.
+    Up,
+    /// It answered with a login the browser can never pass: the view of a
+    /// yard behind the edge, on this machine, which asks for the edge's
+    /// token that only the edge carries. What it serves has no Open.
+    Refused,
+    /// Nothing answered.
+    Down,
+}
+
+impl Reach {
+    /// What the status of the view's front page says, `None` being no
+    /// answer. Any answer says the view runs, a refusal too: it is the
+    /// browser's to show, and the login of a host that is not this machine
+    /// is the person's own to pass. But a 401 or a 403 from this machine's
+    /// own address is the edge's token missing, which no browser opening
+    /// that address carries.
+    pub fn of(status: Option<u16>, loopback: bool) -> Reach {
+        match status {
+            None => Reach::Down,
+            Some(401 | 403) if loopback => Reach::Refused,
+            Some(_) => Reach::Up,
+        }
+    }
 }
 
 /// What an address is read as: a yard's, the web view's, or the run
@@ -1844,6 +1877,39 @@ impl AddressOf {
             AddressOf::View | AddressOf::Run => "",
         }
     }
+
+    /// What the refusal of a query says an address has: none, but for the
+    /// view's one.
+    fn query(self) -> &'static str {
+        match self {
+            AddressOf::View => "no query but ?yard=<name>",
+            AddressOf::Yard | AddressOf::Run => "no query",
+        }
+    }
+}
+
+/// The yard a web view's query names. `query` is what follows the `?`, and
+/// holds `yard=` and a name, nothing else: the edge picks the yard a
+/// browser is sent to by it. A name goes into the URL as it is, so it is
+/// made of what needs no encoding (letters, digits and `-`, `.`, `_`, `~`),
+/// or two such parts round one `/`, as the edge names a yard of another
+/// account, `owner/yard` ([`member_yard`]). Anything else, an empty name, a
+/// second parameter, an escape, would reach the edge as a yard it has none
+/// of, and is refused here with why.
+fn view_yard(text: &str, query: &str) -> std::result::Result<String, String> {
+    let plain = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~');
+    match query.strip_prefix("yard=") {
+        Some(name)
+            if !name.is_empty()
+                && name.bytes().all(|b| plain(b) || b == b'/')
+                && (!name.contains('/') || member_yard(name).is_some()) =>
+        {
+            Ok(name.to_string())
+        }
+        _ => Err(format!(
+            "{text:?} is no address of the web view: the one query it takes is ?yard=<name>, with the yard's name as the edge has it (letters, digits and - . _ ~, or owner/yard)"
+        )),
+    }
 }
 
 /// Whether the host is this machine: `localhost` in any letters, or a
@@ -1864,7 +1930,9 @@ impl Address {
 
     /// Reads the web view's base address, as `yardr web start` prints it:
     /// by the same rules as a yard's, since a page's bytes are the yard's
-    /// to keep. Plain HTTP off this machine is refused with them.
+    /// to keep. Plain HTTP off this machine is refused with them. It takes
+    /// one query a yard's does not, `?yard=<name>`, which is the browser's
+    /// entry at a yard behind the edge (`https://my.yardr.dev/?yard=mac`).
     pub fn parse_view(text: &str) -> std::result::Result<Address, String> {
         Address::parse_as(text, AddressOf::View)
     }
@@ -1888,13 +1956,20 @@ impl Address {
                 "{text:?} is no address of {noun}: one starts with https://, or with http:// for {noun} on this machine"
             ));
         };
+        // The view's one query is read off first, so that no other reaches
+        // a request head; a yard's and the run base's take none.
+        let (rest, yard) = match (of, rest.split_once('?')) {
+            (AddressOf::View, Some((rest, query))) => (rest, view_yard(text, query)?),
+            _ => (rest, String::new()),
+        };
         // The address goes into the head of every request as it is.
         if rest
             .chars()
             .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '?' | '#' | '@'))
         {
             return Err(format!(
-                "{text:?} is no address of {noun}: it has no space, no query, no # and no name before an @"
+                "{text:?} is no address of {noun}: it has no space, {}, no # and no name before an @",
+                of.query()
             ));
         }
         let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
@@ -1945,52 +2020,83 @@ impl Address {
             authority: authority.to_string(),
             port,
             path: path.trim_end_matches('/').to_string(),
+            yard,
         })
     }
 
     /// Whether `other` is the same yard's address: what is connected to
     /// and what is asked for there, however the host's letters are cased
-    /// and whether or not the usual port is written out.
+    /// and whether or not the usual port is written out. The yard the edge
+    /// is to open is asked for too: two yards behind one edge differ by it
+    /// alone.
     pub fn is(&self, other: &Address) -> bool {
         self.tls == other.tls
             && self.host.eq_ignore_ascii_case(&other.host)
             && self.port == other.port
             && self.path == other.path
+            && self.yard == other.yard
     }
 
-    /// Whether the web view answers at this base address: one GET of its
-    /// front page. Any HTTP answer says it runs, even a refusal, which is
-    /// the browser's to show and not this probe's. The bytes go unread:
-    /// the connection closes with them.
-    pub fn answers(&self) -> bool {
+    /// The query that opens the yard at the edge, with its `?`, or nothing
+    /// where the address names none. It ends every URL made of this
+    /// address, after the route.
+    fn query(&self) -> String {
+        match self.yard.is_empty() {
+            true => String::new(),
+            false => format!("?yard={}", self.yard),
+        }
+    }
+
+    /// What the base's front page is asked for as: the path, a slash and
+    /// the query, which is where the browser enters it.
+    fn front(&self) -> String {
+        format!("{}/{}", self.path, self.query())
+    }
+
+    /// How the web view answers at this base address: one GET of its front
+    /// page. Any HTTP answer says it runs, even a refusal, which is the
+    /// browser's to show and not this probe's, but for the login of this
+    /// machine's own address that no browser can pass ([`Reach::of`]). The
+    /// bytes go unread: the connection closes with them.
+    pub fn answers(&self) -> Reach {
         let mut conn = match self.connect(Some(CALL_TIMEOUT)) {
             Ok(conn) => conn,
-            Err(_) => return false,
+            Err(_) => return Reach::Down,
         };
         let asked = conn
             .write_all(
                 format!(
-                    "GET {}/ HTTP/1.1\r\nHost: {}\r\nUser-Agent: {CLIENT}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
-                    self.path, self.authority
+                    "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {CLIENT}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+                    self.front(),
+                    self.authority
                 )
                 .as_bytes(),
             )
             .and(conn.flush());
         if asked.is_err() {
-            return false;
+            return Reach::Down;
         }
-        respond(conn).is_ok()
+        Reach::of(
+            respond(conn).ok().map(|(status, _)| status),
+            here(&self.host),
+        )
     }
 
     /// The browser's URL for the page `hash` at this base address: the
     /// `/blobs/` route under it, on the view for Open and on the run base
     /// for run. The hash is what a note said, and goes into the URL's
-    /// path: one that is no hex names no page, and opens nothing.
+    /// path: one that is no hex names no page, and opens nothing. Every
+    /// URL made of an address ends with its query, where it has one.
     pub fn page_url(&self, hash: &str) -> Option<String> {
         if hash.is_empty() || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
-        Some(format!("{}{}/blobs/{hash}", self.origin(), self.path))
+        Some(format!(
+            "{}{}/blobs/{hash}{}",
+            self.origin(),
+            self.path,
+            self.query()
+        ))
     }
 
     /// The browser's URL for the bead `id` at this base address: the
@@ -2001,10 +2107,11 @@ impl Address {
         match id.is_empty() {
             true => None,
             false => Some(format!(
-                "{}{}/beads/{}",
+                "{}{}/beads/{}{}",
                 self.origin(),
                 self.path,
-                encode_name(id)
+                encode_name(id),
+                self.query()
             )),
         }
     }
@@ -2013,7 +2120,7 @@ impl Address {
     /// address: the `/telemetry` route under it, for Open. The route is
     /// the view's own word and takes no argument, so it always opens.
     pub fn telemetry_url(&self) -> String {
-        format!("{}{}/telemetry", self.origin(), self.path)
+        format!("{}{}/telemetry{}", self.origin(), self.path, self.query())
     }
 
     /// The browser's URL for the file `hash` under `name` at this base
@@ -2028,12 +2135,18 @@ impl Address {
             return None;
         }
         match name.is_empty() {
-            true => Some(format!("{}{}/blobs/{hash}", self.origin(), self.path)),
-            false => Some(format!(
-                "{}{}/blobs/{hash}/{}",
+            true => Some(format!(
+                "{}{}/blobs/{hash}{}",
                 self.origin(),
                 self.path,
-                encode_name(name)
+                self.query()
+            )),
+            false => Some(format!(
+                "{}{}/blobs/{hash}/{}{}",
+                self.origin(),
+                self.path,
+                encode_name(name),
+                self.query()
             )),
         }
     }
@@ -2063,8 +2176,9 @@ fn encode_name(name: &str) -> String {
 
 impl Address {
     /// The sandbox origin's base address for the view at this base
-    /// address: the view's host on the sandbox port, with no path. A
-    /// proxied second name is set as the run base instead.
+    /// address: the view's host on the sandbox port, with no path and no
+    /// query: the edge's pick of a yard is the view's alone. A proxied
+    /// second name is set as the run base instead.
     pub fn run_base(&self) -> Address {
         let authority = if self.host.contains(':') {
             format!("[{}]:{RUN_PORT}", self.host)
@@ -2077,6 +2191,7 @@ impl Address {
             authority,
             port: RUN_PORT,
             path: String::new(),
+            yard: String::new(),
         }
     }
 
@@ -2133,9 +2248,15 @@ impl Address {
 }
 
 impl fmt::Display for Address {
+    /// The address as it is typed: where it names a yard at the edge, as the
+    /// browser enters it (`https://my.yardr.dev/?yard=mac`), which reads
+    /// back as the same address.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let scheme = if self.tls { "https" } else { "http" };
-        write!(f, "{scheme}://{}{}", self.authority, self.path)
+        match self.yard.is_empty() {
+            true => write!(f, "{scheme}://{}{}", self.authority, self.path),
+            false => write!(f, "{scheme}://{}{}", self.authority, self.front()),
+        }
     }
 }
 
@@ -5580,16 +5701,24 @@ mod tests {
     /// A port of this machine that answers every connection with `reply`
     /// and closes: its address.
     fn answering(reply: Vec<u8>) -> String {
+        answering_asked(reply).0
+    }
+
+    /// As [`answering`], with the head of each request it is asked, sent
+    /// before the reply goes.
+    fn answering_asked(reply: Vec<u8>) -> (String, std::sync::mpsc::Receiver<String>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
+        let (sent, asked) = std::sync::mpsc::channel();
         thread::spawn(move || {
             for mut conn in listener.incoming().flatten() {
-                let mut asked = [0u8; 1024];
-                let _ = conn.read(&mut asked);
+                let mut head = [0u8; 1024];
+                let read = conn.read(&mut head).unwrap_or(0);
+                let _ = sent.send(String::from_utf8_lossy(&head[..read]).into_owned());
                 let _ = conn.write_all(&reply);
             }
         });
-        address
+        (address, asked)
     }
 
     /// A download reads the file its address has, a query in the address
@@ -5729,6 +5858,8 @@ mod tests {
             "http://[::1]junk",
             "https://jo@mac.example.net",
             "https://mac.example.net/?a=b",
+            // The edge's query is the web view's alone.
+            "https://mac.example.net/?yard=mac",
             "https://mac.example.net#K7QM-2XPD",
             "https://mac.example.net/a b",
             "https://mac.example.net\r\nX-User: jo",
@@ -5758,6 +5889,112 @@ mod tests {
         );
         let why = Address::parse_view("https://mac.example.net:port").unwrap_err();
         assert!(why.contains("is no address of the web view"), "{why}");
+        // The browser enters a yard behind the edge at `?yard=<name>` on
+        // the edge's address: the one query the view's address takes, kept
+        // in the address and shown with it, read back from what is shown.
+        for (typed, shown, yard) in [
+            (
+                "https://my.yardr.dev/?yard=mac",
+                "https://my.yardr.dev/?yard=mac",
+                "mac",
+            ),
+            // With no slash before it, with the host's port, and under a
+            // proxy's path, alike.
+            (
+                " https://my.yardr.dev?yard=mac ",
+                "https://my.yardr.dev/?yard=mac",
+                "mac",
+            ),
+            (
+                "https://my.yardr.dev:8443/?yard=mac",
+                "https://my.yardr.dev:8443/?yard=mac",
+                "mac",
+            ),
+            (
+                "https://my.yardr.dev/yard/?yard=mac",
+                "https://my.yardr.dev/yard/?yard=mac",
+                "mac",
+            ),
+            // A yard of another account is the owner's and its own name,
+            // as the edge names it; a name keeps what needs no encoding.
+            (
+                "https://my.yardr.dev/?yard=jo/mac-2",
+                "https://my.yardr.dev/?yard=jo/mac-2",
+                "jo/mac-2",
+            ),
+            (
+                "http://127.0.0.1:8791/?yard=a.b_c~D",
+                "http://127.0.0.1:8791/?yard=a.b_c~D",
+                "a.b_c~D",
+            ),
+        ] {
+            let address = Address::parse_view(typed).unwrap();
+            assert_eq!(address.yard, yard, "{typed}");
+            assert_eq!(address.to_string(), shown, "{typed}");
+            assert_eq!(Address::parse_view(shown).unwrap(), address, "{typed}");
+        }
+        // No query is none, and shows as it always has.
+        let bare = Address::parse_view("https://my.yardr.dev/").unwrap();
+        assert_eq!(bare.yard, "");
+        assert_eq!(bare.to_string(), "https://my.yardr.dev");
+        // Two yards behind one edge differ by the query alone.
+        let mac = Address::parse_view("https://my.yardr.dev/?yard=mac").unwrap();
+        assert!(mac.is(&Address::parse_view("https://MY.yardr.dev:443/?yard=mac").unwrap()));
+        assert!(!mac.is(&Address::parse_view("https://my.yardr.dev/?yard=north").unwrap()));
+        assert!(!mac.is(&bare));
+        // The run base, which is the origin's and not the edge's, keeps
+        // none.
+        assert_eq!(mac.run_base().to_string(), "https://my.yardr.dev:8789");
+        assert_eq!(mac.run_base().yard, "");
+        // Any other query is refused with why, and so is a name the edge
+        // would take for no yard: the name is a plain word, or an owner's
+        // and a yard's round one slash.
+        for none in [
+            "https://my.yardr.dev/?x=1",
+            "https://my.yardr.dev/?YARD=mac",
+            "https://my.yardr.dev/?yard",
+            "https://my.yardr.dev/?yard=",
+            "https://my.yardr.dev/?yard=a&b=1",
+            "https://my.yardr.dev/?yard=mac&x=1",
+            "https://my.yardr.dev/?x=1&yard=mac",
+            "https://my.yardr.dev/?yard=a=b",
+            "https://my.yardr.dev/?yard=a b",
+            "https://my.yardr.dev/?yard=a%20b",
+            "https://my.yardr.dev/?yard=a?b",
+            "https://my.yardr.dev/??yard=mac",
+            "https://my.yardr.dev/?yard=mac#x",
+            "https://my.yardr.dev/?yard=mac@evil.example",
+            "https://my.yardr.dev/?yard=/mac",
+            "https://my.yardr.dev/?yard=jo/",
+            "https://my.yardr.dev/?yard=a/b/c",
+            "https://my.yardr.dev/?yard=mac\r\nX-User: jo",
+        ] {
+            let why = Address::parse_view(none).unwrap_err();
+            assert!(
+                why.contains(
+                    "is no address of the web view: the one query it takes is ?yard=<name>"
+                ),
+                "{none:?}: {why}"
+            );
+        }
+        let why = Address::parse_view("https://my.yardr.dev/?x=1").unwrap_err();
+        assert_eq!(
+            why,
+            "\"https://my.yardr.dev/?x=1\" is no address of the web view: the one query it takes is ?yard=<name>, with the yard's name as the edge has it (letters, digits and - . _ ~, or owner/yard)"
+        );
+        // What else is none is refused as it was, the query no excuse; its
+        // words say the one query the view takes.
+        let why = Address::parse_view("https://my.yardr.dev/#x?yard=mac").unwrap_err();
+        assert_eq!(
+            why,
+            "\"https://my.yardr.dev/#x?yard=mac\" is no address of the web view: it has no space, no query but ?yard=<name>, no # and no name before an @"
+        );
+        // The plain-HTTP rule holds with the query.
+        let why = Address::parse_view("http://my.yardr.dev/?yard=mac").unwrap_err();
+        assert!(
+            why.starts_with("http://my.yardr.dev/?yard=mac is refused: plain http"),
+            "{why}"
+        );
     }
 
     #[test]
@@ -5780,6 +6017,13 @@ mod tests {
             ),
             "{why}"
         );
+        // The edge's query is the web view's alone: the run base refuses
+        // it, in the words it always had for a query.
+        let why = Address::parse_run("https://pages.example.net/?yard=mac").unwrap_err();
+        assert_eq!(
+            why,
+            "\"https://pages.example.net/?yard=mac\" is no address of the run base: it has no space, no query, no # and no name before an @"
+        );
     }
 
     #[test]
@@ -5799,6 +6043,17 @@ mod tests {
         assert_eq!(
             address.page_url("cd").as_deref(),
             Some("https://mac.example.net/yard/blobs/cd")
+        );
+        // At a yard behind the edge the route ends with the edge's query.
+        let address = Address::parse_view("https://my.yardr.dev/?yard=mac").unwrap();
+        assert_eq!(
+            address.page_url("cd").as_deref(),
+            Some("https://my.yardr.dev/blobs/cd?yard=mac")
+        );
+        let address = Address::parse_view("https://my.yardr.dev/yard/?yard=mac").unwrap();
+        assert_eq!(
+            address.page_url("cd").as_deref(),
+            Some("https://my.yardr.dev/yard/blobs/cd?yard=mac")
         );
         // And under the run base, which run hands to the browser.
         let address = Address::parse_view("http://127.0.0.1:8791/")
@@ -5827,6 +6082,12 @@ mod tests {
         assert_eq!(
             address.telemetry_url(),
             "https://mac.example.net/yard/telemetry".to_string()
+        );
+        // At a yard behind the edge the route ends with the edge's query.
+        let address = Address::parse_view("https://my.yardr.dev/?yard=mac").unwrap();
+        assert_eq!(
+            address.telemetry_url(),
+            "https://my.yardr.dev/telemetry?yard=mac".to_string()
         );
     }
 
@@ -5876,6 +6137,21 @@ mod tests {
             address.file_url("cd", "").as_deref(),
             Some("https://mac.example.net/yard/blobs/cd")
         );
+        // At a yard behind the edge the route ends with the edge's query,
+        // after the name, which stays the one segment it was.
+        let address = Address::parse_view("https://my.yardr.dev/?yard=mac").unwrap();
+        assert_eq!(
+            address.file_url("cd", "report.pdf").as_deref(),
+            Some("https://my.yardr.dev/blobs/cd/report.pdf?yard=mac")
+        );
+        assert_eq!(
+            address.file_url("cd", "a?yard=b#c.pdf").as_deref(),
+            Some("https://my.yardr.dev/blobs/cd/a%3Fyard%3Db%23c.pdf?yard=mac")
+        );
+        assert_eq!(
+            address.file_url("cd", "").as_deref(),
+            Some("https://my.yardr.dev/blobs/cd?yard=mac")
+        );
     }
 
     #[test]
@@ -5907,21 +6183,56 @@ mod tests {
             Some("http://127.0.0.1:8791/beads/a%20b%2F..%3Fc%23d%25")
         );
         assert_eq!(address.bead_url(""), None);
+        // At a yard behind the edge the route ends with the edge's query.
+        let address = Address::parse_view("https://my.yardr.dev/?yard=mac").unwrap();
+        assert_eq!(
+            address.bead_url("footplate-vnfq").as_deref(),
+            Some("https://my.yardr.dev/beads/footplate-vnfq?yard=mac")
+        );
+        assert_eq!(address.bead_url(""), None);
     }
 
     #[test]
     fn the_view_answers_where_it_runs_and_nowhere_else() {
-        // Any HTTP answer says it runs, even a refusal.
-        for status in [200, 404, 421] {
+        // Any HTTP answer says it runs, even a refusal, but for a login
+        // on this machine's own address: the edge's token is missing
+        // there, and no browser opening it carries one.
+        for (status, reach) in [
+            (200, Reach::Up),
+            (404, Reach::Up),
+            (421, Reach::Up),
+            (401, Reach::Refused),
+            (403, Reach::Refused),
+        ] {
             let view = answering(
                 format!(
                     "HTTP/1.1 {status} Reply\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )
                 .into_bytes(),
             );
-            assert!(
+            assert_eq!(
                 Address::parse_view(&view).unwrap().answers(),
+                reach,
                 "status {status}"
+            );
+        }
+        // The front page is asked for where the browser enters it, under
+        // a proxy's path and with the edge's query where the address has
+        // one.
+        let (view, asked) = answering_asked(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        for (address, target) in [
+            (view.clone(), "/"),
+            (format!("{view}/proxy/"), "/proxy/"),
+            (format!("{view}/?yard=mac"), "/?yard=mac"),
+            (format!("{view}/proxy/?yard=mac"), "/proxy/?yard=mac"),
+        ] {
+            assert_eq!(Address::parse_view(&address).unwrap().answers(), Reach::Up);
+            let head = asked.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(
+                head.starts_with(&format!("GET {target} HTTP/1.1\r\n")),
+                "{address}: {head}"
             );
         }
         // A port nothing listens on: one that was bound, and is not now.
@@ -5930,11 +6241,39 @@ mod tests {
             .local_addr()
             .unwrap()
             .port();
-        assert!(
-            !Address::parse_view(&format!("http://127.0.0.1:{port}"))
+        assert_eq!(
+            Address::parse_view(&format!("http://127.0.0.1:{port}"))
                 .unwrap()
-                .answers()
+                .answers(),
+            Reach::Down
         );
+    }
+
+    #[test]
+    fn a_login_no_browser_can_pass_is_no_open_on_this_machine_alone() {
+        // The edge's token is missing from this machine's own address, and
+        // a browser opening it carries none. A far host's login is the
+        // browser's own to pass: its session with the edge answers it.
+        for (status, loopback, reach) in [
+            (Some(401), true, Reach::Refused),
+            (Some(403), true, Reach::Refused),
+            (Some(401), false, Reach::Up),
+            (Some(403), false, Reach::Up),
+            (Some(200), true, Reach::Up),
+            (Some(200), false, Reach::Up),
+            (Some(303), false, Reach::Up),
+            (Some(404), true, Reach::Up),
+            (Some(421), true, Reach::Up),
+            (Some(500), true, Reach::Up),
+            (None, true, Reach::Down),
+            (None, false, Reach::Down),
+        ] {
+            assert_eq!(
+                Reach::of(status, loopback),
+                reach,
+                "{status:?}, loopback {loopback}"
+            );
+        }
     }
 
     #[test]
@@ -5966,17 +6305,28 @@ mod tests {
         let base = answering(
             b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
         );
-        assert!(Address::parse_view(&base).unwrap().answers());
+        assert_eq!(Address::parse_view(&base).unwrap().answers(), Reach::Up);
+        // The origin of a yard behind the edge asks for the edge's token as
+        // the view does, which a browser opening it here cannot carry: the
+        // same probe reads it so.
+        let base = answering(
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        assert_eq!(
+            Address::parse_view(&base).unwrap().answers(),
+            Reach::Refused
+        );
         // A port nothing listens on: one that was bound, and is not now.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
             .unwrap()
             .port();
-        assert!(
-            !Address::parse_view(&format!("http://127.0.0.1:{port}"))
+        assert_eq!(
+            Address::parse_view(&format!("http://127.0.0.1:{port}"))
                 .unwrap()
-                .answers()
+                .answers(),
+            Reach::Down
         );
     }
 
@@ -6426,6 +6776,7 @@ mod tests {
             authority: "192.0.2.1:80".to_string(),
             port: 80,
             path: String::new(),
+            yard: String::new(),
         };
         let err = Client::remote(far, TOKEN)
             .approve_setup("yd-crm", 41, 1, Some(&values), None, "jo", false, None)

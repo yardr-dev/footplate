@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui::{Context, FocusHandle, Image, ImageFormat, Pixels, Point, Window, div, prelude::*};
 
 use super::state::YardIdentity;
-use crate::api::{self, BlobFile, BlobRef, Client};
+use crate::api::{self, BlobFile, BlobRef, Client, Reach};
 use crate::draft::{self, Attachment};
 use crate::model::{self, Target};
 use crate::theme::Palette;
@@ -115,7 +115,8 @@ pub(crate) struct Probe {
 }
 
 /// Whether the web view answers at the shown yard's base address: a page
-/// carries Open when it does, and how to start it when it does not.
+/// carries Open when it does, how to start it when it does not, and that
+/// it is behind a login when it answers one the browser cannot pass.
 /// Asked once per yard and address while it answers; a "no" is asked
 /// again on a timer while a file's or page's row is drawn. Switching
 /// yards asks again.
@@ -125,13 +126,13 @@ pub(crate) enum ViewUp {
     Unknown,
     /// A probe is underway for the yard and the address.
     Asked(Probe),
-    /// The address answered, or did not.
-    Answered(Probe, bool),
+    /// The address answered, was refused a login, or did not answer.
+    Answered(Probe, Reach),
 }
 
-/// How long a "no" from the web view or the sandbox origin stands before
-/// it is asked again: a view started after the first probe is found
-/// without a restart.
+/// How long a "no" from the web view or the sandbox origin, a refusal
+/// included, stands before it is asked again: a view started after the
+/// first probe is found without a restart.
 pub(crate) const PROBE_AGAIN: Duration = Duration::from_secs(10);
 
 /// The sandbox origin's base address for the settings: the run base
@@ -147,24 +148,26 @@ pub(crate) fn run_address_of(run_base: &str, web_view: &str) -> Option<api::Addr
     }
 }
 
-/// Whether the web view or the sandbox origin answers at `address`. A test
-/// asks none of the usual ones, the web view's and the sandbox origin's on
-/// this machine: the person's own may be running there, and where none is,
-/// Windows refuses the connection only after two seconds (it sends the
-/// first packet again). A test's executor runs the probe on the test's own
-/// thread, and a window that lists this machine's yard with no view of its
-/// own, as `Footplate::new` makes every one, asks both: four seconds. What
-/// a test stands up itself is asked as ever.
-pub(crate) fn reaches(address: &api::Address) -> bool {
+/// How the web view or the sandbox origin answers at `address`. The origin
+/// is asked as the view is, so one on this machine that answers the edge's
+/// login is as little the browser's to open. A test asks none of the usual
+/// ones, the web view's and the sandbox origin's on this machine: the
+/// person's own may be running there, and where none is, Windows refuses
+/// the connection only after two seconds (it sends the first packet
+/// again). A test's executor runs the probe on the test's own thread, and a
+/// window that lists this machine's yard with no view of its own, as
+/// `Footplate::new` makes every one, asks both: four seconds. What a test
+/// stands up itself is asked as ever.
+pub(crate) fn reaches(address: &api::Address) -> Reach {
     reaches_with(address, api::Address::answers)
 }
 
-fn reaches_with(address: &api::Address, answer: impl FnOnce(&api::Address) -> bool) -> bool {
+fn reaches_with(address: &api::Address, answer: impl FnOnce(&api::Address) -> Reach) -> Reach {
     #[cfg(test)]
     if let Ok(view) = api::Address::parse_view(crate::settings::WEB_VIEW)
         && (address.is(&view) || address.is(&view.run_base()))
     {
-        return false;
+        return Reach::Down;
     }
     answer(address)
 }
@@ -307,19 +310,25 @@ mod tests {
         let view = api::Address::parse_view(crate::settings::WEB_VIEW).unwrap();
         for address in [view.clone(), view.run_base()] {
             let mut asked = false;
-            assert!(!reaches_with(&address, |_| {
-                asked = true;
-                true
-            }));
+            assert_eq!(
+                reaches_with(&address, |_| {
+                    asked = true;
+                    Reach::Up
+                }),
+                Reach::Down
+            );
             assert!(!asked);
         }
 
         let other = api::Address::parse_view("http://127.0.0.1:8792/").unwrap();
         let mut asked = false;
-        assert!(reaches_with(&other, |_| {
-            asked = true;
-            true
-        }));
+        assert_eq!(
+            reaches_with(&other, |_| {
+                asked = true;
+                Reach::Up
+            }),
+            Reach::Up
+        );
         assert!(asked);
     }
 }

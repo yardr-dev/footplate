@@ -362,8 +362,9 @@ pub struct Footplate {
     /// The open screen's own scroll: each answer stands it at the pane's
     /// bottom, where the input line is.
     screen_scroll: ScrollHandle,
-    /// Whether the web view answers at the setting's address: what a
-    /// note's page is drawn with.
+    /// How the web view answers at the setting's address (up, behind a
+    /// login the browser cannot pass, or not at all): what a note's page is
+    /// drawn with.
     view_up: ViewUp,
     run_up: ViewUp,
     /// Whether a file's or page's row was drawn in the latest frame: a
@@ -1391,7 +1392,7 @@ mod tests {
         working_group_words, working_tip, working_words, yardr_place, yardr_words,
     };
     use super::*;
-    use crate::api::{Flow, FlowBead, FlowDepot, FlowStage};
+    use crate::api::{Flow, FlowBead, FlowDepot, FlowStage, Reach};
     use crate::audio::{self, Consent};
     use crate::fake::{Live, Posthog, Yard};
     use crate::fetch::{self, Machine, Seen};
@@ -6568,19 +6569,34 @@ yardr.dev
     /// A port whose listener answers the web view's front page to every
     /// connection: the view, up. Its base address.
     fn view_up() -> String {
+        view_answering("200 OK").0
+    }
+
+    /// A port whose listener answers every connection with the edge's
+    /// login: the view of a yard behind the edge, on this machine, which no
+    /// browser opening it can pass. Its base address.
+    fn view_refused() -> String {
+        view_answering("401 Unauthorized").0
+    }
+
+    /// A port whose listener answers every connection with `status`: its
+    /// base address, and the count of the connections it has answered.
+    fn view_answering(status: &str) -> (String, Arc<AtomicUsize>) {
         use std::io::{Read as _, Write as _};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        let reply = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         std::thread::spawn(move || {
             for mut conn in listener.incoming().flatten() {
                 let mut asked = [0u8; 1024];
                 let _ = conn.read(&mut asked);
-                let _ = conn.write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                );
+                let _ = conn.write_all(reply.as_bytes());
+                counted.fetch_add(1, Ordering::SeqCst);
             }
         });
-        base
+        (base, hits)
     }
 
     /// A view that `view_down` has stood up, until `view_serve` has it
@@ -6643,13 +6659,15 @@ yardr.dev
         view.hits.clone()
     }
 
-    /// Whether the window has the web view up, down, or not asked yet.
-    fn view_answered(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<bool> {
+    /// Whether the window has the web view up, behind a login, down, or
+    /// not asked yet.
+    fn view_answered(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<Reach> {
         view.read_with(cx, |v, _| v.view_up_now())
     }
 
-    /// Whether the window has the sandbox origin up, down, or not asked yet.
-    fn run_answered(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<bool> {
+    /// Whether the window has the sandbox origin up, behind a login, down,
+    /// or not asked yet.
+    fn run_answered(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<Reach> {
         view.read_with(cx, |v, _| v.run_up_now())
     }
 
@@ -6958,7 +6976,7 @@ yardr.dev
         let base = view_up();
         set_view(&view, cx, &base);
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         // One key expands the card: the page is a row with Open, and the
         // yard is asked for none of its bytes.
@@ -6975,12 +6993,22 @@ yardr.dev
         click_on(cx, &format!("page open {page}"));
         cx.run_until_parked();
         assert_eq!(opened.borrow().as_slice(), [format!("{base}/blobs/{page}")]);
+        // A yard behind the edge is saved as the browser enters it, with
+        // its query, which every page's URL ends with after its route.
+        set_view(&view, cx, &format!("{base}/?yard=mac"));
+        wait(cx, "the web view at the edge's address", |cx| {
+            view_answered(&view, cx) == Some(Reach::Up)
+        });
+        click_on(cx, &format!("page open {page}"));
+        cx.run_until_parked();
+        assert_eq!(
+            opened.borrow().last(),
+            Some(&format!("{base}/blobs/{page}?yard=mac"))
+        );
     }
 
     #[gpui::test]
-    fn a_note_s_pages_say_how_to_start_the_view_once_where_it_does_not_answer(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_note_s_pages_say_once_what_to_do_where_the_view_opens_none(cx: &mut TestAppContext) {
         let yard = Yard::start();
         let page = "ab".repeat(32);
         let many_page = "cd".repeat(32);
@@ -6998,7 +7026,7 @@ yardr.dev
         // to start it, and the note with two rows says it once below them.
         set_view(&view, cx, &view_down());
         wait(cx, "the view not answering", |cx| {
-            view_answered(&view, cx) == Some(false)
+            view_answered(&view, cx) == Some(Reach::Down)
         });
         view.update(cx, |v, cx| v.select_ask("bead-a".into(), 3, cx));
         cx.simulate_keystrokes("escape");
@@ -7013,6 +7041,22 @@ yardr.dev
         assert!(!drawn(cx, &format!("page start {many_page}")));
         assert!(!drawn(cx, &format!("page start {another_page}")));
         assert!(!drawn(cx, &format!("file start {file}")));
+        assert!(!drawn(cx, &format!("page open {page}")));
+        assert!(!drawn(cx, &format!("page open {many_page}")));
+        assert!(!drawn(cx, &format!("page open {another_page}")));
+        // A view that answers the edge's login is not down, and no
+        // browser opening it carries the token: the single row says it is
+        // behind a login, the note with several rows says it once, and
+        // nothing opens. The words of down are not the words of refused.
+        set_view(&view, cx, &view_refused());
+        wait(cx, "the view refused", |cx| {
+            view_answered(&view, cx) == Some(Reach::Refused)
+        });
+        assert!(drawn(cx, &format!("page refused {page}")));
+        assert!(drawn(cx, "note view refused 1"));
+        assert!(!drawn(cx, &format!("page refused {many_page}")));
+        assert!(!drawn(cx, &format!("page refused {another_page}")));
+        assert!(!drawn(cx, &format!("file refused {file}")));
         assert!(!drawn(cx, &format!("page open {page}")));
         assert!(!drawn(cx, &format!("page open {many_page}")));
         assert!(!drawn(cx, &format!("page open {another_page}")));
@@ -7058,14 +7102,17 @@ yardr.dev
                 .map(|err| err.kind())
         };
         assert_eq!(bind_again(), Some(std::io::ErrorKind::AddrInUse));
-        assert!(!api::Address::parse_view(&base).unwrap().answers());
+        assert_eq!(
+            api::Address::parse_view(&base).unwrap().answers(),
+            Reach::Down
+        );
         set_view(&view, cx, &base);
         set_run(&view, cx, &run);
         wait(cx, "the view not answering", |cx| {
-            view_answered(&view, cx) == Some(false)
+            view_answered(&view, cx) == Some(Reach::Down)
         });
         wait(cx, "the run base not answering", |cx| {
-            run_answered(&view, cx) == Some(false)
+            run_answered(&view, cx) == Some(Reach::Down)
         });
         assert_eq!(bind_again(), Some(std::io::ErrorKind::AddrInUse));
         // Both answer now, but no row is drawn: the timer ticks on, and
@@ -7077,8 +7124,8 @@ yardr.dev
         cx.run_until_parked();
         assert_eq!(hits.load(Ordering::SeqCst), 0);
         assert_eq!(run_hits.load(Ordering::SeqCst), 0);
-        assert_eq!(view_answered(&view, cx), Some(false));
-        assert_eq!(run_answered(&view, cx), Some(false));
+        assert_eq!(view_answered(&view, cx), Some(Reach::Down));
+        assert_eq!(run_answered(&view, cx), Some(Reach::Down));
         // One key expands the card: the page is a row with how to start
         // the view, instead of opening nowhere.
         view.update(cx, |v, cx| v.select_ask("bead-a".into(), 3, cx));
@@ -7092,10 +7139,10 @@ yardr.dev
         // the row carries Open and run, without a restart.
         cx.executor().advance_clock(PROBE_AGAIN);
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         wait(cx, "the run base", |cx| {
-            run_answered(&view, cx) == Some(true)
+            run_answered(&view, cx) == Some(Reach::Up)
         });
         assert!(drawn(cx, &format!("page row {page}")));
         assert!(drawn(cx, &format!("page open {page}")));
@@ -7109,8 +7156,22 @@ yardr.dev
         cx.run_until_parked();
         assert_eq!(hits.load(Ordering::SeqCst), asked);
         assert_eq!(run_hits.load(Ordering::SeqCst), run_asked);
-        assert_eq!(view_answered(&view, cx), Some(true));
-        assert_eq!(run_answered(&view, cx), Some(true));
+        assert_eq!(view_answered(&view, cx), Some(Reach::Up));
+        assert_eq!(run_answered(&view, cx), Some(Reach::Up));
+        // A view that answers the edge's login is asked again as a no is,
+        // by the same timer while a row is drawn: it may be started again
+        // without the edge, and is found.
+        let (refused, refusals) = view_answering("401 Unauthorized");
+        set_view(&view, cx, &refused);
+        wait(cx, "the web view refused", |cx| {
+            view_answered(&view, cx) == Some(Reach::Refused)
+        });
+        assert!(drawn(cx, &format!("page refused {page}")));
+        let refused_asked = refusals.load(Ordering::SeqCst);
+        cx.executor().advance_clock(PROBE_AGAIN);
+        wait(cx, "the refused view asked again", |_| {
+            refusals.load(Ordering::SeqCst) > refused_asked
+        });
     }
 
     #[gpui::test]
@@ -7129,12 +7190,22 @@ yardr.dev
             .to_string(),
         );
         let (view, cx) = opened(&yard, &["Like this?"], cx);
+        // The view answers the edge's login, which no browser opening this
+        // address carries the token for: the row says it is behind one,
+        // and has no Open.
+        set_view(&view, cx, &view_refused());
+        wait(cx, "the web view refused", |cx| {
+            view_answered(&view, cx) == Some(Reach::Refused)
+        });
+        assert!(drawn(cx, &format!("page row {page}")));
+        assert!(drawn(cx, &format!("page refused {page}")));
+        assert!(!drawn(cx, &format!("page open {page}")));
         // The view answers at its address: the row carries Open, with no
         // run, and the yard is asked for none of the page's bytes.
         let base = view_up();
         set_view(&view, cx, &base);
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         assert!(drawn(cx, &format!("page row {page}")));
         assert!(drawn(cx, &format!("page open {page}")));
@@ -7167,12 +7238,22 @@ yardr.dev
             .to_string(),
         );
         let (view, cx) = opened(&yard, &["Like these?"], cx);
+        // The view answers the edge's login: each row says it is behind
+        // one, and has no Open.
+        set_view(&view, cx, &view_refused());
+        wait(cx, "the web view refused", |cx| {
+            view_answered(&view, cx) == Some(Reach::Refused)
+        });
+        assert!(drawn(cx, &format!("file refused {report}")));
+        assert!(drawn(cx, &format!("file refused {bare}")));
+        assert!(!drawn(cx, &format!("file open {report}")));
+        assert!(!drawn(cx, &format!("file open {bare}")));
         // The view answers at its address: each row carries Open, and the
         // yard is asked for none of the files' bytes.
         let base = view_up();
         set_view(&view, cx, &base);
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         assert!(drawn(cx, &format!("file row {report}")));
         assert!(drawn(cx, &format!("file open {report}")));
@@ -7246,7 +7327,7 @@ yardr.dev
             );
         });
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         assert!(drawn(cx, &format!("file open {here}")));
         let opened = opened_pages(&view, cx);
@@ -7263,7 +7344,7 @@ yardr.dev
             texts(&view, cx) == ["From the second home."]
         });
         wait(cx, "the second home's view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         assert_eq!(second.streams_asked().len(), 1);
         assert!(drawn(cx, &format!("file open {away}")));
@@ -7361,7 +7442,7 @@ yardr.dev
             );
         });
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         // Switched, the other yard's view is asked, not taken as up: its
         // answer is its own.
@@ -7370,7 +7451,7 @@ yardr.dev
             texts(&view, cx) == ["From the second home."]
         });
         wait(cx, "the second home's view asked", |cx| {
-            view_answered(&view, cx) == Some(false)
+            view_answered(&view, cx) == Some(Reach::Down)
         });
     }
 
@@ -7403,8 +7484,8 @@ yardr.dev
             );
         });
         wait(cx, "the first yard's view and run base", |cx| {
-            view_answered(&view, cx) == Some(true)
-                && run_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
+                && run_answered(&view, cx) == Some(Reach::Up)
                 && view_hits.load(Ordering::SeqCst) >= 1
                 && run_hits.load(Ordering::SeqCst) >= 1
         });
@@ -7424,8 +7505,8 @@ yardr.dev
             texts(&view, cx) == ["Shall I land it?"]
         });
         wait(cx, "the first yard's view and run base again", |cx| {
-            view_answered(&view, cx) == Some(true)
-                && run_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
+                && run_answered(&view, cx) == Some(Reach::Up)
                 && view_hits.load(Ordering::SeqCst) >= 2
                 && run_hits.load(Ordering::SeqCst) >= 2
         });
@@ -8888,10 +8969,10 @@ yardr.dev
         set_view(&view, cx, &base);
         set_run(&view, cx, &run);
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         wait(cx, "the run base", |cx| {
-            run_answered(&view, cx) == Some(true)
+            run_answered(&view, cx) == Some(Reach::Up)
         });
         view.update(cx, |v, cx| v.select_ask("bead-a".into(), 3, cx));
         cx.simulate_keystrokes("escape");
@@ -8919,10 +9000,10 @@ yardr.dev
         set_view(&view, cx, &view_up());
         set_run(&view, cx, &view_down());
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         wait(cx, "the run base not answering", |cx| {
-            run_answered(&view, cx) == Some(false)
+            run_answered(&view, cx) == Some(Reach::Down)
         });
         view.update(cx, |v, cx| v.select_ask("bead-a".into(), 3, cx));
         cx.simulate_keystrokes("escape");
@@ -8982,7 +9063,7 @@ yardr.dev
         });
         wait(cx, "the bead", |cx| has_bead(&view, cx, "bead-a"));
         wait(cx, "the run base", |cx| {
-            run_answered(&view, cx) == Some(true)
+            run_answered(&view, cx) == Some(Reach::Up)
         });
         assert_eq!(view_answered(&view, cx), None);
         view.update(cx, |v, cx| v.select_ask("bead-a".into(), 3, cx));
@@ -11339,7 +11420,7 @@ yardr.dev
         // The usual address is this machine's own: a test does not ask it,
         // so it is down here, whatever runs where the test does.
         wait(cx, "the usual view asked", |cx| {
-            view_answered(&view, cx) == Some(false)
+            view_answered(&view, cx) == Some(Reach::Down)
         });
         cx.simulate_keystrokes("secondary-,");
         assert!(settings_open(&view, cx));
@@ -11354,6 +11435,20 @@ yardr.dev
         click_on(cx, "view save");
         assert_eq!(entry_of(&view, cx).web_view, "");
         assert!(drawn(cx, "view said"));
+        // The edge's `?yard=<name>` is the one query a view's address
+        // takes: another is said in the view's words, and nothing changed.
+        view.update(cx, |v, cx| {
+            v.view.update(cx, |line, cx| {
+                line.set_text("https://my.yardr.dev/?x=1", cx)
+            })
+        });
+        click_on(cx, "view save");
+        assert_eq!(entry_of(&view, cx).web_view, "");
+        let said = view.read_with(cx, |v, _| v.view_said.clone().unwrap_or_default());
+        assert!(
+            said.contains("the one query it takes is ?yard=<name>"),
+            "{said}"
+        );
         // Kept, it is the yard's, and the file has it on its entry, with
         // a reset beside the save from now on.
         let base = view_up();
@@ -11371,7 +11466,22 @@ yardr.dev
         // what is gone is read, not drawn.
         assert_eq!(view.read_with(cx, |v, _| v.view_said.clone()), None);
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
+        });
+        // The browser's own address of a yard behind the edge is kept as
+        // it is typed, its query with it, and the view is asked there.
+        let edge = format!("{base}/?yard=mac");
+        view.update(cx, |v, cx| {
+            v.view.update(cx, |line, cx| line.set_text(&edge, cx))
+        });
+        click_on(cx, "view save");
+        assert_eq!(entry_of(&view, cx).web_view, edge);
+        assert_eq!(
+            Settings::read(&file).yard(settings::HERE).unwrap().web_view,
+            edge
+        );
+        wait(cx, "the web view at the edge's address", |cx| {
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         // Reset unsets it again: the yard's usual.
         click_on(cx, "view reset");
@@ -11403,7 +11513,7 @@ yardr.dev
         // it: it is down here, whatever runs where the test does.
         assert_eq!(entry_of(&view, cx).run_base, "");
         wait(cx, "the usual run base asked", |cx| {
-            run_answered(&view, cx) == Some(false)
+            run_answered(&view, cx) == Some(Reach::Down)
         });
         cx.simulate_keystrokes("secondary-,");
         assert!(settings_open(&view, cx));
@@ -11439,7 +11549,7 @@ yardr.dev
         // what is gone is read, not drawn.
         assert_eq!(view.read_with(cx, |v, _| v.run_said.clone()), None);
         wait(cx, "the run base", |cx| {
-            run_answered(&view, cx) == Some(true)
+            run_answered(&view, cx) == Some(Reach::Up)
         });
         // Reset is the view's host again.
         click_on(cx, "run reset");
@@ -15247,7 +15357,7 @@ yardr.dev
         assert!(settings_open(&view, cx));
         click_on(cx, "settings section telemetry");
         wait(cx, "the web view down", |cx| {
-            view_answered(&view, cx) == Some(false)
+            view_answered(&view, cx) == Some(Reach::Down)
         });
         assert!(drawn(cx, "telemetry state"));
         assert!(drawn(cx, "telemetry id"));
@@ -15264,7 +15374,7 @@ yardr.dev
         let pages = opened_pages(&view, cx);
         click_on(cx, "settings section telemetry");
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         assert!(drawn(cx, "telemetry open"));
         click_on(cx, "telemetry open");
@@ -17746,7 +17856,7 @@ yardr.dev
         let base = view_up();
         set_view(&view, cx, &base);
         wait(cx, "the web view", |cx| {
-            view_answered(&view, cx) == Some(true)
+            view_answered(&view, cx) == Some(Reach::Up)
         });
         to_timetable(&view, cx);
         click_on(cx, "row arrivals");
@@ -17765,11 +17875,11 @@ yardr.dev
         );
     }
 
-    /// The bead has no Open where the web view does not answer, and the
-    /// board's rows open the details all the same: they are no buttons
-    /// to the browser anymore.
+    /// The bead has no Open where the web view does not answer, or answers
+    /// a login the browser cannot pass, and the board's rows open the
+    /// details all the same: they are no buttons to the browser anymore.
     #[gpui::test]
-    fn the_bead_has_no_open_where_the_view_is_down(cx: &mut TestAppContext) {
+    fn the_bead_has_no_open_where_the_view_is_down_or_behind_a_login(cx: &mut TestAppContext) {
         let yard = Yard::start();
         a_yard_of_jo(&yard);
         yard.answer("Arrivals", &arrivals_board());
@@ -17780,7 +17890,7 @@ yardr.dev
         let base = view_down();
         set_view(&view, cx, &base);
         wait(cx, "the web view down", |cx| {
-            view_answered(&view, cx) == Some(false)
+            view_answered(&view, cx) == Some(Reach::Down)
         });
         to_timetable(&view, cx);
         click_on(cx, "row arrivals");
@@ -17795,6 +17905,12 @@ yardr.dev
                 Some(&Selected::Bead("yd-zulu".into()))
             );
         });
+        // A view that answers the edge's login is as little an Open.
+        set_view(&view, cx, &view_refused());
+        wait(cx, "the web view refused", |cx| {
+            view_answered(&view, cx) == Some(Reach::Refused)
+        });
+        assert!(!drawn(cx, "bead open yd-zulu"));
     }
 
     /// The conversation reads as a column: each mail's name stands over

@@ -2784,6 +2784,27 @@ mod tests {
             .with_yard_view("elsewhere", WEB_VIEW)
             .unwrap_err();
         assert_eq!(why, "The settings list no yard called elsewhere.");
+        // The browser's own address of a yard behind the edge is kept as it
+        // is typed, its one query with it, and read back; another query is
+        // refused in the view's words.
+        let edge = Settings::default()
+            .with_yard_view(HERE, " https://my.yardr.dev/?yard=mac ")
+            .unwrap();
+        assert_eq!(
+            edge.yard(HERE).unwrap().web_view,
+            "https://my.yardr.dev/?yard=mac"
+        );
+        edge.write(&file).unwrap();
+        assert_eq!(Settings::read(&file), edge);
+        let why = Settings::default()
+            .with_yard_view(HERE, "https://my.yardr.dev/?x=1")
+            .unwrap_err();
+        assert!(
+            why.starts_with(
+                "\"https://my.yardr.dev/?x=1\" is no address of the web view: the one query it takes is ?yard=<name>"
+            ),
+            "{why}"
+        );
     }
 
     #[test]

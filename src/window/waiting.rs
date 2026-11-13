@@ -10,7 +10,7 @@ use gpui::{
 use super::Footplate;
 use super::metrics::WAITING_SUB;
 use super::ui::{field, keys_hint, shorten};
-use crate::api::Address;
+use crate::api::{Address, Reach};
 use crate::model::{self, Effect, Model, Selected, WaitingDetail, WaitingMove, WaitingRow};
 use crate::select;
 use crate::theme::{Palette, yard_color};
@@ -208,7 +208,7 @@ impl Footplate {
         // The probe answered at this address, so it parses: the same
         // reading, not another. With no view for the yard there is no Open.
         let url = match (self.view_base(), self.view_up_now()) {
-            (Some(base), Some(true)) => Address::parse_view(&base)
+            (Some(base), Some(Reach::Up)) => Address::parse_view(&base)
                 .expect("the web view answered at this address")
                 .bead_url(&detail.bead),
             _ => None,

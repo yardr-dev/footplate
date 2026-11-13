@@ -325,7 +325,13 @@ card on a yard with no web view set: one page, the sentence on its row),
 them), `mail` (a mail with
 a page and an image), `image` (that mail's image open full size over
 the window, with its Save beside the ×), `image-menu` (that mail's picture
-with the menu a right-click on it opens), `run` (an
+with the menu a right-click on it opens), `mail-refused` (that mail, its
+page alone, on a yard whose web view answers the edge's login, which no
+browser opening it carries the token for: the page's row says the web view
+is behind a login, with no Open), `mail-edge` (that mail, its page alone, on
+a far yard whose web view is the browser's address at the edge,
+`https://my.yardr.dev/?yard=mac`: the page's row carries Open, and nothing
+is asked of the edge), `run` (an
 open card of a run ask: the forged one of the run card's test, whose
 question forges the yard's lines), `teammates` (an open card of a
 teammate invite), `teammates-list` (the teammates view open on its row,
@@ -336,7 +342,9 @@ yard), `far` (a yard at an address, away), `settings` (the settings
 on each of their sections: `settings` is this window, and
 `settings-appearance`, `settings-yards`, `settings-agents`,
 `settings-notifications`, `settings-connection`, `settings-voice` and
-`settings-telemetry` the rest, with `settings-telemetry-off` the
+`settings-telemetry` the rest, with `settings-connection-edge` the
+connection section of that far yard, whose help says how a yard behind the
+edge is entered, with `settings-telemetry-off` the
 telemetry section off, and `settings-voice-list` the voice section on,
 with a voice chosen and the list of voices open under its field, and
 `settings-voice-microphone` the same with a microphone chosen among a

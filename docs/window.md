@@ -440,7 +440,17 @@ folder. A change is drawn at once and kept for the next start:
 - Connection: the web view's base address, through which a note's pages
   open in the browser, and the run base, through which they run. Each
   names the address in effect, the default where nothing is set, with a
-  reset once it is overridden.
+  reset once it is overridden. A yard behind the JWT edge takes the address
+  its browser enters it at, `https://my.yardr.dev/?yard=<name>`: the one
+  query the web view's address takes is `?yard=<name>`, the yard's name at
+  the edge (or `<owner>/<yard>` for a yard of another account), and every
+  link made of the address carries it after its route
+  (`https://my.yardr.dev/blobs/<hash>?yard=<name>`). The run base takes no
+  query. A yard on this machine that sits behind the edge has a web view that
+  answers 401 without the edge's token, which a browser opening its own
+  address cannot carry: its page and file rows say the web view is behind a
+  login, and offer no Open, until that browser address is saved. A far
+  host's login is the browser's own to pass, and its rows offer Open.
 - Voice: talking with the yard by voice, off until it is switched on,
   which is the opt-in. The key is your own OpenAI project's, typed
   into its masked field and kept in `voice.key` beside the settings,

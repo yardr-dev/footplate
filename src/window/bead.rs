@@ -32,7 +32,7 @@ use super::ui::{keys_hint, send_held, small_button};
 use super::words::{
     answered_words, ask_words, bead_back_name, bead_sub, remark_color, worker_words,
 };
-use crate::api::{self, Address, BlobRef, Event, Reaction};
+use crate::api::{self, Address, BlobRef, Event, Reach, Reaction};
 use crate::draft::{self, Attachment, Found};
 use crate::model::{
     self, ArrivalDetail, AskPreview, Entry, Kind, Model, News, Selected, Target, Top,
@@ -72,6 +72,13 @@ pub(crate) enum Heard {
 /// session queues nothing, since a mail sent as the connection broke cannot
 /// be told apart from one that never arrived.
 const YARD_AWAY: &str = "the yard does not answer";
+
+/// What a page's or file's row says where the web view answers a login the
+/// browser cannot pass: the view of a yard behind the edge, on this
+/// machine, wants the edge's token. The browser's own address of the yard
+/// is what the settings take instead.
+const VIEW_REFUSED: &str =
+    "the web view is behind a login: save the yard's browser address in the settings";
 
 /// Where the bar of reactions stands over the row of the list that draws
 /// it, as the `top` it takes from that row's top edge: its own 36 pixels
@@ -1548,7 +1555,9 @@ impl Footplate {
     /// for a note's, through the run base. Where the yard has no view
     /// the row says it is not set, with the way to set it; where the
     /// view does not answer the row says how to start it instead of
-    /// opening nowhere; where the sandbox origin does not answer the row
+    /// opening nowhere; where it answers a login the browser cannot pass
+    /// the row says it is behind one, and that the yard's browser address
+    /// is what to save; where the sandbox origin does not answer the row
     /// says so beside Open. A mail's page is the row without run, since
     /// the sandbox origin serves no mail's bytes, and that stays. Where
     /// `quiet`, the row keeps its label (and run) without the view
@@ -1594,7 +1603,7 @@ impl Footplate {
                 return row.into_any_element();
             }
             return match (self.run_address(), self.run_up_now()) {
-                (Some(base), Some(true)) => {
+                (Some(base), Some(Reach::Up)) => {
                     let Some(url) = base.page_url(&file.hash) else {
                         return row.into_any_element();
                     };
@@ -1610,7 +1619,7 @@ impl Footplate {
                     )
                     .into_any_element()
                 }
-                (_, Some(false)) => row
+                (_, Some(Reach::Down | Reach::Refused)) => row
                     .child(
                         div()
                             .text_color(palette.faint)
@@ -1624,7 +1633,7 @@ impl Footplate {
             };
         };
         match self.view_up_now() {
-            Some(true) => {
+            Some(Reach::Up) => {
                 // The probe answered at this address, so it parses: the
                 // same reading, not another. A hash that is no hex names
                 // no page, and the row has no Open.
@@ -1658,7 +1667,7 @@ impl Footplate {
                 // does not answer the row says so beside Open, and
                 // while it is asked the row is Open alone.
                 match (self.run_address(), self.run_up_now()) {
-                    (Some(base), Some(true)) => {
+                    (Some(base), Some(Reach::Up)) => {
                         let Some(url) = base.page_url(&file.hash) else {
                             return row.into_any_element();
                         };
@@ -1674,7 +1683,7 @@ impl Footplate {
                         )
                         .into_any_element()
                     }
-                    (_, Some(false)) => row
+                    (_, Some(Reach::Down | Reach::Refused)) => row
                         .child(
                             div()
                                 .text_color(palette.faint)
@@ -1685,7 +1694,21 @@ impl Footplate {
                     _ => row.into_any_element(),
                 }
             }
-            Some(false) => row
+            Some(Reach::Refused) => row
+                .child(label)
+                .when(!quiet, |row| {
+                    row.child(
+                        div()
+                            .text_color(palette.faint)
+                            .debug_selector({
+                                let hash = hash.clone();
+                                move || format!("page refused {hash}")
+                            })
+                            .child(VIEW_REFUSED),
+                    )
+                })
+                .into_any_element(),
+            Some(Reach::Down) => row
                 .child(label)
                 .when(!quiet, |row| {
                     row.child(
@@ -1714,9 +1737,10 @@ impl Footplate {
     /// yard's web view, under the name the browser saves it as. Where the
     /// yard has no view the row says it is not set, with the way to set
     /// it; where the view does not answer the row says how to start it
-    /// instead of opening nowhere. Never run: only a page runs. Where
-    /// `quiet`, the row keeps its label without the view sentence, which
-    /// the note says once under its files.
+    /// instead of opening nowhere, and where it answers a login the browser
+    /// cannot pass, that it is behind one. Never run: only a page runs.
+    /// Where `quiet`, the row keeps its label without the view sentence,
+    /// which the note says once under its files.
     pub(crate) fn file_row(
         &self,
         file: &BlobRef,
@@ -1757,7 +1781,7 @@ impl Footplate {
                 .into_any_element();
         };
         match self.view_up_now() {
-            Some(true) => {
+            Some(Reach::Up) => {
                 // The probe answered at this address, so it parses: the
                 // same reading, not another. A hash that is no hex names
                 // no file, and the row has no Open.
@@ -1783,7 +1807,21 @@ impl Footplate {
                     )
                     .into_any_element()
             }
-            Some(false) => row
+            Some(Reach::Refused) => row
+                .child(label)
+                .when(!quiet, |row| {
+                    row.child(
+                        div()
+                            .text_color(palette.faint)
+                            .debug_selector({
+                                let hash = hash.clone();
+                                move || format!("file refused {hash}")
+                            })
+                            .child(VIEW_REFUSED),
+                    )
+                })
+                .into_any_element(),
+            Some(Reach::Down) => row
                 .child(label)
                 .when(!quiet, |row| {
                     row.child(
@@ -1811,35 +1849,46 @@ impl Footplate {
     /// Whether the note's files say the web view sentence once under
     /// them instead of on every row: more than one of them opens through
     /// the view (a page or a file: an image opens from the yard, and one
-    /// the yard did not take says so itself), and the view is unset or
-    /// not reached, so every such row would say it.
+    /// the yard did not take says so itself), and the view is unset, not
+    /// reached or behind a login, so every such row would say it.
     fn note_sentence_once(&self, files: &[BlobRef]) -> bool {
         let rows = files
             .iter()
             .filter(|file| file.not_taken.is_empty() && !model::is_image(file))
             .count();
-        rows > 1 && (self.view_base().is_none() || self.view_up_now() == Some(false))
+        rows > 1
+            && (self.view_base().is_none()
+                || matches!(self.view_up_now(), Some(Reach::Down | Reach::Refused)))
     }
 
     /// The sentence a note's rows share where more than one of them opens
-    /// through the yard's web view and it is unset or not reached: once
-    /// under the note's files, naming where the address is set. A note
-    /// with one such row says it on the row, as ever.
+    /// through the yard's web view and it is unset, not reached or behind
+    /// a login: once under the note's files, naming where the address is
+    /// set where that is the way out. A note with one such row says it on
+    /// the row, as ever.
     fn note_view_sentence(&self, ix: usize, palette: Palette) -> impl IntoElement + use<> {
         let unset = self.view_base().is_none();
-        let words = match unset {
-            true => format!(
+        let refused = !unset && self.view_up_now() == Some(Reach::Refused);
+        let words = match (unset, refused) {
+            (true, _) => format!(
                 "this yard's web view is not set: set it in Settings, Connection, \"web view of {}\"",
                 self.yard
             ),
-            false => "the web view is not reached: start it with yardr web start".to_string(),
+            (false, true) => format!(
+                "the web view is behind a login: save the yard's browser address in Settings, Connection, \"web view of {}\"",
+                self.yard
+            ),
+            (false, false) => {
+                "the web view is not reached: start it with yardr web start".to_string()
+            }
         };
         div()
             .text_sm()
             .text_color(palette.faint)
-            .debug_selector(move || match unset {
-                true => format!("note view unset {ix}"),
-                false => format!("note view start {ix}"),
+            .debug_selector(move || match (unset, refused) {
+                (true, _) => format!("note view unset {ix}"),
+                (false, true) => format!("note view refused {ix}"),
+                (false, false) => format!("note view start {ix}"),
             })
             .child(words)
     }
@@ -2673,7 +2722,7 @@ impl Footplate {
         // the head has no Open, as a page row behaves; with no view for
         // the yard there is none either.
         let url = match (self.view_base(), self.view_up_now()) {
-            (Some(base), Some(true)) => Address::parse_view(&base)
+            (Some(base), Some(Reach::Up)) => Address::parse_view(&base)
                 .expect("the web view answered at this address")
                 .bead_url(&detail.bead),
             _ => None,

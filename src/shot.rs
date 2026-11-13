@@ -57,7 +57,13 @@ use crate::yard::Env;
 /// card on a yard with no web view set, its note carrying one page, with the sentence on its
 /// row, and several pages, with the sentence once under them, a
 /// mail with a page and an image, that mail's image open full size over
-/// the window, the first screen's way to a yard at an address, with a
+/// the window, that mail with its page alone on a yard whose web view
+/// answers the edge's login, which no browser opening it carries the token
+/// for, so its row says it is behind a login and offers no Open, that mail
+/// with its page alone on a far yard whose web view is the browser's address
+/// at the edge, so its row carries Open, with the edge's query, and the
+/// settings' Connection of that far yard, the first
+/// screen's way to a yard at an address, with a
 /// pairing's http address refused under its fields, the
 /// conversation with one of a
 /// linked yard whose mail was refused over the hour, the first screen
@@ -141,7 +147,13 @@ use crate::yard::Env;
 /// and run. The mail's conversation opens on the mail, with the web view
 /// taken as answering, so the row carries Open; a click on its image
 /// opens it over the window, and the image state serves the same mail
-/// with it open. The
+/// with it open. The mail-refused state serves that mail with the web view
+/// taken as behind a login; the mail-edge state serves it from a far yard,
+/// whose settings the state writes itself with the edge's browser address as
+/// its web view, taken as answering, with no sandbox origin to ask (the
+/// edge serves none, and the shot calls no host); the
+/// settings-connection-edge state opens that far yard's settings on their
+/// Connection section. The
 /// undelivered conversation opens on the row the shot names,
 /// with the hour's line under the mail. The answered yard serves the
 /// yardmaster's conversation, as the running ones do; the window opens
@@ -174,6 +186,7 @@ pub const STATES: &[&str] = &[
     "settings-agents",
     "settings-notifications",
     "settings-connection",
+    "settings-connection-edge",
     "settings-voice",
     "settings-voice-list",
     "settings-voice-microphone",
@@ -189,6 +202,8 @@ pub const STATES: &[&str] = &[
     "mail",
     "image",
     "image-menu",
+    "mail-refused",
+    "mail-edge",
     "refusal",
     "undelivered",
     "answered",
@@ -529,7 +544,10 @@ fn stand_voice() -> Talking {
 /// again, with a way's fields open. The page-unset shots open the yard far
 /// at its address with a device the yard knows, so the window opens on the
 /// yard, whose web view is unset: the card's note carries one page in the
-/// first and several in the second.
+/// first and several in the second. The edge shots open that far yard with
+/// the browser's address at the edge saved as its web view: the mail's row
+/// carries Open in the first, and the settings stand on Connection in the
+/// second.
 fn start_for_state(env: Env, state: &str) -> (Env, Option<ShotYard>) {
     if matches!(
         state,
@@ -576,15 +594,19 @@ fn start_for_state(env: Env, state: &str) -> (Env, Option<ShotYard>) {
         write_away_settings(far.address());
         shot.extra = vec![std::sync::Arc::new(far)];
     }
-    if state == "page-unset" || state == "page-unset-many" {
+    if matches!(
+        state,
+        "page-unset" | "page-unset-many" | "mail-edge" | "settings-connection-edge"
+    ) {
         // The window opens far at its address, as the away shot has it:
         // the token stands in its file, and the yard knows the device,
-        // so the window opens on the yard, whose web view is unset. The
+        // so the window opens on the yard, whose web view is unset, or,
+        // in the edge states, the browser's address at the edge. The
         // yard is held beside the shot's, so its listener stands for the
         // shot.
         let far = Yard::start_tcp();
         populate(&far, state);
-        write_page_unset_settings(far.address(), state);
+        write_far_settings(far.address(), state);
         shot.extra = vec![std::sync::Arc::new(far)];
     }
     if state == "switcher" || state == "switcher-shut" {
@@ -803,14 +825,15 @@ fn keep_away_settings(file: &Path, address: &str, look: crate::theme::Look) {
         });
 }
 
-/// The settings the `page-unset` and `page-unset-many` shots open: the
-/// yard far at its address, with its device token in a file beside them,
-/// as the away shot keeps them, and the yard knows the device, so the
-/// window opens on the yard. The shot script runs against a throwaway
-/// config, which keeps no settings; where a settings file already
+/// The settings the `page-unset`, `page-unset-many`, `mail-edge` and
+/// `settings-connection-edge` shots open: the yard far at its address, with
+/// its device token in a file beside them, as the away shot keeps them, and
+/// the yard knows the device, so the window opens on the yard. The edge
+/// shots keep [`EDGE_VIEW`] as its web view. The shot script runs against a
+/// throwaway config, which keeps no settings; where a settings file already
 /// stands, the state is refused rather than overwrite it. The window
 /// opens in the look the script asked for.
-fn write_page_unset_settings(address: &str, state: &str) {
+fn write_far_settings(address: &str, state: &str) {
     let Some(file) = crate::settings::file() else {
         eprintln!("footplate: the {state} shot keeps no settings without a home");
         std::process::exit(1);
@@ -822,30 +845,41 @@ fn write_page_unset_settings(address: &str, state: &str) {
         );
         std::process::exit(2);
     }
-    keep_page_unset_settings(&file, address, look_asked(), state);
+    keep_far_settings(&file, address, look_asked(), state);
 }
 
-/// The page-unset shots' settings and device token, in `file`'s
-/// directory, with the window in `look`.
-fn keep_page_unset_settings(file: &Path, address: &str, look: crate::theme::Look, state: &str) {
-    crate::settings::Settings {
-        look,
-        ..Default::default()
-    }
-    .with_yard(
-        None,
-        crate::settings::Yard::far("far", address, "yard-far.token"),
-        Some(file),
-    )
-    .and_then(|set| {
-        set.opening("far")
-            .write(file)
-            .map_err(|error| error.to_string())
-    })
-    .unwrap_or_else(|error| {
-        eprintln!("footplate: the {state} shot keeps no settings: {error}");
-        std::process::exit(1);
-    });
+/// The browser's address at the edge, as the edge shots keep it for their
+/// far yard's web view: the one a yard behind the edge is entered by, and
+/// the name of a yard of the shot's account. The shots ask no host at it.
+const EDGE_VIEW: &str = "https://my.yardr.dev/?yard=mac";
+
+/// The far shots' settings and device token, in `file`'s directory, with
+/// the window in `look`.
+fn keep_far_settings(file: &Path, address: &str, look: crate::theme::Look, state: &str) {
+    // The edge shots' yard is entered at the edge's browser address; an
+    // empty one leaves the view unset.
+    let view = match state.ends_with("-edge") {
+        true => EDGE_VIEW,
+        false => "",
+    };
+    crate::settings::Yard::far("far", address, "yard-far.token")
+        .with_web_view(view)
+        .and_then(|yard| {
+            crate::settings::Settings {
+                look,
+                ..Default::default()
+            }
+            .with_yard(None, yard, Some(file))
+        })
+        .and_then(|set| {
+            set.opening("far")
+                .write(file)
+                .map_err(|error| error.to_string())
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("footplate: the {state} shot keeps no settings: {error}");
+            std::process::exit(1);
+        });
     let edge = crate::api::Address::parse(address).unwrap_or_else(|error| {
         eprintln!("footplate: the {state} shot's yard has no address: {error}");
         std::process::exit(1);
@@ -1328,6 +1362,7 @@ fn populate(yard: &Yard, state: &str) {
         | "settings-agents"
         | "settings-notifications"
         | "settings-connection"
+        | "settings-connection-edge"
         | "settings-voice"
         | "settings-voice-list"
         | "settings-voice-microphone"
@@ -2212,14 +2247,27 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
         }
-        "mail" | "image" | "image-menu" => {
+        "mail" | "image" | "image-menu" | "mail-refused" | "mail-edge" => {
             // The yardmaster's mail carries a page and an image, as the
             // bead's note does in the page state: the yard holds the
             // image, and the page is never asked for, since Open takes
             // it to the browser, with no run. The image state serves
             // the same mail, and the window opens its image over it; the
-            // image-menu state opens the menu of the image in the thread.
-            yard.blob(IMAGE_HASH, IMAGE);
+            // image-menu state opens the menu of the image in the thread;
+            // the mail-refused and mail-edge states serve it where the web
+            // view is behind a login, and where it is the edge's address,
+            // with the page alone: the row is what they show, and the
+            // mockup's own drawn Open would stand beside it.
+            let picture = !matches!(state, "mail-refused" | "mail-edge");
+            let mut files = vec![
+                json!({"hash": MAIL_PAGE_HASH, "type": "text/html; charset=utf-8",
+                       "bytes": 18000}),
+            ];
+            if picture {
+                yard.blob(IMAGE_HASH, IMAGE);
+                files.push(json!({"hash": IMAGE_HASH, "type": "image/png",
+                                  "bytes": IMAGE.len()}));
+            }
             yard.answer(
                 "UserInbox",
                 &json!({"result": {"mail": [
@@ -2233,11 +2281,7 @@ fn populate(yard: &Yard, state: &str) {
                 &json!({"result": [
                     {"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo",
                      "text": "The mockup is in the mail.",
-                     "files": [{"hash": MAIL_PAGE_HASH, "type": "text/html; charset=utf-8",
-                                "bytes": 18000},
-                               {"hash": IMAGE_HASH, "type": "image/png",
-                                "bytes": IMAGE.len()}],
-                     "read": false},
+                     "files": files, "read": false},
                 ]})
                 .to_string(),
             );
@@ -3440,6 +3484,7 @@ mod tests {
                 | "settings-agents"
                 | "settings-notifications"
                 | "settings-connection"
+                | "settings-connection-edge"
                 | "settings-voice"
                 | "settings-voice-list"
                 | "settings-voice-microphone"
@@ -4002,17 +4047,23 @@ mod tests {
                     let assembly = client.conversation("jo", "assembly", 0).unwrap();
                     assert_eq!(assembly.len(), 3, "{state}");
                 }
-                "mail" | "image" | "image-menu" => {
+                "mail" | "image" | "image-menu" | "mail-refused" | "mail-edge" => {
                     assert!(loaded.asks.open.is_empty(), "{state}");
                     // The mail carries the page and the image; the yard
-                    // holds the image, and the page is named only.
-                    let image = yard.client().blob(IMAGE_HASH).unwrap().unwrap();
-                    assert_eq!(image.len(), IMAGE.len(), "{state}");
+                    // holds the image, and the page is named only. The
+                    // refused and edge states carry the page alone.
                     let letters = yard.client().conversation("jo", "yardmaster", 0).unwrap();
                     assert_eq!(letters.len(), 1, "{state}");
-                    assert_eq!(letters[0].files.len(), 2, "{state}");
                     assert!(crate::model::is_page(&letters[0].files[0]), "{state}");
-                    assert!(!crate::model::is_page(&letters[0].files[1]), "{state}");
+                    if matches!(*state, "mail-refused" | "mail-edge") {
+                        assert_eq!(letters[0].files.len(), 1, "{state}");
+                        assert!(yard.client().blob(IMAGE_HASH).unwrap().is_none(), "{state}");
+                    } else {
+                        let image = yard.client().blob(IMAGE_HASH).unwrap().unwrap();
+                        assert_eq!(image.len(), IMAGE.len(), "{state}");
+                        assert_eq!(letters[0].files.len(), 2, "{state}");
+                        assert!(!crate::model::is_page(&letters[0].files[1]), "{state}");
+                    }
                 }
                 "reactions" | "reactions-hover" | "reactions-zoom" => {
                     assert!(loaded.asks.open.is_empty(), "{state}");
@@ -4474,6 +4525,23 @@ mod tests {
             assert_eq!(kept.look, look, "away");
             assert_eq!(kept.opened().name, "far", "away");
             assert!(away.path().join("yard-far.token").is_file());
+
+            // The far yard of the page-unset and edge shots: its web view
+            // is unset, or the browser's address at the edge.
+            for (state, view) in [
+                ("page-unset", ""),
+                ("mail-edge", EDGE_VIEW),
+                ("settings-connection-edge", EDGE_VIEW),
+            ] {
+                let far = tempfile::tempdir().unwrap();
+                let file = far.path().join("settings.json");
+                keep_far_settings(&file, "https://yard.example.net", look, state);
+                let kept = Settings::read(&file);
+                assert_eq!(kept.look, look, "{state}");
+                assert_eq!(kept.opened().name, "far", "{state}");
+                assert_eq!(kept.yard("far").unwrap().web_view, view, "{state}");
+                assert!(far.path().join("yard-far.token").is_file(), "{state}");
+            }
 
             for state in ["signedout", "screen-hosted"] {
                 let hosted = tempfile::tempdir().unwrap();

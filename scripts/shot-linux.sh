@@ -31,7 +31,11 @@
 # them), `mail` (a mail with
 # a page and an image), `image` (that mail's image open full size over
 # the window), `image-menu` (that mail's picture with the menu a right-click
-# on it opens, where the pointer stood), `run` (an
+# on it opens, where the pointer stood), `mail-refused` (that mail, its page
+# alone, on a yard whose web view answers the edge's login: the row says it is
+# behind one, with no Open), `mail-edge` (that mail, its page alone, on a far
+# yard whose web view is the browser's address at the edge: the row carries
+# Open), `run` (an
 # open card of a run ask), `teammates` (an open card of a teammate
 # invite), `teammates-list` (the teammates view open on its row),
 # `stopped` (a stopped yard), `far`
@@ -39,7 +43,9 @@
 # their sections: `settings` is this window, and `settings-appearance`,
 # `settings-yards`, `settings-agents`, `settings-notifications`,
 # `settings-connection`, `settings-voice` and `settings-telemetry` the
-# rest, with `settings-telemetry-off` the telemetry section off, and
+# rest, with `settings-connection-edge` the connection section of a far
+# yard whose web view is the browser's address at the edge, with
+# `settings-telemetry-off` the telemetry section off, and
 # `settings-voice-list` the voice section on, with a voice chosen and the
 # list of voices open under its field, and `settings-voice-microphone` the
 # same with a microphone chosen among a stand-in's and its list open),
@@ -158,7 +164,7 @@ set -e
 caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page page-unset page-unset-many mail image image-menu refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused setup-host switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open lines-waiting lines-waiting-end lines-help lines-panel lines-departures keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run teammates teammates-list weighty weighty-mapping stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-connection-edge settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page page-unset page-unset-many mail image image-menu mail-refused mail-edge refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused setup-host switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open lines-waiting lines-waiting-end lines-help lines-panel lines-departures keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;
@@ -223,12 +229,12 @@ case "$text" in
         exit 2
         ;;
 esac
-# Away, signedout, screen-hosted and the page-unset shots write their
-# own settings (src/shot.rs), which carry no text size, so one asked of
-# them would be dropped without a word: it is refused here, before any
+# Away, signedout, screen-hosted, the page-unset and the edge shots write
+# their own settings (src/shot.rs), which carry no text size, so one asked
+# of them would be dropped without a word: it is refused here, before any
 # container is touched.
 case "$state" in
-    away|signedout|screen-hosted|page-unset|page-unset-many)
+    away|signedout|screen-hosted|page-unset|page-unset-many|mail-edge|settings-connection-edge)
         if [ -n "$text" ]; then
             echo "shot-linux.sh: SHOT_TEXT is not read for the $state state, which writes its own settings: shoot it at the usual text size" >&2
             exit 2
@@ -379,7 +385,7 @@ docker exec -e "SHOT_LOOK=$look" -e "SHOT_TEXT=$text" "$name" sh -c 'export XDG_
     # The rename shot opens that same far yard, with its form open in
     # its card. A look or a text size for the shot rides in the same
     # file where one is asked for. The switcher states, away, signedout,
-    # screen-hosted and the page-unset shots write their own settings
+    # screen-hosted, the page-unset and the edge shots write their own settings
     # (src/shot.rs) and refuse a file that stands, so none is written
     # for them: the look is theirs to read from SHOT_LOOK in the window
     # environment, and a text size was refused above.
@@ -391,7 +397,7 @@ docker exec -e "SHOT_LOOK=$look" -e "SHOT_TEXT=$text" "$name" sh -c 'export XDG_
     fi
     if [ -n "$shot_settings" ]; then shot_json=", $shot_settings"; else shot_json=""; fi
     if [ "'"$state"'" = far ] || [ "'"$state"'" = settings-yards-rename ]; then printf "%s\n" "{\"yards\": [{\"name\": \"far\", \"address\": \"https://yard.example.net\", \"token_file\": \"far.token\"}], \"open\": \"far\"$shot_json}" > "$scratch/config/footplate/settings.json"; fi
-    if [ -n "$shot_settings" ] && [ "'"$state"'" != far ] && [ "'"$state"'" != settings-yards-rename ] && [ "'"$state"'" != switcher ] && [ "'"$state"'" != switcher-shut ] && [ "'"$state"'" != switcher-member ] && [ "'"$state"'" != member-pair ] && [ "'"$state"'" != away ] && [ "'"$state"'" != signedout ] && [ "'"$state"'" != screen-hosted ] && [ "'"$state"'" != page-unset ] && [ "'"$state"'" != page-unset-many ]; then printf "%s\n" "{$shot_settings}" > "$scratch/config/footplate/settings.json"; fi
+    if [ -n "$shot_settings" ] && [ "'"$state"'" != far ] && [ "'"$state"'" != settings-yards-rename ] && [ "'"$state"'" != switcher ] && [ "'"$state"'" != switcher-shut ] && [ "'"$state"'" != switcher-member ] && [ "'"$state"'" != member-pair ] && [ "'"$state"'" != away ] && [ "'"$state"'" != signedout ] && [ "'"$state"'" != screen-hosted ] && [ "'"$state"'" != page-unset ] && [ "'"$state"'" != page-unset-many ] && [ "'"$state"'" != mail-edge ] && [ "'"$state"'" != settings-connection-edge ]; then printf "%s\n" "{$shot_settings}" > "$scratch/config/footplate/settings.json"; fi
     chown -R shot:shot "$scratch"
     su shot -c "HOME=$scratch/home XDG_CONFIG_HOME=$scratch/config XDG_DATA_HOME=$scratch/data YARDR_HOME=$scratch/yard PATH=$scratch/home/.local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json SHOT_LOOK='$SHOT_LOOK' FOOTPLATE_SHOT='"$state"' dbus-run-session -- '"$target_dir"'/debug/footplate >$scratch/footplate.log 2>&1 & echo \$!" > /tmp/shots/footplate.pid' >&2
 

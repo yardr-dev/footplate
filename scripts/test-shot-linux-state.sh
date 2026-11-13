@@ -213,19 +213,19 @@ esac
 # The states that write their own settings (src/shot.rs refuses a file that
 # stands, with exit 2) are given none, with a look asked for or not: the
 # switcher and the state that shuts it, which have long been so, and now
-# away, signedout, screen-hosted and the page-unset shots.
-for st in switcher switcher-shut away signedout screen-hosted page-unset page-unset-many; do
+# away, signedout, screen-hosted, the page-unset shots and the edge shots.
+for st in switcher switcher-shut away signedout screen-hosted page-unset page-unset-many mail-edge settings-connection-edge; do
     got=$(settings_given "$st" dark "")
     [ -z "$got" ] || fail "$st at a look was given a settings file: $got"
     got=$(settings_given "$st" "" "")
     [ -z "$got" ] || fail "$st with neither look nor text was given a settings file: $got"
 done
 
-# A text size asked of away, signedout, screen-hosted or the page-unset
-# shots, which have no text reader, is refused at once and in words,
-# before anything is written or any container is touched; another state
-# is not.
-for st in away signedout screen-hosted page-unset page-unset-many; do
+# A text size asked of away, signedout, screen-hosted, the page-unset or
+# the edge shots, which have no text reader, is refused at once and in
+# words, before anything is written or any container is touched; another
+# state is not.
+for st in away signedout screen-hosted page-unset page-unset-many mail-edge settings-connection-edge; do
     export MOCK_LOG=$tmp/log-$st-text
     rc=0
     err=$(PATH="$tmp/bin:$PATH" SHOT_TEXT=16 "$script" "$st" "$tmp/shot-$st-text.png" 2>&1) || rc=$?

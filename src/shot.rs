@@ -53,7 +53,9 @@ use crate::yard::Env;
 /// in the composer, the button saying Send, the yards with a
 /// far yard's rename form open in its card, a running
 /// yard whose server is then stopped, shot reconnecting with a draft in
-/// the composer, its Send held, an open card whose note carries a page, an image and a file, a
+/// the composer, its Send held, an open card whose note carries a page, an image and a file, that
+/// card on a yard with no web view set, its note carrying one page, with the sentence on its
+/// row, and several pages, with the sentence once under them, a
 /// mail with a page and an image, that mail's image open full size over
 /// the window, the first screen's way to a yard at an address, with a
 /// pairing's http address refused under its fields, the
@@ -182,6 +184,8 @@ pub const STATES: &[&str] = &[
     "voice-draft",
     "reconnecting",
     "page",
+    "page-unset",
+    "page-unset-many",
     "mail",
     "image",
     "image-menu",
@@ -292,6 +296,11 @@ const MAIL_PAGE_HASH: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
 /// The file in the `page` state: the note's third row, under its name,
 /// which Open takes to the browser. Named, never served, as the pages.
 const FILE_HASH: &str = "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef";
+
+/// The second and third pages in the `page-unset-many` state: the note's
+/// rows beside `PAGE_HASH`, named, never served, as its pages.
+const PAGE_UNSET_HASH: &str = "1212121212121212121212121212121212121212121212121212121212121212";
+const PAGE_UNSET_HASH_2: &str = "3434343434343434343434343434343434343434343434343434343434343434";
 
 /// The fake yard and its private socket directory, which go away with the
 /// screenshot run.
@@ -517,7 +526,10 @@ fn stand_voice() -> Talking {
 /// the window with no Screen offered.
 /// The away shot opens the yard far at its address with a device the yard no
 /// longer knows, so the window opens on the away screen that offers to pair
-/// again, with a way's fields open.
+/// again, with a way's fields open. The page-unset shots open the yard far
+/// at its address with a device the yard knows, so the window opens on the
+/// yard, whose web view is unset: the card's note carries one page in the
+/// first and several in the second.
 fn start_for_state(env: Env, state: &str) -> (Env, Option<ShotYard>) {
     if matches!(
         state,
@@ -562,6 +574,17 @@ fn start_for_state(env: Env, state: &str) -> (Env, Option<ShotYard>) {
         far.add_device("footplate-shot-phone");
         far.remove_device(crate::fake::TOKEN);
         write_away_settings(far.address());
+        shot.extra = vec![std::sync::Arc::new(far)];
+    }
+    if state == "page-unset" || state == "page-unset-many" {
+        // The window opens far at its address, as the away shot has it:
+        // the token stands in its file, and the yard knows the device,
+        // so the window opens on the yard, whose web view is unset. The
+        // yard is held beside the shot's, so its listener stands for the
+        // shot.
+        let far = Yard::start_tcp();
+        populate(&far, state);
+        write_page_unset_settings(far.address(), state);
         shot.extra = vec![std::sync::Arc::new(far)];
     }
     if state == "switcher" || state == "switcher-shut" {
@@ -776,6 +799,62 @@ fn keep_away_settings(file: &Path, address: &str, look: crate::theme::Look) {
         .and_then(|place| place.keep(crate::fake::TOKEN, &edge))
         .unwrap_or_else(|error| {
             eprintln!("footplate: the away shot keeps no token: {error}");
+            std::process::exit(1);
+        });
+}
+
+/// The settings the `page-unset` and `page-unset-many` shots open: the
+/// yard far at its address, with its device token in a file beside them,
+/// as the away shot keeps them, and the yard knows the device, so the
+/// window opens on the yard. The shot script runs against a throwaway
+/// config, which keeps no settings; where a settings file already
+/// stands, the state is refused rather than overwrite it. The window
+/// opens in the look the script asked for.
+fn write_page_unset_settings(address: &str, state: &str) {
+    let Some(file) = crate::settings::file() else {
+        eprintln!("footplate: the {state} shot keeps no settings without a home");
+        std::process::exit(1);
+    };
+    if file.exists() {
+        eprintln!(
+            "footplate: the {state} shot writes its own settings, and {} already stands: shoot it against a throwaway config, as scripts/shot-linux.sh and scripts/shot-mac.sh do",
+            file.display()
+        );
+        std::process::exit(2);
+    }
+    keep_page_unset_settings(&file, address, look_asked(), state);
+}
+
+/// The page-unset shots' settings and device token, in `file`'s
+/// directory, with the window in `look`.
+fn keep_page_unset_settings(file: &Path, address: &str, look: crate::theme::Look, state: &str) {
+    crate::settings::Settings {
+        look,
+        ..Default::default()
+    }
+    .with_yard(
+        None,
+        crate::settings::Yard::far("far", address, "yard-far.token"),
+        Some(file),
+    )
+    .and_then(|set| {
+        set.opening("far")
+            .write(file)
+            .map_err(|error| error.to_string())
+    })
+    .unwrap_or_else(|error| {
+        eprintln!("footplate: the {state} shot keeps no settings: {error}");
+        std::process::exit(1);
+    });
+    let edge = crate::api::Address::parse(address).unwrap_or_else(|error| {
+        eprintln!("footplate: the {state} shot's yard has no address: {error}");
+        std::process::exit(1);
+    });
+    let dir = file.parent().unwrap_or_else(|| Path::new("."));
+    crate::yard::token_place(&dir.join("yard-far.token"))
+        .and_then(|place| place.keep(crate::fake::TOKEN, &edge))
+        .unwrap_or_else(|error| {
+            eprintln!("footplate: the {state} shot keeps no token: {error}");
             std::process::exit(1);
         });
 }
@@ -1745,6 +1824,87 @@ fn populate(yard: &Yard, state: &str) {
                                    {"hash": FILE_HASH, "type": "application/pdf",
                                     "bytes": 900, "name": "figures.pdf"},
                                ]}],
+                    "asks": [{
+                        "ask": 3, "to": "jo", "asker": "yardmaster",
+                        "since": "2026-10-10T10:00:00Z",
+                        "question": "Move them now?",
+                        "context": ["The links file declares the new source."],
+                        "options": [
+                            {"label": "Move them now",
+                             "consequence": "all 64 links point tonight"},
+                            {"label": "You decide",
+                             "consequence": "leave it to yardmaster"}
+                        ],
+                        "recommend": 0, "why": "",
+                        "state": "open"
+                    }]
+                }})
+                .to_string(),
+            );
+        }
+        "page-unset" | "page-unset-many" => {
+            // The plain ask above, on a yard whose web view is unset: the
+            // note carries one page in the first state, so the row says
+            // the sentence, and three pages and a file in the second, so
+            // the sentence stands once under the rows. The pages and the
+            // file are never asked for, since Open would take them to the
+            // browser; with no view there is no Open. The mail carries
+            // none.
+            yard.answer(
+                "UserInbox",
+                &json!({"result": {"mail": [
+                    {"seq": 12, "from": "yardmaster", "to": "jo",
+                     "text": "The mockup is on the bead.", "read": false},
+                ], "unread": 1, "last": 12, "from": ["yardmaster"]}})
+                .to_string(),
+            );
+            yard.answer(
+                "Conversation",
+                &json!({"result": [
+                    {"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo",
+                     "text": "The mockup is on the bead.", "read": false},
+                ]})
+                .to_string(),
+            );
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [
+                    {"bead": "bead-a", "bead_title": "Move the links", "topic": "topic:linear-out",
+                     "ask": 3, "question": "Move them now?", "asker": "yardmaster",
+                     "since": "2026-10-10T10:00:00Z"},
+                ], "decided": []}})
+                .to_string(),
+            );
+            let many = state == "page-unset-many";
+            let files = match many {
+                true => vec![
+                    json!({"hash": PAGE_HASH, "type": "text/html; charset=utf-8",
+                           "bytes": 42000}),
+                    json!({"hash": PAGE_UNSET_HASH, "type": "text/html; charset=utf-8",
+                           "bytes": 18000}),
+                    json!({"hash": PAGE_UNSET_HASH_2, "type": "text/html; charset=utf-8",
+                           "bytes": 9000}),
+                    json!({"hash": FILE_HASH, "type": "application/pdf",
+                           "bytes": 900, "name": "figures.pdf"}),
+                ],
+                false => vec![
+                    json!({"hash": PAGE_HASH, "type": "text/html; charset=utf-8",
+                           "bytes": 42000}),
+                ],
+            };
+            let words = match many {
+                true => "the mockups, like this:",
+                false => "the mockup, like this:",
+            };
+            yard.answer(
+                "Bead",
+                &json!({"result": {
+                    "id": "bead-a", "title": "Move the links",
+                    "body": "",
+                    "stage": "new", "labels": ["topic:linear-out"],
+                    "notes": [{"seq": 2, "kind": "note", "author": "yardmaster",
+                               "text": words, "at": "2026-10-10T09:30:00Z",
+                               "files": files}],
                     "asks": [{
                         "ask": 3, "to": "jo", "asker": "yardmaster",
                         "since": "2026-10-10T10:00:00Z",
@@ -3746,6 +3906,27 @@ mod tests {
                     assert_eq!(letters.len(), 1, "{state}");
                     assert_eq!(letters[0].files.len(), 1, "{state}");
                     assert!(crate::model::is_page(&letters[0].files[0]), "{state}");
+                }
+                "page-unset" => {
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    let bead = yard.client().bead("bead-a").unwrap();
+                    assert_eq!(bead.notes.len(), 1, "{state}");
+                    assert_eq!(bead.notes[0].files.len(), 1, "{state}");
+                    assert!(crate::model::is_page(&bead.notes[0].files[0]), "{state}");
+                }
+                "page-unset-many" => {
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    let bead = yard.client().bead("bead-a").unwrap();
+                    assert_eq!(bead.notes.len(), 1, "{state}");
+                    assert_eq!(bead.notes[0].files.len(), 4, "{state}");
+                    assert!(crate::model::is_page(&bead.notes[0].files[0]), "{state}");
+                    assert!(crate::model::is_page(&bead.notes[0].files[1]), "{state}");
+                    assert!(crate::model::is_page(&bead.notes[0].files[2]), "{state}");
+                    // The fourth row is a file, named; the pages and the
+                    // file are named only.
+                    assert!(!crate::model::is_page(&bead.notes[0].files[3]), "{state}");
+                    assert!(!crate::model::is_image(&bead.notes[0].files[3]), "{state}");
+                    assert_eq!(bead.notes[0].files[3].name, "figures.pdf", "{state}");
                 }
                 "thread" => {
                     assert!(loaded.asks.open.is_empty(), "{state}");

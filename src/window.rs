@@ -6481,17 +6481,46 @@ yardr.dev
     }
 
     fn bead_note_page(page: &str) -> String {
+        bead_note_files(&[page], &[])
+    }
+
+    type NoteFileGroup<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
+
+    /// The bead-a of `bead_note_page`, whose note carries the given pages
+    /// and files: each page a hash, each file a hash with its name.
+    fn bead_note_files(pages: &[&str], files: &[(&str, &str)]) -> String {
+        bead_note_file_sets(&[(pages, files)])
+    }
+
+    /// The bead-a of `bead_note_page`, whose notes carry the given page
+    /// and file groups: each page a hash, each file a hash with its name.
+    fn bead_note_file_sets(notes: &[NoteFileGroup<'_>]) -> String {
+        let mut notes: Vec<_> = notes
+            .iter()
+            .enumerate()
+            .map(|(ix, (pages, files))| {
+                let pages = pages.iter().map(|page| {
+                    json!({"hash": page, "type": "text/html; charset=utf-8", "bytes": 42000})
+                });
+                let files = files.iter().map(|(hash, name)| {
+                    json!({"hash": hash, "type": "application/pdf", "bytes": 900, "name": name})
+                });
+                let files: Vec<_> = pages.chain(files).collect();
+                json!({"seq": ix + 2, "kind": "note", "author": "yardmaster",
+                       "text": "the mockup, like this:",
+                       "at": "2026-10-10T09:30:00Z", "files": files})
+            })
+            .collect();
+        let empty_seq = notes.len() + 2;
+        notes.push(
+            json!({"seq": empty_seq, "kind": "note", "author": "yardmaster",
+                          "text": "no pages here", "at": "2026-10-10T09:31:00Z"}),
+        );
         json!({"result": {
             "id": "bead-a", "title": "Move the links",
             "body": "The body of bead-a.",
             "stage": "new", "labels": ["topic:linear-out"],
-            "notes": [
-                {"seq": 2, "kind": "note", "author": "yardmaster",
-                 "text": "the mockup, like this:", "at": "2026-10-10T09:30:00Z",
-                 "files": [{"hash": page, "type": "text/html; charset=utf-8", "bytes": 42000}]},
-                {"seq": 3, "kind": "note", "author": "yardmaster",
-                 "text": "no pages here", "at": "2026-10-10T09:31:00Z"}
-            ],
+            "notes": notes,
             "asks": [
                 {"ask": 3, "to": "jo", "asker": "yardmaster",
                  "since": "2026-10-10T10:00:00Z",
@@ -6885,9 +6914,19 @@ yardr.dev
         page: &str,
         cx: &'a mut TestAppContext,
     ) -> (Entity<Footplate>, &'a mut VisualTestContext) {
+        note_pages_view(yard, &[(&[page], &[])], cx)
+    }
+
+    /// The window on `yard`, whose bead-a asks three, its notes naming
+    /// the given page and file groups: the decision open, the bead read.
+    fn note_pages_view<'a>(
+        yard: &Yard,
+        notes: &[NoteFileGroup<'_>],
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<Footplate>, &'a mut VisualTestContext) {
         a_yard_of_jo(yard);
         yard.answer("UserAsks", &asks_three());
-        yard.answer("Bead", &bead_note_page(page));
+        yard.answer("Bead", &bead_note_file_sets(notes));
         cx.update(|cx| {
             input::bind_keys(cx);
             bind_keys(cx);
@@ -6939,12 +6978,24 @@ yardr.dev
     }
 
     #[gpui::test]
-    fn a_note_s_page_says_how_to_start_the_view_where_it_does_not_answer(cx: &mut TestAppContext) {
+    fn a_note_s_pages_say_how_to_start_the_view_once_where_it_does_not_answer(
+        cx: &mut TestAppContext,
+    ) {
         let yard = Yard::start();
         let page = "ab".repeat(32);
-        let (view, cx) = note_page_view(&yard, &page, cx);
-        // Nothing answers at the view's address: the row says how to
-        // start it, instead of opening nowhere.
+        let many_page = "cd".repeat(32);
+        let another_page = "ef".repeat(32);
+        let file = "gh".repeat(32);
+        let page_files = [
+            (&[page.as_str()][..], &[][..]),
+            (
+                &[many_page.as_str(), another_page.as_str()][..],
+                &[(file.as_str(), "figures.pdf")][..],
+            ),
+        ];
+        let (view, cx) = note_pages_view(&yard, &page_files, cx);
+        // Nothing answers at the view's address: a single row says how
+        // to start it, and the note with two rows says it once below them.
         set_view(&view, cx, &view_down());
         wait(cx, "the view not answering", |cx| {
             view_answered(&view, cx) == Some(false)
@@ -6955,7 +7006,16 @@ yardr.dev
         assert!(expanded_of(&view, cx, "bead-a", 3));
         assert!(drawn(cx, &format!("page row {page}")));
         assert!(drawn(cx, &format!("page start {page}")));
+        assert!(drawn(cx, &format!("page row {many_page}")));
+        assert!(drawn(cx, &format!("page row {another_page}")));
+        assert!(drawn(cx, &format!("file row {file}")));
+        assert!(drawn(cx, "note view start 1"));
+        assert!(!drawn(cx, &format!("page start {many_page}")));
+        assert!(!drawn(cx, &format!("page start {another_page}")));
+        assert!(!drawn(cx, &format!("file start {file}")));
         assert!(!drawn(cx, &format!("page open {page}")));
+        assert!(!drawn(cx, &format!("page open {many_page}")));
+        assert!(!drawn(cx, &format!("page open {another_page}")));
     }
 
     /// A "no" from the web view and the run base is asked again on a
@@ -8875,13 +8935,23 @@ yardr.dev
     }
 
     #[gpui::test]
-    fn a_note_s_page_can_run_through_its_set_base_without_a_web_view(cx: &mut TestAppContext) {
+    fn a_note_s_page_and_pages_can_run_without_a_web_view(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let far = Yard::start_tcp();
         a_far_yard_of_jo(&far);
         far.answer("UserAsks", &asks_three());
         let page = "ab".repeat(32);
-        far.answer("Bead", &bead_note_page(&page));
+        let first = "cd".repeat(32);
+        let second = "ef".repeat(32);
+        let attachment = "gh".repeat(32);
+        let notes = [
+            (&[page.as_str()][..], &[][..]),
+            (
+                &[first.as_str(), second.as_str()][..],
+                &[(attachment.as_str(), "figures.pdf")][..],
+            ),
+        ];
+        far.answer("Bead", &bead_note_file_sets(&notes));
         let run = view_up();
         let settings = Settings {
             yards: vec![settings::Yard::far("far", far.address(), "yard-far.token")],
@@ -8921,6 +8991,14 @@ yardr.dev
         assert!(expanded_of(&view, cx, "bead-a", 3));
         assert!(drawn(cx, &format!("page unset {page}")));
         assert!(drawn(cx, &format!("page run {page}")));
+        assert!(drawn(cx, &format!("page row {first}")));
+        assert!(drawn(cx, &format!("page row {second}")));
+        assert!(drawn(cx, &format!("page run {first}")));
+        assert!(drawn(cx, &format!("page run {second}")));
+        assert!(drawn(cx, &format!("file row {attachment}")));
+        assert!(drawn(cx, "note view unset 1"));
+        assert!(!drawn(cx, &format!("page unset {first}")));
+        assert!(!drawn(cx, &format!("page unset {second}")));
         let opened = opened_pages(&view, cx);
         click_on(cx, &format!("page run {page}"));
         cx.run_until_parked();

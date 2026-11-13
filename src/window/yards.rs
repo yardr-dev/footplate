@@ -2702,7 +2702,7 @@ impl Footplate {
                         div()
                             .pl_4()
                             .pt_1()
-                            .child(self.picture(file, false, palette, cx))
+                            .child(self.picture(file, false, false, palette, cx))
                     }))
                     .into_any_element()
             }))

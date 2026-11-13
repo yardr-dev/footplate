@@ -319,7 +319,10 @@ shows no count while the assembly's, not open, shows its three),
 `plain` (an open decision card of a plain ask), `plain-select`
 (that card with a selection posed over its context), `lines` (that
 card with one of jo's beads changed, so Lines carries its badge), `page` (an
-open card whose note carries a page, an image and a file), `mail` (a mail with
+open card whose note carries a page, an image and a file), `page-unset` (that
+card on a yard with no web view set: one page, the sentence on its row),
+`page-unset-many` (that card with several pages: the sentence once under
+them), `mail` (a mail with
 a page and an image), `image` (that mail's image open full size over
 the window, with its Save beside the ×), `image-menu` (that mail's picture
 with the menu a right-click on it opens), `run` (an

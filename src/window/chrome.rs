@@ -1225,12 +1225,14 @@ impl Footplate {
                     model.show_texts(&kept.texts);
                     model.set_decided_chip(kept.decided_chip);
                     model.show_folds(&kept.decided_folds);
-                    // The page shot opens the card, so the note's page row
-                    // and image show: a debug build's alone, as the settings
-                    // and the draft of Footplate::opened.
+                    // The page shots open the card, so the note's rows
+                    // show: a debug build's alone, as the settings and the
+                    // draft of Footplate::opened.
                     #[cfg(debug_assertions)]
-                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("page")
-                        && let Some((bead, ask)) = model.current_ask()
+                    if matches!(
+                        std::env::var("FOOTPLATE_SHOT").as_deref(),
+                        Ok("page") | Ok("page-unset") | Ok("page-unset-many")
+                    ) && let Some((bead, ask)) = model.current_ask()
                     {
                         model.toggle_expand(&bead, ask);
                     }
@@ -1242,13 +1244,14 @@ impl Footplate {
                     let mut at = self.rows.offset();
                     at.y = px(0.) - kept.list(mode);
                     self.rows.set_offset(at);
-                    // The page shot stands at the card's end, so the note's
-                    // page row and image show: past its end, where the
-                    // layout stops, as with a yard returned to. A debug
-                    // build's alone.
+                    // The page shots stand at the card's end, so the note's
+                    // rows show: past its end, where the layout stops, as
+                    // with a yard returned to. A debug build's alone.
                     #[cfg(debug_assertions)]
-                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("page")
-                        && let Some(Selected::Decision(bead)) = model.selected()
+                    if matches!(
+                        std::env::var("FOOTPLATE_SHOT").as_deref(),
+                        Ok("page") | Ok("page-unset") | Ok("page-unset-many")
+                    ) && let Some(Selected::Decision(bead)) = model.selected()
                     {
                         self.returning =
                             Some(((Selected::Decision(bead.clone()), px(1_000_000.)), false));
@@ -6897,7 +6900,13 @@ fn shot_selected() -> Option<Selected> {
     #[cfg(debug_assertions)]
     match std::env::var("FOOTPLATE_SHOT").as_deref() {
         Ok("undelivered") => return Some(Selected::Conversation("clerk@north".into())),
-        Ok("plain") | Ok("plain-select") | Ok("page") | Ok("lines") | Ok("keys") => {
+        Ok("plain")
+        | Ok("plain-select")
+        | Ok("page")
+        | Ok("page-unset")
+        | Ok("page-unset-many")
+        | Ok("lines")
+        | Ok("keys") => {
             return Some(Selected::Decision("bead-a".into()));
         }
         Ok("decisions") | Ok("decisions-filtered") | Ok("decisions-more") => {

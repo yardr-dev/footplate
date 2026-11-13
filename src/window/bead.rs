@@ -1451,11 +1451,14 @@ impl Footplate {
     /// row, or the line that says why there is none. A click on the image
     /// shows it full size over the window, from the bytes the window
     /// holds; `note` says it is a note's, whose page carries run beside
-    /// Open.
+    /// Open. Where `quiet`, a page's or a file's row keeps its label
+    /// without the web view sentence, which the note says once under
+    /// its files.
     pub(crate) fn picture(
         &self,
         file: &BlobRef,
         note: bool,
+        quiet: bool,
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -1467,10 +1470,10 @@ impl Footplate {
                 .into_any_element();
         }
         if model::is_page(file) {
-            return self.page_row(file, note, palette).into_any_element();
+            return self.page_row(file, note, quiet, palette).into_any_element();
         }
         if !model::is_image(file) {
-            return self.file_row(file, palette).into_any_element();
+            return self.file_row(file, quiet, palette).into_any_element();
         }
         match self.images.get(&file.hash) {
             Some(Picture::Here(image)) => {
@@ -1547,11 +1550,14 @@ impl Footplate {
     /// view does not answer the row says how to start it instead of
     /// opening nowhere; where the sandbox origin does not answer the row
     /// says so beside Open. A mail's page is the row without run, since
-    /// the sandbox origin serves no mail's bytes, and that stays.
+    /// the sandbox origin serves no mail's bytes, and that stays. Where
+    /// `quiet`, the row keeps its label (and run) without the view
+    /// sentence, which the note says once under its files.
     pub(crate) fn page_row(
         &self,
         file: &BlobRef,
         note: bool,
+        quiet: bool,
         palette: Palette,
     ) -> impl IntoElement + use<> {
         self.rows_shown.set(true);
@@ -1570,15 +1576,17 @@ impl Footplate {
             .text_color(palette.faint)
             .child(format!("page, {}", model::size(file.bytes)));
         let Some(base) = self.view_base() else {
-            let row = row.child(label).child(
-                div()
-                    .text_color(palette.faint)
-                    .debug_selector({
-                        let hash = hash.clone();
-                        move || format!("page unset {hash}")
-                    })
-                    .child("this yard's web view is not set: set it in the settings"),
-            );
+            let row = row.child(label).when(!quiet, |row| {
+                row.child(
+                    div()
+                        .text_color(palette.faint)
+                        .debug_selector({
+                            let hash = hash.clone();
+                            move || format!("page unset {hash}")
+                        })
+                        .child("this yard's web view is not set: set it in the settings"),
+                )
+            });
             // A note's page can still run through an explicitly set run
             // base when this yard has no web view. The run base is a
             // separate address; only Open needs the web view.
@@ -1679,12 +1687,17 @@ impl Footplate {
             }
             Some(false) => row
                 .child(label)
-                .child(
-                    div()
-                        .text_color(palette.faint)
-                        .debug_selector(move || format!("page start {hash}"))
-                        .child("the web view is not reached: start it with yardr web start"),
-                )
+                .when(!quiet, |row| {
+                    row.child(
+                        div()
+                            .text_color(palette.faint)
+                            .debug_selector({
+                                let hash = hash.clone();
+                                move || format!("page start {hash}")
+                            })
+                            .child("the web view is not reached: start it with yardr web start"),
+                    )
+                })
                 .into_any_element(),
             None => row
                 .child(
@@ -1701,8 +1714,15 @@ impl Footplate {
     /// yard's web view, under the name the browser saves it as. Where the
     /// yard has no view the row says it is not set, with the way to set
     /// it; where the view does not answer the row says how to start it
-    /// instead of opening nowhere. Never run: only a page runs.
-    pub(crate) fn file_row(&self, file: &BlobRef, palette: Palette) -> impl IntoElement + use<> {
+    /// instead of opening nowhere. Never run: only a page runs. Where
+    /// `quiet`, the row keeps its label without the view sentence, which
+    /// the note says once under its files.
+    pub(crate) fn file_row(
+        &self,
+        file: &BlobRef,
+        quiet: bool,
+        palette: Palette,
+    ) -> impl IntoElement + use<> {
         self.rows_shown.set(true);
         let hash = file.hash.clone();
         let row = div()
@@ -1723,15 +1743,17 @@ impl Footplate {
         let Some(base) = self.view_base() else {
             return row
                 .child(label)
-                .child(
-                    div()
-                        .text_color(palette.faint)
-                        .debug_selector({
-                            let hash = hash.clone();
-                            move || format!("file unset {hash}")
-                        })
-                        .child("this yard's web view is not set: set it in the settings"),
-                )
+                .when(!quiet, |row| {
+                    row.child(
+                        div()
+                            .text_color(palette.faint)
+                            .debug_selector({
+                                let hash = hash.clone();
+                                move || format!("file unset {hash}")
+                            })
+                            .child("this yard's web view is not set: set it in the settings"),
+                    )
+                })
                 .into_any_element();
         };
         match self.view_up_now() {
@@ -1763,12 +1785,17 @@ impl Footplate {
             }
             Some(false) => row
                 .child(label)
-                .child(
-                    div()
-                        .text_color(palette.faint)
-                        .debug_selector(move || format!("file start {hash}"))
-                        .child("the web view is not reached: start it with yardr web start"),
-                )
+                .when(!quiet, |row| {
+                    row.child(
+                        div()
+                            .text_color(palette.faint)
+                            .debug_selector({
+                                let hash = hash.clone();
+                                move || format!("file start {hash}")
+                            })
+                            .child("the web view is not reached: start it with yardr web start"),
+                    )
+                })
                 .into_any_element(),
             None => {
                 let pending = match file.name.is_empty() {
@@ -1779,6 +1806,42 @@ impl Footplate {
                     .into_any_element()
             }
         }
+    }
+
+    /// Whether the note's files say the web view sentence once under
+    /// them instead of on every row: more than one of them opens through
+    /// the view (a page or a file: an image opens from the yard, and one
+    /// the yard did not take says so itself), and the view is unset or
+    /// not reached, so every such row would say it.
+    fn note_sentence_once(&self, files: &[BlobRef]) -> bool {
+        let rows = files
+            .iter()
+            .filter(|file| file.not_taken.is_empty() && !model::is_image(file))
+            .count();
+        rows > 1 && (self.view_base().is_none() || self.view_up_now() == Some(false))
+    }
+
+    /// The sentence a note's rows share where more than one of them opens
+    /// through the yard's web view and it is unset or not reached: once
+    /// under the note's files, naming where the address is set. A note
+    /// with one such row says it on the row, as ever.
+    fn note_view_sentence(&self, ix: usize, palette: Palette) -> impl IntoElement + use<> {
+        let unset = self.view_base().is_none();
+        let words = match unset {
+            true => format!(
+                "this yard's web view is not set: set it in Settings, Connection, \"web view of {}\"",
+                self.yard
+            ),
+            false => "the web view is not reached: start it with yardr web start".to_string(),
+        };
+        div()
+            .text_sm()
+            .text_color(palette.faint)
+            .debug_selector(move || match unset {
+                true => format!("note view unset {ix}"),
+                false => format!("note view start {ix}"),
+            })
+            .child(words)
     }
 
     /// An attachment of the draft: the image small, or its name when it is
@@ -2037,7 +2100,7 @@ impl Footplate {
                 div()
                     .pl(rems(LETTER_GUTTER))
                     .pt_1()
-                    .child(self.picture(file, false, palette, cx))
+                    .child(self.picture(file, false, false, palette, cx))
             }))
             .when_some(entry.standing, |el, standing| {
                 el.child(
@@ -2867,9 +2930,16 @@ impl Footplate {
                         &self.selection,
                     ));
                 // A note's files as a mail's: no run beside a page here,
-                // as on a card.
+                // as on a card. Where more than one of them opens through
+                // a view that is unset or not reached, the rows keep
+                // their label without the sentence, which stands once
+                // under them.
+                let once = self.note_sentence_once(&note.files);
                 for file in &note.files {
-                    block = block.child(self.picture(file, false, palette, cx));
+                    block = block.child(self.picture(file, false, once, palette, cx));
+                }
+                if once {
+                    block = block.child(self.note_view_sentence(ix, palette));
                 }
                 out = out.child(block);
             }
@@ -2932,8 +3002,16 @@ impl Footplate {
                         note.text.clone(),
                         &self.selection,
                     ));
+                // Where more than one of the note's files opens through
+                // a view that is unset or not reached, the rows keep
+                // their label (and run) without the sentence, which
+                // stands once under them.
+                let once = self.note_sentence_once(&note.files);
                 for file in &note.files {
-                    block = block.child(self.picture(file, true, palette, cx));
+                    block = block.child(self.picture(file, true, once, palette, cx));
+                }
+                if once {
+                    block = block.child(self.note_view_sentence(ix, palette));
                 }
                 out = out.child(block);
             }

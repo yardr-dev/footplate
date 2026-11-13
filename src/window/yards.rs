@@ -1359,16 +1359,14 @@ impl Footplate {
                     .child(faint(format!(
                         "FOOTPLATE_YARD is set, and this window is of the one yard it names: {address}. The yards of the settings are for a start without it."
                     )))
-                    .child(
-                        div().flex().child(
-                            small_button("pair again".to_string(), palette)
-                                .id("yard again")
-                                .debug_selector(|| "yard again".to_string())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.pair_again(None, window, cx)
-                                })),
-                        ),
-                    );
+                    .child(div().flex().child(card_button(
+                        "yard again".to_string(),
+                        "pair again".to_string(),
+                        palette,
+                        Some(cx.listener(|this, _, window, cx| {
+                            this.pair_again(None, window, cx)
+                        })),
+                    )));
             }
             None => {
                 for listed in &self.settings.yards {
@@ -1457,15 +1455,15 @@ impl Footplate {
         // button is theirs, beside the yard.
         if listed.member().is_some() {
             let at = format!("yard pair this {name}");
-            actions = actions.child(
-                small_button("pair this device".to_string(), palette)
-                    .id(SharedString::from(at.clone()))
-                    .debug_selector(move || at.clone())
-                    .on_click(cx.listener({
-                        let name = name.clone();
-                        move |this, _, window, cx| this.pair_this_device(&name, window, cx)
-                    })),
-            );
+            actions = actions.child(card_button(
+                at.clone(),
+                "pair this device".to_string(),
+                palette,
+                Some(cx.listener({
+                    let name = name.clone();
+                    move |this, _, window, cx| this.pair_this_device(&name, window, cx)
+                })),
+            ));
         }
         let at = format!("yard menu {name}");
         actions = actions.child(
@@ -2060,34 +2058,32 @@ impl Footplate {
                     if why == session::SIGN_IN_AGAIN {
                         let again = name.clone();
                         second = second.child(
-                            small_button("sign in again".to_string(), palette)
-                                .id(SharedString::from(format!("switch sign in {name}")))
-                                .debug_selector({
-                                    let name = name.clone();
-                                    move || format!("switch sign in {name}")
-                                })
-                                .flex_none()
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                            card_button(
+                                format!("switch sign in {name}"),
+                                "sign in again".to_string(),
+                                palette,
+                                Some(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     this.switching = None;
                                     this.sign_in_again(&again, window, cx);
                                 })),
+                            )
+                            .flex_none(),
                         );
                     } else if yard.is_far() {
                         let again = name.clone();
                         second = second.child(
-                            small_button("pair again".to_string(), palette)
-                                .id(SharedString::from(format!("switch again {name}")))
-                                .debug_selector({
-                                    let name = name.clone();
-                                    move || format!("switch again {name}")
-                                })
-                                .flex_none()
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                            card_button(
+                                format!("switch again {name}"),
+                                "pair again".to_string(),
+                                palette,
+                                Some(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     this.switching = None;
                                     this.pair_again(Some(again.clone()), window, cx);
                                 })),
+                            )
+                            .flex_none(),
                         );
                     }
                 }
@@ -2569,21 +2565,25 @@ impl Footplate {
                             .items_center()
                             .gap_2()
                             .children(pair_again.then(|| {
-                                small_button("pair again".to_string(), palette)
-                                    .id("pair again")
-                                    .debug_selector(|| "pair again".to_string())
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                card_button(
+                                    "pair again".to_string(),
+                                    "pair again".to_string(),
+                                    palette,
+                                    Some(cx.listener(|this, _, window, cx| {
                                         this.pair_again(None, window, cx)
-                                    }))
+                                    })),
+                                )
                             }))
                             .children(sign_in_again.then(|| {
-                                small_button("sign in again".to_string(), palette)
-                                    .id("sign in again")
-                                    .debug_selector(|| "sign in again".to_string())
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                card_button(
+                                    "sign in again".to_string(),
+                                    "sign in again".to_string(),
+                                    palette,
+                                    Some(cx.listener(|this, _, window, cx| {
                                         let name = this.yard.clone();
                                         this.sign_in_again(&name, window, cx)
-                                    }))
+                                    })),
+                                )
                             })),
                     ),
                 )

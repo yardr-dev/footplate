@@ -22,10 +22,12 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, MouseButton, PathPromptOptions, SharedString, Task, Window, div, prelude::*, rems,
+    AnyElement, AnyWindowHandle, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
+    Focusable, FontWeight, MouseButton, PathPromptOptions, SharedString, Stateful, Task, Window,
+    div, prelude::*, rems,
 };
 
+use super::ask::card_button;
 use super::small_button;
 use crate::audio::Input;
 use crate::feedback::Project;
@@ -1335,6 +1337,25 @@ impl FirstRun {
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
     }
 
+    /// The step's onward button: the one filled button, standing as the one
+    /// to take, with the keys kept where they are as `button` keeps them.
+    /// Quiet, taking no click, while the step is busy or where the step
+    /// passes none: a click then would be refused anyway.
+    fn onward(
+        &self,
+        id: String,
+        text: &str,
+        palette: Palette,
+        click: Option<impl Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
+    ) -> Stateful<Div> {
+        let click = match self.busy.is_some() {
+            true => None,
+            false => click,
+        };
+        card_button(id, text.to_string(), palette, click)
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+    }
+
     /// A field with its name before it.
     fn typed(
         &self,
@@ -1391,9 +1412,13 @@ impl FirstRun {
                         _ => "try again",
                     };
                     body.push(
-                        self.button("setup again".to_string(), label, palette)
-                            .on_click(cx.listener(|this, _, _, cx| this.install_yardr(cx)))
-                            .into_any_element(),
+                        self.onward(
+                            "setup again".to_string(),
+                            label,
+                            palette,
+                            Some(cx.listener(|this, _, _, cx| this.install_yardr(cx))),
+                        )
+                        .into_any_element(),
                     );
                 }
             }
@@ -1435,11 +1460,14 @@ impl FirstRun {
                                 .on_click(cx.listener(|this, _, _, cx| this.check_again(cx))),
                         )
                         .child(
-                            self.button("setup go on".to_string(), "go on", palette)
-                                .when(!ready, |el| el.opacity(0.5))
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.go_on(window, cx)),
-                                ),
+                            self.onward(
+                                "setup go on".to_string(),
+                                "go on",
+                                palette,
+                                ready.then(|| {
+                                    cx.listener(|this, _, window, cx| this.go_on(window, cx))
+                                }),
+                            ),
                         )
                         .into_any_element(),
                 );
@@ -1513,18 +1541,16 @@ impl FirstRun {
                                 .flex()
                                 .flex_wrap()
                                 .gap_2()
-                                .child(
-                                    self.button(
-                                        "setup path add".to_string(),
-                                        &format!("add it to {file}"),
-                                        palette,
-                                    )
-                                    .on_click(
+                                .child(self.onward(
+                                    "setup path add".to_string(),
+                                    &format!("add it to {file}"),
+                                    palette,
+                                    Some(
                                         cx.listener(|this, _, window, cx| {
                                             this.add_line(window, cx)
                                         }),
                                     ),
-                                )
+                                ))
                                 .child(
                                     self.button("setup path later".to_string(), "not now", palette)
                                         .on_click(cx.listener(|this, _, window, cx| {
@@ -1537,12 +1563,14 @@ impl FirstRun {
                     None => body.push(
                         div()
                             .flex()
-                            .child(
-                                self.button("setup path go on".to_string(), "go on", palette)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.past_terminal(window, cx)
-                                    })),
-                            )
+                            .child(self.onward(
+                                "setup path go on".to_string(),
+                                "go on",
+                                palette,
+                                Some(cx.listener(|this, _, window, cx| {
+                                    this.past_terminal(window, cx)
+                                })),
+                            ))
                             .into_any_element(),
                     ),
                 }
@@ -1670,10 +1698,12 @@ impl FirstRun {
                 body.push(
                     div()
                         .flex()
-                        .child(
-                            self.button("setup create".to_string(), "create (enter)", palette)
-                                .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
-                        )
+                        .child(self.onward(
+                            "setup create".to_string(),
+                            "create (enter)",
+                            palette,
+                            Some(cx.listener(|this, _, _, cx| this.create(cx))),
+                        ))
                         .into_any_element(),
                 );
             }
@@ -1689,10 +1719,12 @@ impl FirstRun {
                                 .flex()
                                 .flex_wrap()
                                 .gap_2()
-                                .child(
-                                    self.button("setup log in".to_string(), "log in", palette)
-                                        .on_click(cx.listener(|this, _, _, cx| this.log_in(cx))),
-                                )
+                                .child(self.onward(
+                                    "setup log in".to_string(),
+                                    "log in",
+                                    palette,
+                                    Some(cx.listener(|this, _, _, cx| this.log_in(cx))),
+                                ))
                                 .child(
                                     self.button(
                                         "setup logged in".to_string(),
@@ -1711,14 +1743,12 @@ impl FirstRun {
                         body.push(
                             div()
                                 .flex()
-                                .child(
-                                    self.button(
-                                        "setup logged in".to_string(),
-                                        "it is logged in",
-                                        palette,
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| this.skip_login(cx))),
-                                )
+                                .child(self.onward(
+                                    "setup logged in".to_string(),
+                                    "it is logged in",
+                                    palette,
+                                    Some(cx.listener(|this, _, _, cx| this.skip_login(cx))),
+                                ))
                                 .into_any_element(),
                         );
                     }
@@ -1732,10 +1762,12 @@ impl FirstRun {
                 body.push(
                     div()
                         .flex()
-                        .child(
-                            self.button("setup start".to_string(), "start the yard", palette)
-                                .on_click(cx.listener(|this, _, _, cx| this.start(cx))),
-                        )
+                        .child(self.onward(
+                            "setup start".to_string(),
+                            "start the yard",
+                            palette,
+                            Some(cx.listener(|this, _, _, cx| this.start(cx))),
+                        ))
                         .into_any_element(),
                 );
             }
@@ -1813,10 +1845,12 @@ impl FirstRun {
             .flex()
             .flex_wrap()
             .gap_2()
-            .child(
-                self.button(id.to_string(), text, palette)
-                    .on_click(cx.listener(move |this, _, _, cx| does(this, cx))),
-            )
+            .child(self.onward(
+                id.to_string(),
+                text,
+                palette,
+                Some(cx.listener(move |this, _, _, cx| does(this, cx))),
+            ))
             .child(
                 self.button("setup later".to_string(), "not now", palette)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1886,10 +1920,12 @@ impl FirstRun {
                 asks.push(
                     div()
                         .flex()
-                        .child(
-                            self.button("setup code".to_string(), "send (enter)", palette)
-                                .on_click(cx.listener(|this, _, _, cx| this.give_code(cx))),
-                        )
+                        .child(self.onward(
+                            "setup code".to_string(),
+                            "send (enter)",
+                            palette,
+                            Some(cx.listener(|this, _, _, cx| this.give_code(cx))),
+                        ))
                         .into_any_element(),
                 );
             }
@@ -1900,12 +1936,14 @@ impl FirstRun {
                         .flex()
                         .flex_wrap()
                         .gap_2()
-                        .child(
-                            self.button("setup prove".to_string(), "check it", palette)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.answer(|login| login.confirm(true), cx)
-                                })),
-                        )
+                        .child(self.onward(
+                            "setup prove".to_string(),
+                            "check it",
+                            palette,
+                            Some(cx.listener(|this, _, _, cx| {
+                                this.answer(|login| login.confirm(true), cx)
+                            })),
+                        ))
                         .child(
                             self.button("setup no proof".to_string(), "go on without", palette)
                                 .on_click(cx.listener(|this, _, _, cx| {

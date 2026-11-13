@@ -99,8 +99,8 @@
 # under the page's last rows, where the more row is), `waiting` (the
 # Decide list with three beads parked for jo's move under the open ask,
 # one of them open on its card with the moves the yard offers),
-# `waiting-folded` (that list with the Waiting section folded to its
-# head and count, the card still open), `waiting-end` (that card
+# `waiting-folded` (that list with the "Beads to move" section folded
+# to its head and count, the card still open), `waiting-end` (that card
 # at its end, where the moves and the line for their note are),
 # `waiting-many` (one bead served ten plain moves, open on its card
 # at its end, folded behind the one control),

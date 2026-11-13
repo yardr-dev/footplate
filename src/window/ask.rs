@@ -679,13 +679,15 @@ pub(crate) fn approve_button(
 /// The primary button: one filled button, standing as the one to take,
 /// with what a click on it does: a card's that sends or approves, or the
 /// away screen's that sets a yard up. Without that it is drawn quiet, and
-/// takes no click.
+/// takes no click. The stateful element itself is returned, so a caller
+/// with more to say (the switcher's no-shrink, the first run's kept keys)
+/// can say it.
 pub(crate) fn card_button(
     id: String,
     text: String,
     palette: Palette,
     click: Option<impl Fn(&ClickEvent, &mut Window, &mut App) + 'static>,
-) -> impl IntoElement {
+) -> Stateful<Div> {
     let enabled = click.is_some();
     div()
         .id(SharedString::from(id.clone()))

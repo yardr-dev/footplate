@@ -18,12 +18,15 @@ else), `scripts/` release, screenshot and shell-test helpers, `assets/`
 icons, the Linux polkit action and the Linux desktop entry, `docs/` the manual
 and `docs/design/` decision notes, `.yardr/` the yard's gate, `.github/` the
 Windows jobs (build and test, which the gate does not try, and the release's
-Windows zip), `spikes/` throwaway programs that try a provider or a dependency
-before the product takes it, each its own cargo package and its own workspace,
-so that neither the gate nor a release sees it: `spikes/voice-harness/` is the
-GPT-Live voice session of `docs/design/2026-10-31-footplate-vqze-voice.md`, run
-by a person with a key (its `RUN.md` has the command); it is deleted when
-`src/voice.rs` and `src/audio.rs` take what it proved.
+Windows zip) and the AUR's (`aur.yml`), `packaging/arch/` the Arch packages
+(`footplate-bin` from a release, `footplate-git` from the newest commit; its
+`README.md` says how they are bumped and published), `spikes/` throwaway
+programs that try a provider or a dependency before the product takes it, each
+its own cargo package and its own workspace, so that neither the gate nor a
+release sees it: `spikes/voice-harness/` is the GPT-Live voice session of
+`docs/design/2026-10-31-footplate-vqze-voice.md`, run by a person with a key
+(its `RUN.md` has the command); it is deleted when `src/voice.rs` and
+`src/audio.rs` take what it proved.
 
 The window, its state and the yard:
 
@@ -438,6 +441,10 @@ Setup, release and tests:
   (another repository), which refuses a member it does not know; one in the
   Windows zip is zipped in the workflow, checked in `scripts/release.sh` and
   `scripts/test-release.sh`, and added to `sync-release` the same way.
+  The AUR follows a release by itself: `.github/workflows/aur.yml` runs on
+  its tag, bumps `packaging/arch/footplate-bin` to what yardr.dev's
+  `latest.json` names and pushes both packages, committing nothing back
+  here.
 
 ## Conventions
 

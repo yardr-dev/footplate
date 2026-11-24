@@ -1,0 +1,123 @@
+# Publishes the Arch packages in packaging/arch to the AUR: footplate-bin,
+# bumped to the release latest.json names, and footplate-git when its files
+# differ. Needs the AUR_SSH_PRIVATE_KEY secret to push; without it the job
+# validates and ends green. It does not commit the bump back to the repository.
+name: AUR
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+# A tag's run and a run by hand would race to push the same AUR repositories.
+concurrency:
+  group: aur
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # Bash with pipefail: a makepkg that fails in front of a pipe fails the step.
+    shell: bash
+
+jobs:
+  aur:
+    # A prerelease tag (v1.0.0-rc1) is not published, and a run by hand on a
+    # branch other than main is not either.
+    if: >-
+      (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch')
+      || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-'))
+    # The environment holds AUR_SSH_PRIVATE_KEY and is the real control over
+    # which refs may reach it (deployment branches: main and v* tags). The
+    # ref guard above is only an accident guard.
+    environment: aur
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 30
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm git openssh python curl minisign
+
+      - uses: actions/checkout@v4
+
+      # makepkg refuses root: a builder user owns the packaging tree.
+      - name: Make an unprivileged user
+        run: |
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Wait for the release (tag push)
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          for i in $(seq 1 10); do
+            ver=$(curl -fsS https://yardr.dev/releases/footplate/latest.json \
+              | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["version"])' || true)
+            if [ "${ver#v}" = "${TAG#v}" ]; then echo "latest.json names $TAG"; exit 0; fi
+            echo "try $i of 10: latest.json names '${ver:-nothing}', waiting for $TAG"
+            if [ "$i" -lt 10 ]; then sleep 60; fi
+          done
+          echo "::error::latest.json never named $TAG after 10 tries; run this workflow by hand once scripts/release.sh has published it"
+          exit 1
+
+      # A manual run takes whatever latest.json names. (In a container job
+      # ${{ github.workspace }} is the host's path, so the steps go by
+      # working-directory, which the runner maps into the container.)
+      - name: Bump footplate-bin
+        working-directory: packaging/arch/footplate-bin
+        run: su builder -c ./update
+
+      - name: Validate footplate-bin
+        working-directory: packaging/arch/footplate-bin
+        run: |
+          su builder -c 'makepkg --verifysource'
+          su builder -c 'makepkg --printsrcinfo' | diff - .SRCINFO
+
+      # The key is in this step's environment alone, not in the ones that run
+      # update and makepkg.
+      - name: Push to the AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::notice::AUR_SSH_PRIVATE_KEY is not set: validated, nothing pushed to the AUR"
+            exit 0
+          fi
+          # ssh finds ~/.ssh by the passwd entry (/root), not by $HOME, which
+          # a container job sets to /github/home: name both files outright.
+          # The AUR's host keys are committed (aur_known_hosts), not scanned.
+          ssh_dir=$(mktemp -d)
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$ssh_dir/aur"
+          chmod 600 "$ssh_dir/aur"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$PWD/packaging/arch/aur_known_hosts -o StrictHostKeyChecking=yes"
+          git config --global user.name "footplate AUR"
+          git config --global user.email "noreply@users.noreply.github.com"
+          git config --global init.defaultBranch master
+          version() { awk '$1 == "pkgver" { v = $3 } $1 == "pkgrel" { r = $3 } END { print v "-" r }' "$1"; }
+          for pkg in footplate-bin footplate-git; do
+            aur=$(mktemp -d)/$pkg
+            git clone "ssh://aur@aur.archlinux.org/$pkg.git" "$aur"
+            # footplate-bin never goes back: an older release's checksums.txt
+            # is signed too, so a latest.json that names one passes update.
+            # (footplate-git's committed version may lag the AUR's harmlessly.)
+            if [ "$pkg" = footplate-bin ] && [ -f "$aur/.SRCINFO" ]; then
+              was=$(version "$aur/.SRCINFO")
+              now=$(version "packaging/arch/$pkg/.SRCINFO")
+              if [ "$(vercmp "$now" "$was")" -lt 0 ]; then
+                echo "::error::$pkg: the AUR has $was, newer than $now; refusing to push it back"
+                exit 1
+              fi
+            fi
+            cp "packaging/arch/$pkg/PKGBUILD" "packaging/arch/$pkg/.SRCINFO" "$aur/"
+            if [ -z "$(git -C "$aur" status --porcelain)" ]; then
+              echo "$pkg: AUR is current"
+              continue
+            fi
+            ver=$(version "$aur/.SRCINFO")
+            git -C "$aur" add PKGBUILD .SRCINFO
+            git -C "$aur" commit -m "Update to $ver"
+            git -C "$aur" push
+          done

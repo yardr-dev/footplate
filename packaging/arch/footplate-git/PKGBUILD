@@ -1,0 +1,75 @@
+# Maintainer: Christopher Scott <christopher.scott@mckean.co>
+# Contributor: Diego Renner <drenner.business@gmail.com>
+# footplate from the newest commit on GitHub: a VCS (-git) package, as the
+# AUR takes one. The version is read from git at build time (pkgver below),
+# so the file never needs editing for a new commit: makepkg (or an AUR
+# helper) rebuilds whenever the checkout moved.
+
+pkgname=footplate-git
+_pkgname=footplate
+pkgver=0.10.0.r34.g27e21de
+pkgrel=1
+pkgdesc="A native window onto a yardr yard: talk with the crew, and with the crew a linked yard exposes"
+arch=(x86_64 aarch64)
+url="https://github.com/yardr-dev/footplate"
+license=('LicenseRef-FSL-1.1-ALv2')
+# What the program links to: gpui draws through Vulkan on X11 or Wayland,
+# a voice session goes through ALSA, and the icon stands in the hicolor
+# theme. The polkit action is optional: without it a weighty card asks for
+# the ask's number instead of the password.
+depends=(gcc-libs glibc fontconfig freetype2 libxkbcommon libxkbcommon-x11
+         libx11 libxcb wayland vulkan-icd-loader vulkan-driver alsa-lib
+         hicolor-icon-theme)
+makedepends=(git cargo pkgconf)
+optdepends=('polkit: unlock a weighty approval with your password')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+# No LTO: with it the ring crate's C code is compiled to GCC bitcode
+# (-flto=auto), which Rust's lld cannot link (undefined ring_core_* symbols).
+options=('!lto')
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$_pkgname"
+    # v0.9.0-13-g022a38d -> 0.9.0.r13.g022a38d
+    git describe --long --tags | sed 's/^v//; s/\([^-]*-g\)/r\1/; s/-/./g'
+}
+
+prepare() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    # The unit tests (1100+). The screenshot suites need a display and a
+    # yardr and are not run here. One thread: the tests of the login shell
+    # start and stop shells, and in the parallel run one of them fails now
+    # and then under load, which single-threading avoids.
+    cargo test --frozen --release --bin footplate -- --test-threads=1
+}
+
+package() {
+    cd "$_pkgname"
+    install -Dm755 target/release/footplate "$pkgdir/usr/bin/footplate"
+    # The archive's entry runs ~/.local/bin/footplate through sh; a system
+    # install runs the one on PATH.
+    sed 's|^Exec=.*|Exec=footplate|' assets/linux/footplate.desktop \
+        | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/footplate.desktop"
+    install -Dm644 assets/icon-512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/footplate.png"
+    install -Dm644 assets/linux/dev.yardr.footplate.policy \
+        "$pkgdir/usr/share/polkit-1/actions/dev.yardr.footplate.policy"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

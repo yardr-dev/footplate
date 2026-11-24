@@ -1,0 +1,53 @@
+# Maintainer: Christopher Scott <christopher.scott@mckean.co>
+# Contributor: Diego Renner <drenner.business@gmail.com>
+# footplate from its releases on yardr.dev: the Linux archive the release
+# carries for this machine, installed as it is. A release is pinned here with
+# its checksum, as the AUR wants; ./update reads
+# https://yardr.dev/releases/footplate/latest.json, verifies the release's
+# signed checksums.txt, and rewrites pkgver, the checksums and .SRCINFO when a
+# newer one is out.
+
+pkgname=footplate-bin
+_pkgname=footplate
+pkgver=0.10.0
+pkgrel=1
+pkgdesc="A native window onto a yardr yard: talk with the crew, and with the crew a linked yard exposes (release binary)"
+arch=(x86_64 aarch64)
+url="https://github.com/yardr-dev/footplate"
+license=('LicenseRef-FSL-1.1-ALv2')
+# What the release binary links to (it is built on Debian 13): gpui draws
+# through Vulkan on X11 or Wayland, a voice session goes through ALSA, and the
+# icon stands in the hicolor theme.
+depends=(gcc-libs glibc fontconfig freetype2 libxkbcommon libxkbcommon-x11
+         libx11 libxcb wayland vulkan-icd-loader vulkan-driver alsa-lib
+         hicolor-icon-theme)
+optdepends=('polkit: unlock a weighty approval with your password')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+# A release binary: no debug split package from its symbols.
+options=('!debug')
+_base="https://yardr.dev/releases/footplate/v$pkgver"
+source_x86_64=("$_base/footplate_${pkgver}_linux_amd64.tar.gz")
+source_aarch64=("$_base/footplate_${pkgver}_linux_arm64.tar.gz")
+# The polkit action is not in the archive: it comes from the tag's repository,
+# named by version so that a copy kept from an older release is not taken.
+source=("dev.yardr.footplate-$pkgver.policy::https://raw.githubusercontent.com/yardr-dev/footplate/v$pkgver/assets/linux/dev.yardr.footplate.policy")
+sha256sums=('a18ebfe9bfbffe78f6b2b0ca497423b3f19582098f79fa1a5176472e44fb7681')
+sha256sums_x86_64=('a8990b0ceb6eb15825eb27a65225b11db1084c6e313543d3a9d2e5169af77d27')
+sha256sums_aarch64=('ee9be3ec216664a4fb5c021eca24a43e0f6b746bd2765c3bd3f46a6043cf12e8')
+
+package() {
+    # The archive is flat: footplate, footplate.desktop, footplate.png,
+    # README.md, LICENSE, NOTICE (plus macOS's ._ shadows, left alone).
+    install -Dm755 footplate "$pkgdir/usr/bin/footplate"
+    # The archive's entry runs ~/.local/bin/footplate through sh; a system
+    # install runs the one on PATH.
+    sed 's|^Exec=.*|Exec=footplate|' footplate.desktop \
+        | install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/footplate.desktop"
+    install -Dm644 footplate.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/footplate.png"
+    install -Dm644 "$srcdir/dev.yardr.footplate-$pkgver.policy" \
+        "$pkgdir/usr/share/polkit-1/actions/dev.yardr.footplate.policy"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

@@ -1,0 +1,39 @@
+#!/bin/sh
+# Bumps PKGBUILD to the release https://yardr.dev/releases/footplate/latest.json
+# names: pkgver, both checksums (from latest.json, then checked against the
+# release's checksums.txt, whose minisign signature is verified first), the
+# polkit action's checksum (that file at the tag), pkgrel back to 1, and
+# .SRCINFO. Needs minisign. Prints what it
+# did. Run it in this directory; it changes nothing when already current.
+set -eu
+cd "$(dirname "$0")"
+# The release key: the PUBKEY default of scripts/release-stage (key id
+# 0ECCFE6E81F150B3), which signs each release's checksums.txt.
+pubkey=RWSzUPGBbv7MDqH+nnbNmYdOm20UTkuk7eC5e6XuVtYRwZtaEZRlV/WB
+json=$(curl -fsS https://yardr.dev/releases/footplate/latest.json)
+ver=$(printf '%s' "$json" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["version"].lstrip("v"))')
+cur=$(sed -n 's/^pkgver=//p' PKGBUILD)
+if [ "$ver" = "$cur" ]; then echo "update: already at $cur, the latest release"; exit 0; fi
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+base=https://yardr.dev/releases/footplate/v$ver
+curl -fsS "$base/checksums.txt" -o "$work/checksums.txt"
+curl -fsS "$base/checksums.txt.minisig" -o "$work/checksums.txt.minisig" \
+    || { echo "update: v$ver has no checksums.txt.minisig; refusing" >&2; exit 1; }
+minisign -Vm "$work/checksums.txt" -x "$work/checksums.txt.minisig" -P "$pubkey" >/dev/null \
+    || { echo "update: checksums.txt of v$ver is not signed by the release key; refusing" >&2; exit 1; }
+sums=$(cat "$work/checksums.txt")
+amd=$(printf '%s\n' "$sums" | awk -v f="footplate_${ver}_linux_amd64.tar.gz" '$2==f{print $1}')
+arm=$(printf '%s\n' "$sums" | awk -v f="footplate_${ver}_linux_arm64.tar.gz" '$2==f{print $1}')
+jamd=$(printf '%s' "$json" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["targets"]["linux_amd64"]["sha256"])')
+jarm=$(printf '%s' "$json" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["targets"]["linux_arm64"]["sha256"])')
+[ -n "$amd" ] && [ -n "$arm" ] || { echo "update: v$ver has no Linux archive in checksums.txt" >&2; exit 1; }
+[ "$amd" = "$jamd" ] && [ "$arm" = "$jarm" ] || { echo "update: latest.json and checksums.txt disagree for v$ver" >&2; exit 1; }
+# Fetched to a file, not piped: sh has no pipefail, and a failed fetch would
+# write the checksum of nothing.
+curl -fsS "https://raw.githubusercontent.com/yardr-dev/footplate/v$ver/assets/linux/dev.yardr.footplate.policy" -o "$work/policy" \
+    || { echo "update: v$ver has no assets/linux/dev.yardr.footplate.policy at its tag" >&2; exit 1; }
+policy=$(sha256sum "$work/policy" | cut -d' ' -f1)
+sed -i "s/^sha256sums=.*/sha256sums=('$policy')/; s/^pkgver=.*/pkgver=$ver/; s/^pkgrel=.*/pkgrel=1/; s/^sha256sums_x86_64=.*/sha256sums_x86_64=('$amd')/; s/^sha256sums_aarch64=.*/sha256sums_aarch64=('$arm')/" PKGBUILD
+makepkg --printsrcinfo > .SRCINFO
+echo "update: $cur -> $ver; PKGBUILD and .SRCINFO rewritten. Check, then makepkg -si; for the AUR commit both."

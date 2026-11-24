@@ -1,0 +1,7 @@
+src/
+pkg/
+footplate/
+*.pkg.tar.*
+*.tar.gz
+*.log
+*.policy

@@ -278,6 +278,7 @@ pub const STATES: &[&str] = &[
     "lines-context",
     "lines-served",
     "crew-context",
+    "crew-prime",
     "keys",
     "about",
     "about-missing",
@@ -1485,12 +1486,12 @@ fn populate(yard: &Yard, state: &str) {
         }
         // The crew drawer's member reads the first depot's line:
         // footplate's, with the yardmaster's role prompt whole and
-        // carriable, and the operator's words with the settings.
-        if state == "crew-context" {
-            yard.answer(
-                "Settings",
-                r#"{"result": {"operator": "jo", "operator_style": "show", "operator_note": "I read diffs, not prose"}}"#,
-            );
+        // carriable, and its prime, which the Prime tab lists: the role,
+        // the operator's words, three memory titles and four more, and
+        // the rules of footplate's checkout and none of notes'.
+        if matches!(state, "crew-context" | "crew-prime") {
+            yard.answer("Settings", r#"{"result": {"operator": "jo"}}"#);
+            yard.answer("Prime", &crew_prime());
             yard.answer("Flows", &flows_frame());
             yard.answer_for(
                 "Line",
@@ -1561,6 +1562,7 @@ fn populate(yard: &Yard, state: &str) {
         | "lines-context"
         | "lines-served"
         | "crew-context"
+        | "crew-prime"
         | "line-window"
         | "line-edit"
         | "line-sent"
@@ -3640,6 +3642,39 @@ fn crew_role_text() -> String {
         + "\n"
 }
 
+/// The yardmaster's prime as the `crew-context` and `crew-prime` shots
+/// read it: its role, the operator's style and note, the three newest of
+/// seven memory titles, one of them retiring, and the rules files of
+/// footplate's checkout, the other depot having none.
+fn crew_prime() -> String {
+    json!({"result": {
+        "role": {"path": "/home/jo/.yardr/crew/yardmaster/roles/yardmaster.md",
+                 "text": crew_role_text().trim()},
+        "operator": {
+            "name": "jo",
+            "style": "show",
+            "label": "Show me",
+            "tells": "Explain briefly what you do. Show the command you run. Ask when there is a decision to make.",
+            "note": "I read diffs, not prose"},
+        "memories": [
+            {"id": "mem-freeze", "title": "The signal box is closed for the freeze",
+             "scope": "crew:yardmaster", "expires": "2026-11-27T09:30:00Z",
+             "updated_at": "2026-11-23T16:10:00Z"},
+            {"id": "mem-lamps", "title": "Lamps are lit at dusk", "scope": "all",
+             "updated_at": "2026-11-20T09:30:00Z"},
+            {"id": "mem-landing", "title": "Land one bead at a time: the base moves under a second",
+             "scope": "all", "updated_at": "2026-11-18T11:45:00Z"}],
+        "memories_omitted": 4,
+        "depots": [
+            {"name": "footplate", "rules": [
+                {"path": "/home/jo/projects/footplate/AGENTS.md",
+                 "text": "# footplate\n\nA native chat window onto a yardr yard.\n\n## Layout\n\nTop level: `src/` the program.\n"},
+                {"path": "/home/jo/projects/footplate/CLAUDE.md", "text": "@AGENTS.md\n"}]},
+            {"name": "notes", "rules": []}],
+    }})
+    .to_string()
+}
+
 fn flows_frame() -> String {
     json!({"result": {
         "travelling": 1,
@@ -4600,11 +4635,20 @@ mod tests {
                     assert_eq!(prompt.digest.len(), 64, "{state}");
                     assert!(flow.stages[1].route.is_none(), "{state}");
                 }
-                "crew-context" => {
+                "crew-context" | "crew-prime" => {
                     // The drawer's member reads the first depot's line:
                     // footplate's, with the yardmaster's role prompt
-                    // whole and carriable past the fold, and the
-                    // operator's words with the state.
+                    // whole and carriable past the fold, and its prime,
+                    // which the Prime tab lists: four items, three of
+                    // seven memory titles, and one depot with rules.
+                    let prime = yard.client().prime("yardmaster").unwrap();
+                    assert!(prime.role.is_some(), "{state}");
+                    assert_eq!(prime.operator.as_ref().unwrap().style, "show", "{state}");
+                    assert_eq!(prime.memories.len(), 3, "{state}");
+                    assert_eq!(prime.memories_omitted, 4, "{state}");
+                    assert_eq!(prime.depots.len(), 2, "{state}");
+                    assert_eq!(prime.depots[0].rules.len(), 2, "{state}");
+                    assert!(prime.depots[1].rules.is_empty(), "{state}");
                     let line = yard.client().line("footplate").unwrap();
                     assert_eq!(line.depot, "footplate", "{state}");
                     let member = line
@@ -4616,8 +4660,7 @@ mod tests {
                     assert!(prompt.carriable, "{state}");
                     assert_eq!(prompt.digest.len(), 64, "{state}");
                     assert!(prompt.text.lines().count() > 30, "{state}");
-                    assert_eq!(loaded.operator_style, "show", "{state}");
-                    assert_eq!(loaded.operator_note, "I read diffs, not prose", "{state}");
+                    assert_eq!(loaded.operator, "jo", "{state}");
                 }
                 "crew" => {
                     // The sidebar's groups full: three crew with their

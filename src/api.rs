@@ -250,22 +250,15 @@ fn concealed() -> bool {
     true
 }
 
-/// The yard's settings, of which a client reads the operator, the
-/// operator's words to their agents, the cap on a file, how many of them
-/// a mail or a note carries, and whether the yard is a hosted one.
+/// The yard's settings, of which a client reads the operator, the cap on
+/// a file, how many of them a mail or a note carries, and whether the
+/// yard is a hosted one. The operator's words to their agents are in the
+/// settings too, but the window reads them in what a prime says
+/// ([`PrimeInputs`]), where the yard has them as its sessions read them.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub operator: String,
-    /// How the operator asked agents to work with them: `guide`, `show`,
-    /// `work` or `report`. Absent when the operator has not set one, and
-    /// to a device of any user who is not an operator.
-    #[serde(default)]
-    pub operator_style: String,
-    /// The one line the operator asked agents to know about them; absent
-    /// as `operator_style` is.
-    #[serde(default)]
-    pub operator_note: String,
     /// A whole number in a string; absent when the yard has set none.
     #[serde(default)]
     pub blob_max_bytes: String,
@@ -842,6 +835,91 @@ pub struct Teammate {
     /// Their devices, by name; empty while none is paired.
     #[serde(default, deserialize_with = "or_default")]
     pub devices: Vec<TeammateDevice>,
+}
+
+/// A file a crew member's session reads at prime, as it reads it: where
+/// it stands and what it holds. A role is trimmed, with its first-run
+/// section folded where the yard's setup is done; a rules file is whole.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PrimeFile {
+    pub path: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// What a prime says about the operator. The style, the answer it stands
+/// for and what it asks of an agent come together and are empty where
+/// only the note is set; the note is empty where only the style is.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PrimeOperator {
+    /// The operator, as the yard's `operator` setting names them.
+    pub name: String,
+    /// `guide`, `show`, `work` or `report`.
+    #[serde(default)]
+    pub style: String,
+    /// The answer the style stands for, as the onboarding words it.
+    #[serde(default)]
+    pub label: String,
+    /// What the style asks of an agent, as the prime tells it.
+    #[serde(default)]
+    pub tells: String,
+    /// The one line the operator asked agents to know about them.
+    #[serde(default)]
+    pub note: String,
+}
+
+/// The title of one memory a prime lists, never its body: what a memory
+/// keeps stays in the yard.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PrimeMemory {
+    /// The id `Bead` reads the memory whole by; this window does not.
+    pub id: String,
+    pub title: String,
+    /// `all`, or `crew:<name>` for the member's own.
+    #[serde(default)]
+    pub scope: String,
+    /// When it retires itself, as an RFC 3339 time; absent for one that
+    /// never does.
+    #[serde(default)]
+    pub expires: String,
+    /// When it was last written, as an RFC 3339 time: the order of the
+    /// list, newest first.
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// One depot's standing rules for agents: the `AGENTS.md` and then the
+/// `CLAUDE.md` at the root of its checkout, where they stand. Empty for a
+/// depot with none, and for one whose checkout is gone.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PrimeDepot {
+    pub name: String,
+    #[serde(default, deserialize_with = "or_default")]
+    pub rules: Vec<PrimeFile>,
+}
+
+/// What a crew member's session reads at prime that the operator and the
+/// yard set, as `Prime` answers it: the role file, what the prime says of
+/// the operator, the titles of the memories it lists and each depot's
+/// rules. The member's own session state (handoff, inbox, timers, asks)
+/// is a prime's rest and is not here.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct PrimeInputs {
+    /// Absent where the member's config names no prompt.
+    #[serde(default)]
+    pub role: Option<PrimeFile>,
+    /// Absent on a yard with neither the operator's style nor their note.
+    #[serde(default)]
+    pub operator: Option<PrimeOperator>,
+    /// The most recently written memories the prime lists, newest first.
+    #[serde(default, deserialize_with = "or_default")]
+    pub memories: Vec<PrimeMemory>,
+    /// How many more memories the member has than the prime lists.
+    #[serde(default)]
+    pub memories_omitted: usize,
+    /// Every depot of the yard, by name.
+    #[serde(default, deserialize_with = "or_default")]
+    pub depots: Vec<PrimeDepot>,
 }
 
 /// What `UninviteTeammate` filed: the run ask's new bead and the ask's
@@ -4674,6 +4752,20 @@ impl Client {
         self.list("Teammates", json!({}))
     }
 
+    /// What the session of the crew member `crew` reads at prime that the
+    /// operator and the yard set, as `yardr prime --crew` prints it: its
+    /// role file, what the prime says of the operator, the titles of its
+    /// memories and each depot's rules files. The operator's to read, on
+    /// the yard's socket alone: the yard serves no device the call, and
+    /// answers one as a method it does not have, down the link from its
+    /// edge too, so it is never made at a yard at an address. It refuses
+    /// the whole read for a file longer than 1 MiB or one it cannot read,
+    /// naming the depot and the file. Made only when the crew drawer
+    /// opens.
+    pub fn prime(&self, crew: &str) -> Result<PrimeInputs> {
+        self.answer("Prime", json!({ "crew": crew }))
+    }
+
     /// Files the removal of a teammate: the run ask `user uninvite
     /// <user>` on a new bead, addressed to the yard's operator, and
     /// answers the bead and the ask's seq on it. It files the ask and
@@ -5603,6 +5695,7 @@ const READS: &[&str] = &[
     "SessionScreen",
     "TelemetryShow",
     "Teammates",
+    "Prime",
     "DevicePairState",
     "Bead",
     "Conversation",
@@ -9358,15 +9451,13 @@ mod tests {
             "Settings",
             r#"{"result": {"operator": "jo", "operator_style": "show", "operator_note": "I read diffs, not prose"}}"#,
         );
+        // The operator's words are in the answer, and the window takes them
+        // from the prime: the settings are read for who the operator is.
         let settings = yard.client().settings().unwrap();
         assert_eq!(settings.operator, "jo");
-        assert_eq!(settings.operator_style, "show");
-        assert_eq!(settings.operator_note, "I read diffs, not prose");
         yard.answer("Settings", r#"{"result": {"operator": "jo"}}"#);
         let settings = yard.client().settings().unwrap();
         assert_eq!(settings.operator, "jo");
-        assert_eq!(settings.operator_style, "");
-        assert_eq!(settings.operator_note, "");
         yard.answer("Settings", r#"{"result": {}}"#);
         assert_eq!(yard.client().settings().unwrap().operator, "");
     }
@@ -9784,6 +9875,115 @@ mod tests {
         // No answer at all is none.
         yard.answer("Teammates", r#"{"result": null}"#);
         assert!(yard.client().teammates().unwrap().is_empty());
+    }
+
+    /// What the yard documents for `Prime` (docs/api.md), as its example
+    /// has it: the call names the member, and the answer's four parts come
+    /// whole, each with the fields it may leave out.
+    #[test]
+    fn a_prime_comes_with_its_role_operator_memories_and_depots() {
+        let yard = Yard::start();
+        yard.answer(
+            "Prime",
+            r##"{"result": {
+                "role": {"path": "/home/jo/.yardr/crew/dispatcher/roles/dispatcher.md",
+                         "text": "# Dispatcher\n\nKeep the signals clear."},
+                "operator": {"name": "jo", "style": "show", "label": "Show me",
+                             "tells": "Explain briefly what you do.",
+                             "note": "I read diffs, not prose"},
+                "memories": [
+                    {"id": "mem-freeze", "title": "The signal box is closed for the freeze",
+                     "scope": "crew:dispatcher", "expires": "2026-10-08T09:30:00Z",
+                     "updated_at": "2026-10-08T09:30:00Z"},
+                    {"id": "mem-lamps", "title": "Lamps are lit at dusk", "scope": "all",
+                     "updated_at": "2026-10-07T09:30:00Z"}],
+                "memories_omitted": 3,
+                "depots": [
+                    {"name": "drafts", "rules": []},
+                    {"name": "notes", "rules": [
+                        {"path": "/home/jo/notes/AGENTS.md", "text": "# Notes\n"},
+                        {"path": "/home/jo/notes/CLAUDE.md", "text": "@AGENTS.md\n"}]}]
+            }}"##,
+        );
+        let prime = yard.client().prime("dispatcher").unwrap();
+        assert_eq!(yard.asked("Prime"), vec![json!({"crew": "dispatcher"})]);
+        let role = prime.role.as_ref().unwrap();
+        assert_eq!(
+            role.path.as_str(),
+            "/home/jo/.yardr/crew/dispatcher/roles/dispatcher.md"
+        );
+        assert_eq!(
+            role.text.as_str(),
+            "# Dispatcher\n\nKeep the signals clear."
+        );
+        let operator = prime.operator.as_ref().unwrap();
+        assert_eq!(operator.name.as_str(), "jo");
+        assert_eq!(operator.style.as_str(), "show");
+        assert_eq!(operator.label.as_str(), "Show me");
+        assert_eq!(operator.tells.as_str(), "Explain briefly what you do.");
+        assert_eq!(operator.note.as_str(), "I read diffs, not prose");
+        assert_eq!(prime.memories.len(), 2);
+        assert_eq!(prime.memories[0].id.as_str(), "mem-freeze");
+        assert_eq!(prime.memories[0].scope.as_str(), "crew:dispatcher");
+        assert_eq!(prime.memories[0].expires.as_str(), "2026-10-08T09:30:00Z");
+        assert_eq!(
+            prime.memories[0].updated_at.as_str(),
+            "2026-10-08T09:30:00Z"
+        );
+        // A memory that never retires has no expiry.
+        assert!(prime.memories[1].expires.is_empty());
+        assert_eq!(prime.memories_omitted, 3);
+        assert_eq!(prime.depots.len(), 2);
+        assert!(prime.depots[0].rules.is_empty());
+        assert_eq!(prime.depots[1].name.as_str(), "notes");
+        assert_eq!(prime.depots[1].rules.len(), 2);
+        assert_eq!(
+            prime.depots[1].rules[1].path.as_str(),
+            "/home/jo/notes/CLAUDE.md"
+        );
+        assert_eq!(prime.depots[1].rules[1].text.as_str(), "@AGENTS.md\n");
+
+        // A member whose config names no prompt has no role, a yard with
+        // neither of the operator's words says nothing of them, a note
+        // alone carries no style, and a list the yard sends as null is
+        // empty.
+        yard.answer(
+            "Prime",
+            r#"{"result": {"operator": {"name": "jo", "note": "I read diffs, not prose"},
+                "memories": null, "memories_omitted": 0, "depots": null}}"#,
+        );
+        let prime = yard.client().prime("assembly").unwrap();
+        assert_eq!(yard.asked("Prime")[1], json!({"crew": "assembly"}));
+        assert_eq!(prime.role, None);
+        let operator = prime.operator.as_ref().unwrap();
+        assert_eq!(operator.note.as_str(), "I read diffs, not prose");
+        assert!(
+            operator.style.is_empty() && operator.label.is_empty() && operator.tells.is_empty()
+        );
+        assert!(prime.memories.is_empty());
+        assert!(prime.depots.is_empty());
+        yard.answer("Prime", r#"{"result": {"memories": [], "depots": []}}"#);
+        assert_eq!(
+            yard.client().prime("assembly").unwrap(),
+            PrimeInputs::default()
+        );
+
+        // The yard refuses the whole read for a file it cannot give, in
+        // words that name the depot and the file, and says it has no such
+        // method where it is from before the call.
+        yard.answer(
+            "Prime",
+            r#"{"error": {"code": "error", "message": "depot notes: /home/jo/notes/AGENTS.md is longer than 1048576 bytes"}}"#,
+        );
+        assert!(matches!(
+            yard.client().prime("assembly"),
+            Err(Error::Refused { message, .. }) if message.contains("depot notes: /home/jo/notes/AGENTS.md")
+        ));
+        let old = Yard::start();
+        assert!(matches!(
+            old.client().prime("assembly"),
+            Err(Error::Refused { message, .. }) if message == "no such method Prime"
+        ));
     }
 
     #[test]

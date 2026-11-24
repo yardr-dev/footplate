@@ -18,7 +18,10 @@ use super::Footplate;
 use super::expanded_text_key;
 use super::metrics::{CONTEXT_WIDTH, context_beside, grown};
 use super::ui::{file_glyph, small_button};
-use crate::api::{Line, LineFlow, LineGroup, LinePrompt, LineStage};
+use crate::api::{
+    Line, LineFlow, LineGroup, LinePrompt, LineStage, PrimeDepot, PrimeFile, PrimeInputs,
+    PrimeMemory, PrimeOperator,
+};
 use crate::model::{self, ContextSubject, Model, PromptOwner};
 use crate::select;
 use crate::theme::{Palette, TYPE_BODY, TYPE_CODE, TYPE_LABEL, TYPE_META};
@@ -172,24 +175,339 @@ fn prime_command(member: &str) -> String {
     format!("yardr prime --crew {member}")
 }
 
-/// The Prime tab's second item, where the settings carry either of the
-/// operator's words: their values, and whose settings they are. `None`
-/// where the answer carries neither, and the Prime tab shows the role
-/// alone.
-fn prime_operator_words(style: &str, note: &str) -> Option<(String, String)> {
-    let values = [style, note]
-        .into_iter()
-        .filter(|value| !value.is_empty())
+/// Words a crew member or the operator wrote, as one line of letters: no
+/// control character, no mark of direction, and a run of spaces, tabs or
+/// line breaks one space. A memory's title is a crew member's, and shown
+/// as text and nothing else.
+fn prime_one_line(words: &str) -> String {
+    model::letters(words)
+        .split_whitespace()
         .collect::<Vec<_>>()
-        .join(" · ");
-    if values.is_empty() {
+        .join(" ")
+}
+
+/// What the Prime tab's operator item says: the style with the answer it
+/// stands for, what the style asks of an agent, and their note, each
+/// where the prime carries it, and whose words they are.
+#[derive(Debug, PartialEq)]
+struct OperatorWords {
+    style: Option<String>,
+    tells: Option<String>,
+    note: Option<String>,
+    whose: String,
+}
+
+/// The Prime tab's operator item, from what the prime says of them. `None`
+/// where it carries neither their style nor their note, and the tab then
+/// has no such item: the prime of a yard that has set neither says
+/// nothing of them.
+fn prime_operator_words(operator: &PrimeOperator) -> Option<OperatorWords> {
+    let one_line = |words: &str| Some(prime_one_line(words)).filter(|words| !words.is_empty());
+    let style = one_line(&operator.style).map(|style| match one_line(&operator.label) {
+        Some(label) => format!("{style} · {label}"),
+        None => style,
+    });
+    let note = one_line(&operator.note);
+    if style.is_none() && note.is_none() {
         return None;
     }
-    let whose = match (!style.is_empty(), !note.is_empty()) {
-        (true, true) => "the yard's settings · every session reads both",
-        _ => "the yard's settings",
+    let whose = match one_line(&operator.name) {
+        Some(name) => format!("{name}'s settings"),
+        None => "the yard's settings".to_string(),
     };
-    Some((values, whose.to_string()))
+    Some(OperatorWords {
+        tells: one_line(&operator.tells).filter(|_| style.is_some()),
+        whose: match (style.is_some(), note.is_some()) {
+            (true, true) => format!("{whose} · every session reads both"),
+            _ => whose,
+        },
+        style,
+        note,
+    })
+}
+
+/// How many items the Prime tab lists of a prime: its role, memories and
+/// depots' rules, which it always lists, with the words that say where
+/// one has nothing, and the operator's where the prime carries them.
+fn prime_items(prime: &PrimeInputs) -> usize {
+    3 + usize::from(
+        prime
+            .operator
+            .as_ref()
+            .and_then(prime_operator_words)
+            .is_some(),
+    )
+}
+
+/// The Prime tab's label: its items counted where a prime stands read,
+/// and the word alone where none does (it is being read, or the yard
+/// serves none to this window).
+pub(super) fn prime_label(prime: Option<&PrimeInputs>) -> String {
+    match prime {
+        Some(prime) => format!("Prime · {}", prime_items(prime)),
+        None => "Prime".to_string(),
+    }
+}
+
+/// A role's or a rules file's quiet line: its lines counted, and for the
+/// role that it stands as its session reads it, trimmed and with its
+/// first-run steps folded once the setup is done.
+fn prime_file_meta(lines: usize, role: bool) -> String {
+    match role {
+        true => format!("{} · as its session reads it", counted_lines(lines)),
+        false => counted_lines(lines),
+    }
+}
+
+/// A memory's quiet line in the Prime tab: whose it is (the yard's, or
+/// the member's own), and when it retires where it does.
+fn prime_memory_meta(memory: &PrimeMemory, member: &str) -> String {
+    let whose = match memory.scope.as_str() {
+        "all" => "the yard's".to_string(),
+        scope => match scope.strip_prefix("crew:") {
+            Some(owner) if owner == member => format!("{member}'s own"),
+            _ => prime_one_line(scope),
+        },
+    };
+    match (whose.is_empty(), model::grant_time(&memory.expires)) {
+        (_, until) if until.is_empty() => whose,
+        (true, until) => format!("until {until}"),
+        (false, until) => format!("{whose} · until {until}"),
+    }
+}
+
+/// What the Prime tab's memories item says of the memories the prime
+/// leaves out, as the yard counts them.
+fn prime_more_words(omitted: usize) -> Option<String> {
+    (omitted > 0).then(|| format!("{omitted} more"))
+}
+
+/// What a drawer says where the window is not the operator's: the yard
+/// reads the crew's prompts and primes to its operator alone.
+const OPERATOR_ONLY: &str = "The context drawer is the operator's.";
+
+/// A Prime item's title: the meta role in medium weight.
+fn prime_title(words: &str, palette: Palette) -> Div {
+    div()
+        .text_size(rems(TYPE_META))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette.text)
+        .child(words.to_string())
+}
+
+/// A line of a Prime item in the code role, in the mono face where the
+/// window has one: a path, a name, a setting's value.
+fn prime_code(words: String, mono: Option<&SharedString>, palette: Palette) -> Div {
+    let code = div()
+        .text_size(rems(TYPE_CODE))
+        .text_color(palette.text)
+        .child(words);
+    match mono {
+        Some(mono) => code.font_family(mono.clone()),
+        None => code,
+    }
+}
+
+/// A line of a Prime item in the meta role, in the text colour: what the
+/// item says.
+fn prime_text(words: String, palette: Palette) -> Div {
+    div()
+        .text_size(rems(TYPE_META))
+        .text_color(palette.text)
+        .child(words)
+}
+
+/// A line of a Prime item in the meta role, quiet: of what it says, or
+/// whose it is.
+fn prime_quiet(words: String, palette: Palette) -> Div {
+    div()
+        .text_size(rems(TYPE_META))
+        .text_color(palette.faint)
+        .child(words)
+}
+
+/// The lines of the Prime tab's role item: the file it was read from and
+/// its lines, or that the member's config names no prompt. A file's text
+/// is counted and never drawn, here and in the depots' rules: what a
+/// checkout holds is not the window's to show.
+fn prime_role_lines(
+    role: Option<&PrimeFile>,
+    mono: Option<&SharedString>,
+    palette: Palette,
+) -> Vec<Div> {
+    let mut lines = vec![prime_title("Its role", palette)];
+    match role {
+        Some(file) => {
+            lines.push(prime_code(
+                model::line_path_words(&model::letters(&file.path)),
+                mono,
+                palette,
+            ));
+            lines.push(prime_quiet(
+                prime_file_meta(file.text.lines().count(), true),
+                palette,
+            ));
+        }
+        None => lines.push(prime_quiet("no prompt".to_string(), palette)),
+    }
+    lines
+}
+
+/// The lines of the Prime tab's operator item: the style, what it asks of
+/// an agent and the note, each where the prime carries it, and whose they
+/// are.
+fn prime_operator_lines(
+    words: OperatorWords,
+    mono: Option<&SharedString>,
+    palette: Palette,
+) -> Vec<Div> {
+    let mut lines = vec![prime_title("How to work with you", palette)];
+    lines.extend(words.style.map(|style| prime_code(style, mono, palette)));
+    lines.extend(words.tells.map(|tells| prime_text(tells, palette)));
+    lines.extend(words.note.map(|note| prime_code(note, mono, palette)));
+    lines.push(prime_quiet(words.whose, palette));
+    lines
+}
+
+/// The lines of the Prime tab's memories item: a title each with its
+/// quiet line under it, then how many more the yard left out, and that
+/// there are none where there are none.
+fn prime_memory_lines(prime: &PrimeInputs, member: &str, palette: Palette) -> Vec<Div> {
+    let mut lines = vec![prime_title("Its memories", palette)];
+    for (at, memory) in prime.memories.iter().enumerate() {
+        let mut one = div()
+            .flex()
+            .flex_col()
+            .debug_selector(move || format!("context prime memory {at}"))
+            .child(prime_text(prime_one_line(&memory.title), palette));
+        let meta = prime_memory_meta(memory, member);
+        if !meta.is_empty() {
+            one = one.child(prime_quiet(meta, palette));
+        }
+        lines.push(one);
+    }
+    if prime.memories.is_empty() {
+        lines.push(
+            prime_quiet("no memories".to_string(), palette)
+                .debug_selector(|| "context prime no memories".to_string()),
+        );
+    }
+    lines.extend(prime_more_words(prime.memories_omitted).map(|more| {
+        prime_quiet(more, palette).debug_selector(|| "context prime more".to_string())
+    }));
+    lines
+}
+
+/// The lines of the Prime tab's depots item: each depot by name, with the
+/// path and lines of each rules file under it, or that it has none.
+fn prime_depot_lines(
+    depots: &[PrimeDepot],
+    mono: Option<&SharedString>,
+    palette: Palette,
+) -> Vec<Div> {
+    let mut lines = vec![prime_title("The depots' rules", palette)];
+    for depot in depots {
+        let name = prime_one_line(&depot.name);
+        let mut one =
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(prime_code(name.clone(), mono, palette));
+        for (at, rule) in depot.rules.iter().enumerate() {
+            let selector = format!("context prime rule {name} {at}");
+            one = one.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .pl_3()
+                    .debug_selector(move || selector.clone())
+                    .child(prime_code(model::letters(&rule.path), mono, palette))
+                    .child(prime_quiet(
+                        prime_file_meta(rule.text.lines().count(), false),
+                        palette,
+                    )),
+            );
+        }
+        if depot.rules.is_empty() {
+            let selector = format!("context prime no rules {name}");
+            one = one.child(
+                prime_quiet("no rules".to_string(), palette)
+                    .pl_3()
+                    .debug_selector(move || selector.clone()),
+            );
+        }
+        lines.push(one);
+    }
+    if depots.is_empty() {
+        lines.push(
+            prime_quiet("no depots".to_string(), palette)
+                .debug_selector(|| "context prime no depots".to_string()),
+        );
+    }
+    lines
+}
+
+/// The Prime tab's items for a prime read: the role and, where the prime
+/// carries their words, the operator's, then the memories and the depots,
+/// numbered as they stand.
+fn prime_list(
+    prime: &PrimeInputs,
+    member: &str,
+    mono: Option<&SharedString>,
+    palette: Palette,
+) -> Div {
+    let mut items = vec![(
+        "context prime role",
+        prime_role_lines(prime.role.as_ref(), mono, palette),
+    )];
+    if let Some(words) = prime.operator.as_ref().and_then(prime_operator_words) {
+        items.push((
+            "context prime operator",
+            prime_operator_lines(words, mono, palette),
+        ));
+    }
+    items.push((
+        "context prime memories",
+        prime_memory_lines(prime, member, palette),
+    ));
+    items.push((
+        "context prime depots",
+        prime_depot_lines(&prime.depots, mono, palette),
+    ));
+    let mut list = div().flex().flex_col().px_4().pt_1().pb_4();
+    for (at, (selector, lines)) in items.into_iter().enumerate() {
+        let mut number = div()
+            .w(px(18.))
+            .flex_none()
+            .text_size(rems(TYPE_CODE))
+            .text_color(palette.faint)
+            .child((at + 1).to_string());
+        if let Some(mono) = mono {
+            number = number.font_family(mono.clone());
+        }
+        list = list.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2p5()
+                .py_2p5()
+                .border_b_1()
+                .border_color(palette.line)
+                .debug_selector(move || selector.to_string())
+                .child(number)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(lines),
+                ),
+        );
+    }
+    list
 }
 
 /// What an edit does, under Propose an edit on either drawer's prompt:
@@ -444,7 +762,9 @@ impl Footplate {
             .child(self.context_tabs(open, model, palette, cx));
         // The stage's tabs stand on its stage as read; the member's on
         // its depot's line, and say themselves where the read has no
-        // role prompt.
+        // role prompt. The member's Prime tab is the yard's Prime call
+        // and not the line: it stands, and says what it has, with the
+        // line unread or refused.
         let (body, footer): (Div, Option<Div>) = match &open.subject {
             ContextSubject::Stage { .. } => match Self::context_stage(open, model) {
                 Some(stage) => (
@@ -458,6 +778,9 @@ impl Footplate {
                     self.context_crew_body(open, model, palette, cx),
                     self.context_crew_footer(open, model, palette, cx),
                 ),
+                None if open.tab == ContextTab::Prime => {
+                    (self.context_crew_body(open, model, palette, cx), None)
+                }
                 None => (self.context_empty(open, model, palette), None),
             },
         };
@@ -551,7 +874,7 @@ impl Footplate {
 
     /// The drawer's tabs: the stage file, the serving group and the
     /// group's prompt, or the member's role and its prime with how many
-    /// shape it. The open one reads in the text colour over the
+    /// items it lists. The open one reads in the text colour over the
     /// accent's edge.
     fn context_tabs(
         &self,
@@ -560,20 +883,16 @@ impl Footplate {
         palette: Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let prime = match prime_operator_words(model.operator_style(), model.operator_note()) {
-            Some(_) => "Prime · 2".to_string(),
-            None => "Prime · 1".to_string(),
-        };
         let listed: Vec<(ContextTab, String)> = match &open.subject {
             ContextSubject::Stage { .. } => vec![
                 (ContextTab::Stage, "Stage".into()),
                 (ContextTab::Group, "Group".into()),
                 (ContextTab::Prompt, "Prompt".into()),
             ],
-            ContextSubject::Crew { .. } => {
+            ContextSubject::Crew { member, .. } => {
                 vec![
                     (ContextTab::Role, "Role".into()),
-                    (ContextTab::Prime, prime),
+                    (ContextTab::Prime, prime_label(model.prime_read_for(member))),
                 ]
             }
         };
@@ -644,7 +963,7 @@ impl Footplate {
                 "The yard has no depot to read the line of."
             }
             _ if model.line_unserved() => model::LINE_TOO_OLD,
-            _ if !model.is_operator() => "The context drawer is the operator's.",
+            _ if !model.is_operator() => OPERATOR_ONLY,
             _ => model.line_notice().unwrap_or("Reading the line…"),
         };
         let mut empty = div().flex().flex_col().gap_2().p_4().child(
@@ -704,7 +1023,7 @@ impl Footplate {
     ) -> Div {
         match open.tab {
             ContextTab::Role => self.context_role_tab(open, model, palette, cx),
-            ContextTab::Prime => self.context_prime_tab(open, model, palette),
+            ContextTab::Prime => self.context_prime_tab(open, model, palette, cx),
             // No stage tab stands on a member.
             _ => div(),
         }
@@ -1377,15 +1696,25 @@ impl Footplate {
         tab
     }
 
-    /// The Prime tab: what is known to shape the member's session, in
-    /// the order it reads it — its role, then the operator's style and
-    /// note where the settings carry them — with the yard's command
-    /// for the whole.
-    fn context_prime_tab(&self, open: &ContextOpen, model: &Model, palette: Palette) -> Div {
-        let ContextSubject::Crew { depot, member } = &open.subject else {
+    /// The Prime tab: what the member's session reads when it starts, as
+    /// the yard's Prime call says it, numbered in the order it reads it —
+    /// the role, the operator's style and note where the prime carries
+    /// them, the titles of its memories, and the rules each depot's
+    /// checkout carries — with the yard's command for the whole. Where
+    /// the tab has no prime to list it says why instead: the window is
+    /// not the operator's, the yard is read on its machine, is too old
+    /// for the call or refused it, or the prime is being read.
+    fn context_prime_tab(
+        &self,
+        open: &ContextOpen,
+        model: &Model,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let ContextSubject::Crew { member, .. } = &open.subject else {
             return div();
         };
-        let prompt = Self::context_role(open, model);
+        let mono = select::mono(cx);
         let tab = div().flex().flex_col().child(
             div()
                 .flex()
@@ -1408,119 +1737,45 @@ impl Footplate {
                         .child(format!(
                             "What {member}'s session reads when it starts, in order:"
                         ))
-                        .child(
-                            div()
-                                .text_size(rems(TYPE_CODE))
-                                .text_color(palette.text)
-                                .child(prime_command(member)),
-                        ),
+                        .child(prime_code(prime_command(member), mono.as_ref(), palette)),
                 ),
         );
-        let mut prime = div().flex().flex_col().px_4().pt_1().pb_4();
-        let mut words = div().flex_1().min_w_0().flex().flex_col().gap_1().child(
-            div()
-                .text_size(rems(TYPE_META))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(palette.text)
-                .child("Its role"),
-        );
-        match prompt {
-            Some(prompt) => {
-                words = words
-                    .child(
-                        div()
-                            .text_size(rems(TYPE_CODE))
-                            .text_color(palette.text)
-                            .child(model::line_path_words(&prompt.path)),
-                    )
-                    .child(
-                        div()
-                            .text_size(rems(TYPE_META))
-                            .text_color(palette.faint)
-                            .child(format!(
-                                "depot {depot} · {}",
-                                counted_lines(prompt.text.lines().count())
-                            )),
-                    );
+        // What the window knows before it asks comes first, then what the
+        // yard said.
+        let (selector, words) = if !model.is_operator() {
+            ("context prime operator only", OPERATOR_ONLY.to_string())
+        } else if model.prime_on_the_yard() {
+            (
+                "context prime on the yard",
+                model::PRIME_ON_THE_YARD.to_string(),
+            )
+        } else if model.prime_too_old() {
+            ("context prime too old", model::PRIME_TOO_OLD.to_string())
+        } else {
+            match (model.prime_read_for(member), model.prime_notice()) {
+                (Some(prime), _) => {
+                    return tab.child(prime_list(prime, member, mono.as_ref(), palette));
+                }
+                (None, Some(notice)) => ("context prime notice", notice.to_string()),
+                (None, None) => ("context prime reading", "Reading the prime…".to_string()),
             }
-            None => {
-                words = words.child(
-                    div()
-                        .text_size(rems(TYPE_META))
-                        .text_color(palette.faint)
-                        .child("no prompt"),
-                );
-            }
-        }
-        prime = prime.child(
+        };
+        let mut said = div().flex().flex_col().gap_2().p_4().child(
             div()
-                .flex()
-                .flex_row()
-                .gap_2p5()
-                .py_2p5()
-                .border_b_1()
-                .border_color(palette.line)
-                .debug_selector(|| "context prime role".to_string())
-                .child(
-                    div()
-                        .w(px(18.))
-                        .flex_none()
-                        .text_size(rems(TYPE_CODE))
-                        .text_color(palette.faint)
-                        .child("1"),
-                )
+                .debug_selector(move || selector.to_string())
+                .text_color(palette.faint)
                 .child(words),
         );
-        if let Some((values, whose)) =
-            prime_operator_words(model.operator_style(), model.operator_note())
-        {
-            prime = prime.child(
+        if selector == "context prime notice" {
+            said = said.child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .gap_2p5()
-                    .py_2p5()
-                    .border_b_1()
-                    .border_color(palette.line)
-                    .debug_selector(|| "context prime operator".to_string())
-                    .child(
-                        div()
-                            .w(px(18.))
-                            .flex_none()
-                            .text_size(rems(TYPE_CODE))
-                            .text_color(palette.faint)
-                            .child("2"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(rems(TYPE_META))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(palette.text)
-                                    .child("How to work with you"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(rems(TYPE_CODE))
-                                    .text_color(palette.text)
-                                    .child(values),
-                            )
-                            .child(
-                                div()
-                                    .text_size(rems(TYPE_META))
-                                    .text_color(palette.faint)
-                                    .child(whose),
-                            ),
-                    ),
+                    .text_size(rems(TYPE_META))
+                    .text_color(palette.faint)
+                    .debug_selector(|| "context prime retry".to_string())
+                    .child("Press Context again to try again."),
             );
         }
-        tab.child(prime)
+        tab.child(said)
     }
 
     /// A stage drawer's foot: Copy path on a file, and on a prompt
@@ -1839,24 +2094,154 @@ mod tests {
             "depot notes · 1 line · read when its session starts"
         );
         assert_eq!(prime_command("yardmaster"), "yardr prime --crew yardmaster");
+        // The Prime tab's operator item, from what the prime says of them.
         assert_eq!(
-            prime_operator_words("show", "I read diffs, not prose"),
-            Some((
-                "show · I read diffs, not prose".to_string(),
-                "the yard's settings · every session reads both".to_string()
-            ))
+            prime_operator_words(&the_operator()),
+            Some(OperatorWords {
+                style: Some("show · Show me".to_string()),
+                tells: Some("Explain briefly what you do. Show the command you run.".to_string()),
+                note: Some("I read diffs, not prose".to_string()),
+                whose: "jo's settings · every session reads both".to_string(),
+            })
         );
-        assert_eq!(prime_operator_words("", ""), None);
+        // A note alone has no style, no answer and nothing the style asks.
+        let note = PrimeOperator {
+            style: String::new(),
+            label: String::new(),
+            tells: String::new(),
+            ..the_operator()
+        };
         assert_eq!(
-            prime_operator_words("show", ""),
-            Some(("show".to_string(), "the yard's settings".to_string()))
+            prime_operator_words(&note),
+            Some(OperatorWords {
+                style: None,
+                tells: None,
+                note: Some("I read diffs, not prose".to_string()),
+                whose: "jo's settings".to_string(),
+            })
         );
+        // A style alone says what it asks and no note; one with no label
+        // names the style only.
+        let style = PrimeOperator {
+            note: String::new(),
+            label: String::new(),
+            ..the_operator()
+        };
         assert_eq!(
-            prime_operator_words("", "I read diffs, not prose"),
+            prime_operator_words(&style),
+            Some(OperatorWords {
+                style: Some("show".to_string()),
+                tells: Some("Explain briefly what you do. Show the command you run.".to_string()),
+                note: None,
+                whose: "jo's settings".to_string(),
+            })
+        );
+        // Neither: the prime says nothing of them, and the tab has no item.
+        // What the style asks is not said without the style.
+        let neither = PrimeOperator {
+            name: "jo".into(),
+            tells: "Explain briefly what you do.".into(),
+            ..Default::default()
+        };
+        assert_eq!(prime_operator_words(&neither), None);
+        assert_eq!(prime_operator_words(&PrimeOperator::default()), None);
+        // A name the yard left out is the yard's settings; marks of
+        // direction and control characters in the words are cut.
+        let unnamed = PrimeOperator {
+            name: String::new(),
+            note: "\u{202e}read\u{7} diffs".into(),
+            style: String::new(),
+            ..the_operator()
+        };
+        assert_eq!(
+            prime_operator_words(&unnamed).map(|words| (words.note, words.whose)),
             Some((
-                "I read diffs, not prose".to_string(),
+                Some("read diffs".to_string()),
                 "the yard's settings".to_string()
             ))
         );
+        // The tab's label counts its items, as the prime carries them.
+        let mut prime = PrimeInputs {
+            operator: Some(the_operator()),
+            ..Default::default()
+        };
+        // The role, the memories and the depots' rules always stand, each
+        // saying where it has nothing; the operator's where the prime has
+        // their words.
+        assert_eq!(prime_items(&prime), 4);
+        assert_eq!(prime_label(Some(&prime)), "Prime · 4");
+        prime.operator = None;
+        assert_eq!(prime_label(Some(&prime)), "Prime · 3");
+        // An operator with neither style nor note is none.
+        prime.operator = Some(PrimeOperator {
+            name: "jo".into(),
+            ..Default::default()
+        });
+        assert_eq!(prime_label(Some(&prime)), "Prime · 3");
+        // No prime read, as while it is read and where it is not made.
+        assert_eq!(prime_label(None), "Prime");
+        // The words of its files and memories.
+        assert_eq!(
+            prime_file_meta(12, true),
+            "12 lines · as its session reads it"
+        );
+        assert_eq!(prime_file_meta(1, true), "1 line · as its session reads it");
+        assert_eq!(prime_file_meta(41, false), "41 lines");
+        assert_eq!(prime_file_meta(0, false), "0 lines");
+        let memory = |scope: &str, expires: &str| PrimeMemory {
+            id: "mem-lamps".into(),
+            title: "Lamps are lit at dusk".into(),
+            scope: scope.into(),
+            expires: expires.into(),
+            updated_at: "2026-10-08T09:30:00Z".into(),
+        };
+        assert_eq!(
+            prime_memory_meta(&memory("all", ""), "dispatcher"),
+            "the yard's"
+        );
+        assert_eq!(
+            prime_memory_meta(&memory("crew:dispatcher", ""), "dispatcher"),
+            "dispatcher's own"
+        );
+        // A scope that is neither is said as it stands, as one line.
+        assert_eq!(
+            prime_memory_meta(&memory("crew:other\n", ""), "dispatcher"),
+            "crew:other"
+        );
+        assert_eq!(prime_memory_meta(&memory("", ""), "dispatcher"), "");
+        // Where one retires the time follows, in the zone of the reader.
+        let until = model::grant_time("2026-10-08T09:30:00Z");
+        assert!(!until.is_empty());
+        assert_eq!(
+            prime_memory_meta(&memory("all", "2026-10-08T09:30:00Z"), "dispatcher"),
+            format!("the yard's · until {until}")
+        );
+        assert_eq!(
+            prime_memory_meta(&memory("", "2026-10-08T09:30:00Z"), "dispatcher"),
+            format!("until {until}")
+        );
+        // A time the yard did not write as one is no expiry.
+        assert_eq!(
+            prime_memory_meta(&memory("all", "soon"), "dispatcher"),
+            "the yard's"
+        );
+        assert_eq!(prime_more_words(0), None);
+        assert_eq!(prime_more_words(3), Some("3 more".to_string()));
+        // A title is one line of letters, whoever wrote it.
+        assert_eq!(
+            prime_one_line("The  signal box\n is\tclosed\u{202e}\u{7}"),
+            "The signal box is closed"
+        );
+    }
+
+    /// What the yard's example says of the operator (docs/api.md, Prime).
+    fn the_operator() -> PrimeOperator {
+        PrimeOperator {
+            name: "jo".into(),
+            style: "show".into(),
+            label: "Show me".into(),
+            tells: "Explain briefly what you do.\nShow the command you run.".into(),
+            note: "I read diffs, not prose".into(),
+        }
     }
 }

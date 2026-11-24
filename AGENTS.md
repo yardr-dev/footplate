@@ -100,7 +100,11 @@ The window, its state and the yard:
     Copy path and Propose an edit, and what opens and shuts it. Its
     Line read is the Line window's, over another selection; its prompt
     editor, hand-off and Served-by picker are the Line window's rows,
-    drawn here.
+    drawn here. A crew drawer's Prime tab is not the line's: it lists
+    the yard's `Prime` answer for its member (`Model::prime_read_for`),
+    asked for when the drawer opens, on the socket alone (a yard at an
+    address says the prime is read on the yard's machine, and is not
+    asked), so it stands with the line unread or refused.
   - `src/window/feedback.rs`: the Feedback form over the window; what it
     sends is `src/feedback.rs`'s.
   - `src/window/firstrun.rs`: the first run, "Set up a yard here", where the

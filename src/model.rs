@@ -17,8 +17,8 @@ use crate::api::{
     self, AboutBead, Arrival, Arrivals, AskWeight, Asks, Bead, BeadAsk, BeadNote, BlobRef,
     CrewMember, DecidedAsk, DevicePairing, Event, Flow, FlowBead, FlowDepot, Flows, GrantGiven,
     Identity, Letter, Line, LineFilters, LineFlow, LineOutcome, LinePrompt, LineStage, Me,
-    Notification, OpenAsk, OpenQueue, Parked, Peer, Ran, Reaction, Run, Secret, Setup, SourceGrant,
-    Teammate, TelemetryPreview, Uninvited, User,
+    Notification, OpenAsk, OpenQueue, Parked, Peer, PrimeInputs, Ran, Reaction, Run, Secret, Setup,
+    SourceGrant, Teammate, TelemetryPreview, Uninvited, User,
 };
 use crate::markdown;
 use crate::select;
@@ -105,13 +105,6 @@ pub struct State {
     /// view is offered to, and no one else. Empty where the yard names
     /// none, or its settings could not be read.
     pub operator: String,
-    /// How the operator asked agents to work with them, as its settings
-    /// carry it: `guide`, `show`, `work` or `report`. Empty where the
-    /// answer carries none, as to a device of no operator.
-    pub operator_style: String,
-    /// The one line the operator asked agents to know about them, as its
-    /// settings carry it; empty as `operator_style` is.
-    pub operator_note: String,
     /// Every grant of the yard's sources, as read: empty where the
     /// window is not the operator's, which reads none.
     pub grants: Vec<SourceGrant>,
@@ -133,7 +126,8 @@ pub struct State {
     /// The yard is on this machine, reached by its socket: the Pair a
     /// phone pane is offered where it is and the window is the
     /// operator's, and the pairing calls are made nowhere else. A device
-    /// token never opens a pairing.
+    /// token never opens a pairing. The crew drawer's prime is asked for
+    /// nowhere else either: the yard serves that call on its socket alone.
     pub near: bool,
     /// The yard's open device pairing, as read: empty where the window
     /// is not offered the pane, which reads none.
@@ -1208,6 +1202,11 @@ pub enum Effect {
     /// [`Model::line_failed`]. `generation` keeps an older answer from
     /// replacing the line most recently opened.
     Line { depot: String, generation: u64 },
+    /// `Prime` with `crew`, the member whose context drawer stands open;
+    /// answered to [`Model::prime_read`] or [`Model::prime_failed`].
+    /// `generation` keeps an older answer from replacing the prime most
+    /// recently opened.
+    Prime { crew: String, generation: u64 },
     /// `SourceGrants`; answered to [`Model::grants`].
     Grants,
     /// `Teammates`; answered to [`Model::teammates`].
@@ -1747,6 +1746,20 @@ pub struct Model {
     line_unserved: bool,
     /// A newer Line read supersedes every answer from an earlier open.
     line_generation: u64,
+    /// What the crew drawer's Prime tab lists, as `Prime` answered it for
+    /// the member it names: none where the drawer was not opened on one,
+    /// where the yard serves the call to no such window, and where the
+    /// read failed. Read only when a crew drawer opens, never again on
+    /// an event.
+    prime: Option<(String, PrimeInputs)>,
+    /// Why the prime is empty, in the window's words; `None` where it
+    /// was read, or the window makes no such call.
+    prime_notice: Option<String>,
+    /// The yard has no Prime call: one from before it. The tab says so,
+    /// and the call is not made again.
+    prime_too_old: bool,
+    /// A newer Prime read supersedes every answer from an earlier open.
+    prime_generation: u64,
     /// The latest route change seen on the stream, by rule id: what the
     /// Line window's Last change line reads for its representative rule.
     line_route_last: HashMap<String, LineChange>,
@@ -1757,11 +1770,6 @@ pub struct Model {
     /// The yard's operator, as its settings name them: who the grants
     /// view is offered to, and no one else.
     operator: String,
-    /// The operator's words to their agents, as its settings carry them:
-    /// how to work with them, and the one line to know. Empty where the
-    /// answer carries neither.
-    operator_style: String,
-    operator_note: String,
     /// Every grant of the yard's sources, as read: empty where the
     /// window is not the operator's, which reads none.
     grants: Vec<SourceGrant>,
@@ -2077,8 +2085,6 @@ impl Model {
             arrivals_too_old: state.arrivals_too_old,
             flows_too_old: state.flows_too_old,
             operator: state.operator,
-            operator_style: state.operator_style,
-            operator_note: state.operator_note,
             grants: state.grants,
             grants_too_old: state.grants_too_old,
             teammates: state.teammates,
@@ -2436,18 +2442,6 @@ impl Model {
     /// offers them to no one.
     pub fn is_operator(&self) -> bool {
         !self.operator.is_empty() && self.me == self.operator
-    }
-
-    /// How the operator asked agents to work with them, as its settings
-    /// carried it; empty where the answer carried none.
-    pub fn operator_style(&self) -> &str {
-        &self.operator_style
-    }
-
-    /// The one line the operator asked agents to know about them, as its
-    /// settings carried it; empty where the answer carried none.
-    pub fn operator_note(&self) -> &str {
-        &self.operator_note
     }
 
     /// Whether the conversation's head offers the member's context: the
@@ -3912,6 +3906,87 @@ impl Model {
             }
             false => {
                 self.line_notice = Some(format!("the line could not be read: {err}"));
+            }
+        }
+    }
+
+    /// Whether the yard is asked for a member's prime: the window runs as
+    /// the yard's operator, on the yard's own machine, and the yard has
+    /// not said it has no such call. A yard at an address is asked
+    /// nothing: it serves the call to no device, down the link from its
+    /// edge too.
+    pub fn prime_offered(&self) -> bool {
+        self.is_operator() && self.near && !self.prime_too_old
+    }
+
+    /// Whether the prime is read on the yard's machine alone: this window
+    /// reaches the yard at an address, which serves it the call never.
+    /// The Prime tab says so, and the call is not made. `near` is the
+    /// whole of it, so nothing more is kept.
+    pub fn prime_on_the_yard(&self) -> bool {
+        !self.near
+    }
+
+    /// What the session of the crew member `member` reads at prime, as
+    /// read when its drawer opened. `None` where none was read for that
+    /// member, as where the drawer stands on another, the read is in
+    /// flight, or it failed.
+    pub fn prime_read_for(&self, member: &str) -> Option<&PrimeInputs> {
+        self.prime
+            .as_ref()
+            .filter(|(read, _)| read == member)
+            .map(|(_, prime)| prime)
+    }
+
+    /// Why the prime is empty, in the window's words; `None` where it was
+    /// read, or is not read here.
+    pub fn prime_notice(&self) -> Option<&str> {
+        self.prime_notice.as_deref()
+    }
+
+    /// Whether the yard has no Prime call: one from before it, which the
+    /// Prime tab says and which is made no more.
+    pub fn prime_too_old(&self) -> bool {
+        self.prime_too_old
+    }
+
+    /// Whether an answer still belongs to the crew drawer open now: it
+    /// stands on the member the call was for, and no newer read was made.
+    fn prime_read_is_current(&self, crew: &str, generation: u64) -> bool {
+        self.prime_generation == generation
+            && matches!(
+                &self.context,
+                Some(ContextSubject::Crew { member, .. }) if member == crew
+            )
+    }
+
+    /// The prime as read. An answer for a member whose drawer is no longer
+    /// open, or for an older open of the same member's, says nothing.
+    pub fn prime_read(&mut self, crew: &str, generation: u64, prime: PrimeInputs) {
+        if !self.prime_read_is_current(crew, generation) {
+            return;
+        }
+        self.prime = Some((crew.to_string(), prime));
+        self.prime_notice = None;
+    }
+
+    /// The prime could not be read. A yard without the call has none to
+    /// show: the tab says it is too old, in no red, and no notice is
+    /// raised. Anything else is said in the tab as the yard says it, which
+    /// opening the drawer again tries again: a file the yard would not
+    /// read is named there, with its depot.
+    pub fn prime_failed(&mut self, crew: &str, generation: u64, err: &api::Error) {
+        if !self.prime_read_is_current(crew, generation) {
+            return;
+        }
+        match prime_too_old(err) {
+            true => {
+                self.prime = None;
+                self.prime_notice = None;
+                self.prime_too_old = true;
+            }
+            false => {
+                self.prime_notice = Some(format!("the prime could not be read: {err}"));
             }
         }
     }
@@ -6841,22 +6916,49 @@ impl Model {
     /// call — the yard resolves them against each member's directory —
     /// so the depot is the first the yard serves, there to name the
     /// call. Nothing is read where the line is not offered, as where
-    /// the Line window stands unopened.
+    /// the Line window stands unopened. The member's prime is read
+    /// beside it, where the drawer stands on another member than before
+    /// or none; it names no depot, so a yard with none is read for it.
     pub fn open_crew_context(&mut self, depot: &str, member: &str) -> Vec<Effect> {
         let same_depot = self
             .context
             .as_ref()
             .is_some_and(|context| context.depot() == depot);
+        let same_member = matches!(
+            &self.context,
+            Some(ContextSubject::Crew { member: at, .. }) if at == member
+        );
         self.context = Some(ContextSubject::Crew {
             depot: depot.to_string(),
             member: member.to_string(),
         });
         // No depot names the call where the yard serves none: the drawer
         // stands, and says so.
-        match depot.is_empty() {
+        let mut effects = match depot.is_empty() {
             true => Vec::new(),
             false => self.read_context_line(depot, same_depot),
+        };
+        effects.extend(self.read_context_prime(member, same_member));
+        effects
+    }
+
+    /// Reads the prime of the member the crew drawer stands on anew. As
+    /// the drawer's line is, it is held while the drawer stays on the
+    /// member; a drawer shut and opened again, or opened on another
+    /// member, reads it again, clearing the old answer so that a failure
+    /// speaks in the tab instead of another member's prime. Nothing is
+    /// read where the window is not offered the call.
+    fn read_context_prime(&mut self, member: &str, same_member: bool) -> Vec<Effect> {
+        if !self.prime_offered() || (same_member && self.prime_read_for(member).is_some()) {
+            return Vec::new();
         }
+        self.prime_generation = self.prime_generation.wrapping_add(1);
+        self.prime = None;
+        self.prime_notice = None;
+        vec![Effect::Prime {
+            crew: member.to_string(),
+            generation: self.prime_generation,
+        }]
     }
 
     /// Reads the context drawer's depot for what it newly stands on.
@@ -8768,6 +8870,27 @@ pub fn line_too_old(err: &api::Error) -> bool {
 /// method name, and never in red.
 pub const LINE_TOO_OLD: &str =
     "this yard's yardr is older than the Line window (it needs yardr from 17 Nov 2026 or later)";
+
+/// Whether the yard has no Prime call: one from before it, which says it
+/// has no such method. That is no error: the crew drawer's Prime tab says
+/// the yard is too old, in plain words, the call is made no more, and no
+/// notice is raised. Its words are read here, as above, and when they
+/// change this is shown as any refusal.
+pub fn prime_too_old(err: &api::Error) -> bool {
+    matches!(err, api::Error::Refused { message, .. } if message.starts_with("no such method"))
+}
+
+/// What the Prime tab says of a yard from before the call, in place of
+/// the prime it would list: plain words, never the wire's method name,
+/// and never in red.
+pub const PRIME_TOO_OLD: &str =
+    "this yard's yardr is older than the Prime read (it needs yardr from 24 Nov 2026 or later)";
+
+/// What the Prime tab says of a yard at an address, in place of the prime
+/// it would list: one line of plain words, never in red, since nothing is
+/// wrong. The yard serves the call to no device, down the link from its
+/// edge too, so it is read on the yard's machine and not asked for.
+pub const PRIME_ON_THE_YARD: &str = "the prime is read on the yard's machine";
 
 /// Who serves a stage, in the flow map's words: `agents` for a herdr
 /// group, `script` for an exec one, `people` for a manual one, `peer`
@@ -17345,6 +17468,124 @@ mod tests {
         assert!(!m.crew_context_offered("yardmaster"));
         assert_eq!(m.open_crew_context("yardr", "yardmaster"), Vec::new());
         assert!(m.context().is_some());
+
+        // The crew drawer's prime is read beside its line, where the yard
+        // is on this machine and the window is the operator's: for the
+        // member the drawer stands on, once while it stays on them, and
+        // again for another member or a drawer shut and opened.
+        let primes = |effects: Vec<Effect>| -> Vec<Effect> {
+            effects
+                .into_iter()
+                .filter(|effect| matches!(effect, Effect::Prime { .. }))
+                .collect()
+        };
+        let asked = |crew: &str, generation: u64| Effect::Prime {
+            crew: crew.into(),
+            generation,
+        };
+        let read = || PrimeInputs {
+            memories_omitted: 2,
+            ..Default::default()
+        };
+        let near = || {
+            let mut state = line_state();
+            state.near = true;
+            state
+        };
+        let (mut m, _) = Model::new(near(), Mode::Chat, None);
+        assert!(m.prime_offered());
+        assert!(!m.prime_on_the_yard());
+        assert_eq!(
+            m.open_crew_context("yardr", "yardmaster"),
+            vec![
+                Effect::Line {
+                    depot: "yardr".into(),
+                    generation: 1,
+                },
+                asked("yardmaster", 1),
+            ]
+        );
+        // An answer for another member, or of an older read, says nothing.
+        m.prime_read("assembly", 1, read());
+        m.prime_read("yardmaster", 0, read());
+        assert_eq!(m.prime_read_for("yardmaster"), None);
+        m.prime_read("yardmaster", 1, read());
+        assert_eq!(m.prime_read_for("yardmaster"), Some(&read()));
+        assert_eq!(m.prime_read_for("assembly"), None);
+        assert_eq!(m.prime_notice(), None);
+        // The same member keeps what was read; another member's drawer
+        // reads the prime again, and a late answer for the first says
+        // nothing. (The line here is never answered, so it is asked
+        // again each time: the prime is what these compare.)
+        assert_eq!(
+            primes(m.open_crew_context("yardr", "yardmaster")),
+            Vec::new()
+        );
+        assert_eq!(
+            primes(m.open_crew_context("yardr", "assembly")),
+            vec![asked("assembly", 2)]
+        );
+        assert_eq!(m.prime_read_for("yardmaster"), None);
+        m.prime_read("yardmaster", 1, read());
+        assert_eq!(m.prime_read_for("yardmaster"), None);
+        // A refusal is said as the yard says it, with the depot and the
+        // file it names, and no notice of an old yard. Nothing is made of
+        // an answer when no drawer stands, and a drawer shut and opened
+        // again reads again, as a failed line's hint says.
+        let long = "depot notes: /home/jo/notes/AGENTS.md is longer than 1048576 bytes";
+        m.prime_failed("assembly", 2, &refused(long));
+        assert_eq!(
+            m.prime_notice(),
+            Some(
+                "the prime could not be read: depot notes: /home/jo/notes/AGENTS.md is longer than 1048576 bytes"
+            )
+        );
+        assert!(!m.prime_too_old());
+        m.shut_context();
+        m.prime_read("assembly", 2, read());
+        assert_eq!(m.prime_read_for("assembly"), None);
+        assert_eq!(
+            primes(m.open_crew_context("yardr", "assembly")),
+            vec![asked("assembly", 3)]
+        );
+        assert_eq!(m.prime_notice(), None);
+        // A yard from before the call says so, in no notice, and is not
+        // asked again.
+        assert!(prime_too_old(&refused("no such method Prime")));
+        assert!(!prime_too_old(&refused(long)));
+        assert!(PRIME_TOO_OLD.contains("older than the Prime read"));
+        assert!(!PRIME_TOO_OLD.contains("no such method"));
+        m.prime_failed("assembly", 3, &refused("no such method Prime"));
+        assert!(m.prime_too_old());
+        assert_eq!(m.prime_notice(), None);
+        assert!(!m.prime_offered());
+        m.shut_context();
+        assert_eq!(primes(m.open_crew_context("yardr", "assembly")), Vec::new());
+        // It names no depot: a yard that serves none is read for it.
+        let (mut m, _) = Model::new(near(), Mode::Chat, None);
+        assert_eq!(
+            m.open_crew_context("", "yardmaster"),
+            vec![asked("yardmaster", 1)]
+        );
+        // A yard at an address serves the call to no device, so it is read
+        // on its machine and not asked; nor is it asked for a window that
+        // is not the operator's.
+        let (mut m, _) = Model::new(line_state(), Mode::Chat, None);
+        assert!(m.prime_on_the_yard());
+        assert!(!m.prime_offered());
+        assert_eq!(
+            primes(m.open_crew_context("yardr", "yardmaster")),
+            Vec::new()
+        );
+        assert!(PRIME_ON_THE_YARD.contains("read on the yard's machine"));
+        let mut state = near();
+        state.operator = "someone-else".into();
+        let (mut m, _) = Model::new(state, Mode::Chat, None);
+        assert!(!m.prime_offered());
+        assert_eq!(
+            primes(m.open_crew_context("yardr", "yardmaster")),
+            Vec::new()
+        );
     }
 
     /// A prompt edit is one mail whose first lines name the depot, the

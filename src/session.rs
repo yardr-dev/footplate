@@ -400,10 +400,6 @@ pub fn load(client: &Client, name: &str) -> Result<State, Trouble> {
     // so after all is no error either: the grants are read on its machine.
     let settings = client.settings().unwrap_or_default();
     let operator = settings.operator.clone();
-    // The operator's words to their agents, which the crew drawer's Prime
-    // tab lists: carried where the answer has them, empty elsewhere, as a
-    // yard with no operator and one from before the keys answer neither.
-    let (operator_style, operator_note) = (settings.operator_style, settings.operator_note);
     let is_operator = !operator.is_empty() && operator == user.name;
     // Who the Telemetry section is offered to: the yard's operator, and
     // no one else, on a yard that serves the calls to such a window. The
@@ -497,8 +493,6 @@ pub fn load(client: &Client, name: &str) -> Result<State, Trouble> {
         flows_notice,
         flows_too_old,
         operator,
-        operator_style,
-        operator_note,
         grants,
         grants_notice,
         grants_too_old,
@@ -1066,22 +1060,16 @@ mod tests {
     fn load_reads_the_grants_for_the_operator_alone() {
         let yard = Yard::start();
         a_yard_of_jo(&yard);
-        // The operator's: the grants are read, and the operator's words
-        // with them where the settings carry them.
+        // The operator's: the grants are read.
         yard.answer(
             "SourceGrants",
             r#"{"result": [{"source": "crm", "crew": "yardmaster",
                  "calls": ["read"], "at": "2026-10-08T09:30:00Z", "by": "jo"}]}"#,
         );
-        yard.answer(
-            "Settings",
-            r#"{"result": {"operator": "jo", "operator_style": "show", "operator_note": "I read diffs, not prose"}}"#,
-        );
+        yard.answer("Settings", r#"{"result": {"operator": "jo"}}"#);
         let state = load(&yard.client(), "jo").unwrap();
         assert_eq!(state.me, "jo");
         assert_eq!(state.operator, "jo");
-        assert_eq!(state.operator_style, "show");
-        assert_eq!(state.operator_note, "I read diffs, not prose");
         assert_eq!(state.grants.len(), 1);
         assert_eq!(state.grants[0].source, "crm");
         assert_eq!(state.grants_notice, None);

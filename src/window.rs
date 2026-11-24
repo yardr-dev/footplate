@@ -17403,14 +17403,51 @@ yardr.dev
                 {"name": "assembly"}]}})
             .to_string()
         };
+        // What the yard says the yardmaster's session reads at prime: its
+        // role, the operator's words where asked for, three memory titles
+        // of five, and the rules of one of two depots; and the prime of
+        // assembly, whose config names no prompt, with no memory and one
+        // depot that has no rules.
+        let operator = || {
+            json!({"name": "jo", "style": "show", "label": "Show me",
+                   "tells": "Explain briefly what you do.", "note": "I read diffs, not prose"})
+        };
+        let prime_yardmaster = |with_operator: bool| {
+            let mut prime = json!({
+                "role": {"path": "/home/jo/.yardr/roles/yardmaster.md", "text": "Mind the yard.\n"},
+                "memories": [
+                    {"id": "mem-freeze", "title": "The signal box is closed for the freeze",
+                     "scope": "crew:yardmaster", "expires": "2026-10-08T09:30:00Z",
+                     "updated_at": "2026-10-08T09:30:00Z"},
+                    {"id": "mem-lamps", "title": "Lamps are lit at dusk", "scope": "all",
+                     "updated_at": "2026-10-07T09:30:00Z"},
+                    {"id": "mem-shed", "title": "The shed is locked at six", "scope": "all",
+                     "updated_at": "2026-10-06T09:30:00Z"}],
+                "memories_omitted": 2,
+                "depots": [
+                    {"name": "yardr", "rules": []},
+                    {"name": "notes", "rules": [
+                        {"path": "/home/jo/notes/AGENTS.md", "text": "# Notes\n\nKeep the inbox empty.\n"},
+                        {"path": "/home/jo/notes/CLAUDE.md", "text": "@AGENTS.md\n"}]}]});
+            if with_operator {
+                prime["operator"] = operator();
+            }
+            json!({"result": prime}).to_string()
+        };
+        let prime_assembly = json!({"result": {
+            "operator": operator(), "memories": [], "memories_omitted": 0,
+            "depots": [{"name": "yardr", "rules": []}]}})
+        .to_string();
+        // The yard reads a prime on its socket alone: where the window
+        // reaches it at an address (every yard, on Windows) none is asked
+        // for, and the tab says it is read on the yard's machine.
         let yard = Yard::start();
+        let near = !yard.at_listener();
         a_yard_of_jo(&yard);
-        yard.answer(
-            "Settings",
-            r#"{"result": {"operator": "jo", "operator_style": "show", "operator_note": "I read diffs, not prose"}}"#,
-        );
         yard.answer("Flows", &flows());
         yard.answer_for("Line", "depot", "yardr", &line_yardr());
+        yard.answer_for("Prime", "crew", "yardmaster", &prime_yardmaster(true));
+        yard.answer_for("Prime", "crew", "assembly", &prime_assembly);
         yard.answer_for(
             "Line",
             "depot",
@@ -17612,7 +17649,8 @@ yardr.dev
 
         // The conversation head offers Context to a member of this
         // yard's crew on its operator's window. Its Role tab renders the
-        // member's prompt, and Prime lists the role and operator words.
+        // member's prompt, and Prime lists what its session reads at
+        // prime, from the yard's Prime call.
         assert!(drawn(cx, "talk context yardmaster"));
         let before = yard.asked("Line").len();
         click_on(cx, "talk context yardmaster");
@@ -17627,21 +17665,60 @@ yardr.dev
                 "{selector} extends past the crew drawer"
             );
         }
+        let prime_label = |view: &Entity<Footplate>, cx: &mut VisualTestContext, member: &str| {
+            view.read_with(cx, |v, _| {
+                super::context::prime_label(v.model.as_ref().unwrap().prime_read_for(member))
+            })
+        };
         click_on(cx, "context tab prime");
         wait(cx, "the prime", |cx| drawn(cx, "context prime about"));
-        assert!(drawn(cx, "context prime role"));
-        assert!(drawn(cx, "context prime operator"));
         let drawer = bounds_of(cx, "context drawer");
-        for selector in [
-            "context prime about",
-            "context prime role",
-            "context prime operator",
-        ] {
-            assert!(
-                bounds_of(cx, selector).right() <= drawer.right(),
-                "{selector} extends past the crew drawer"
-            );
+        match near {
+            true => {
+                // The member's prime is asked for once, by name; its four
+                // items stand, numbered, the tab counts them, and each
+                // memory title and each rules file has its row, with the
+                // memories the yard left out counted after them.
+                wait(cx, "the prime's depots", |cx| {
+                    drawn(cx, "context prime depots")
+                });
+                assert_eq!(yard.asked("Prime"), vec![json!({"crew": "yardmaster"})]);
+                assert_eq!(prime_label(&view, cx, "yardmaster"), "Prime · 4");
+                for selector in [
+                    "context prime role",
+                    "context prime operator",
+                    "context prime memories",
+                    "context prime depots",
+                    "context prime memory 0",
+                    "context prime memory 1",
+                    "context prime memory 2",
+                    "context prime more",
+                    "context prime no rules yardr",
+                    "context prime rule notes 0",
+                    "context prime rule notes 1",
+                ] {
+                    assert!(drawn(cx, selector), "{selector}");
+                    assert!(
+                        bounds_of(cx, selector).right() <= drawer.right(),
+                        "{selector} extends past the crew drawer"
+                    );
+                }
+                // This prime has memories and a depot with rules, so
+                // neither says it has none.
+                assert!(!drawn(cx, "context prime no memories"));
+                assert!(!drawn(cx, "context prime no depots"));
+            }
+            false => {
+                // At an address the prime is read on the yard's machine:
+                // no call is made, and the tab says so in no notice.
+                wait(cx, "the yard's machine", |cx| {
+                    drawn(cx, "context prime on the yard")
+                });
+                assert_eq!(yard.asked("Prime"), Vec::<Value>::new());
+                assert_eq!(prime_label(&view, cx, "yardmaster"), "Prime");
+            }
         }
+        assert!(bounds_of(cx, "context prime about").right() <= drawer.right());
         click_on(cx, "talk context yardmaster");
         cx.run_until_parked();
         view.read_with(cx, |v, _| assert!(v.context.is_none()));
@@ -17653,10 +17730,15 @@ yardr.dev
         wait(cx, "the drawer reopened", |cx| {
             drawn(cx, "context role file")
         });
+        // A drawer shut and opened again reads the prime again.
+        wait(cx, "the prime again", |_| {
+            yard.asked("Prime").len() == if near { 2 } else { 0 }
+        });
 
-        // A crew member with no prompt says so in Role. Prime still
-        // lists its role and the operator's words. Moving to another
-        // conversation shuts the first member's drawer.
+        // A crew member with no prompt says so in Role. Its prime has no
+        // role, no memory and a depot with no rules, and the tab lists
+        // each as having none, still counting its four items. Moving to
+        // another conversation shuts the first member's drawer.
         view.update_in(cx, |v, window, cx| {
             v.select(Selected::Conversation("assembly".into()), window, cx)
         });
@@ -17666,10 +17748,20 @@ yardr.dev
         click_on(cx, "talk context assembly");
         wait(cx, "no role prompt", |cx| drawn(cx, "context role none"));
         click_on(cx, "context tab prime");
-        wait(cx, "the role item without a prompt", |cx| {
-            drawn(cx, "context prime role")
-        });
-        assert!(drawn(cx, "context prime operator"));
+        if near {
+            wait(cx, "the prime without memories", |cx| {
+                drawn(cx, "context prime no memories")
+            });
+            assert!(drawn(cx, "context prime role"));
+            assert!(drawn(cx, "context prime operator"));
+            assert_eq!(prime_label(&view, cx, "assembly"), "Prime · 4");
+            assert_eq!(
+                yard.asked("Prime")[2],
+                json!({"crew": "assembly"}),
+                "{:?}",
+                yard.asked("Prime")
+            );
+        }
 
         // A failed Line read leaves a retry on the drawer. Pressing
         // Context shuts it; pressing again reads the first depot anew.
@@ -17699,7 +17791,10 @@ yardr.dev
         assert_eq!(yard.asked("Line").len(), before + 2);
 
         // Where no depot names the Line call, the drawer says so and
-        // makes no read.
+        // makes no read of the line. Its prime names no depot, so it is
+        // asked for all the same: this yard stages no such call, so it
+        // refuses it as a method it has not, and the tab says the yard
+        // is too old, in plain words and no notice.
         let empty = Yard::start();
         a_yard_of_jo(&empty);
         empty.answer(
@@ -17710,18 +17805,126 @@ yardr.dev
         click_on(cx, "talk context yardmaster");
         wait(cx, "the empty context", |cx| drawn(cx, "context empty"));
         assert_eq!(empty.asked("Line"), Vec::<Value>::new());
+        click_on(cx, "context tab prime");
+        match near {
+            true => {
+                wait(cx, "the old yard's prime", |cx| {
+                    drawn(cx, "context prime too old")
+                });
+                assert_eq!(empty.asked("Prime"), vec![json!({"crew": "yardmaster"})]);
+                assert!(!drawn(cx, "context prime notice"));
+            }
+            false => {
+                wait(cx, "the yard's machine", |cx| {
+                    drawn(cx, "context prime on the yard")
+                });
+                assert_eq!(empty.asked("Prime"), Vec::<Value>::new());
+            }
+        }
 
-        // Settings from before the operator's words say nothing for the
-        // Prime tab: only the role is listed.
+        // A prime that carries none of the operator's words has no item
+        // for them, and the tab counts three.
         let plain = Yard::start();
         a_yard_of_jo(&plain);
         plain.answer("Flows", &flows());
         plain.answer_for("Line", "depot", "yardr", &line_yardr());
-        let (_plain_view, cx) = opened(&plain, &["Shall I land it?"], cx);
+        plain.answer_for("Prime", "crew", "yardmaster", &prime_yardmaster(false));
+        let (plain_view, cx) = opened(&plain, &["Shall I land it?"], cx);
         click_on(cx, "talk context yardmaster");
         wait(cx, "the plain role", |cx| drawn(cx, "context role file"));
         click_on(cx, "context tab prime");
-        wait(cx, "the plain prime", |cx| drawn(cx, "context prime role"));
+        if near {
+            wait(cx, "the plain prime", |cx| {
+                drawn(cx, "context prime depots")
+            });
+            assert!(drawn(cx, "context prime role"));
+            assert!(!drawn(cx, "context prime operator"));
+            assert_eq!(prime_label(&plain_view, cx, "yardmaster"), "Prime · 3");
+        }
+
+        // The prime's tab stands on its own call, and not on the line's:
+        // with the line refused it still lists. Where the yard refuses
+        // the prime, in words that name a depot and its file, the tab
+        // says them as the yard did, with the hint to try again, which a
+        // drawer shut and opened again does.
+        if near {
+            let noline = Yard::start();
+            a_yard_of_jo(&noline);
+            noline.answer("Flows", &flows());
+            noline.answer_for(
+                "Line",
+                "depot",
+                "yardr",
+                r#"{"error": {"code": "error", "message": "the line is closed"}}"#,
+            );
+            noline.answer_for("Prime", "crew", "yardmaster", &prime_yardmaster(true));
+            let (noline_view, cx) = opened(&noline, &["Shall I land it?"], cx);
+            click_on(cx, "talk context yardmaster");
+            wait(cx, "the refused line", |cx| drawn(cx, "context retry"));
+            click_on(cx, "context tab prime");
+            wait(cx, "the prime of a refused line", |cx| {
+                drawn(cx, "context prime depots")
+            });
+            assert_eq!(prime_label(&noline_view, cx, "yardmaster"), "Prime · 4");
+
+            let refused = Yard::start();
+            a_yard_of_jo(&refused);
+            refused.answer("Flows", &flows());
+            refused.answer_for("Line", "depot", "yardr", &line_yardr());
+            let said = "depot notes: /home/jo/notes/AGENTS.md is longer than 1048576 bytes";
+            refused.answer_for(
+                "Prime",
+                "crew",
+                "yardmaster",
+                &json!({"error": {"code": "error", "message": said}}).to_string(),
+            );
+            let (refused_view, cx) = opened(&refused, &["Shall I land it?"], cx);
+            click_on(cx, "talk context yardmaster");
+            wait(cx, "the role", |cx| drawn(cx, "context role file"));
+            click_on(cx, "context tab prime");
+            wait(cx, "the refusal", |cx| drawn(cx, "context prime notice"));
+            assert!(drawn(cx, "context prime retry"));
+            refused_view.read_with(cx, |v, _| {
+                let model = v.model.as_ref().unwrap();
+                assert_eq!(
+                    model.prime_notice(),
+                    Some(format!("the prime could not be read: {said}").as_str())
+                );
+                assert!(!model.prime_too_old());
+            });
+            refused.answer_for("Prime", "crew", "yardmaster", &prime_yardmaster(true));
+            click_on(cx, "talk context yardmaster");
+            cx.run_until_parked();
+            click_on(cx, "talk context yardmaster");
+            wait(cx, "the prime read again", |_| {
+                refused.asked("Prime").len() == 2
+            });
+            click_on(cx, "context tab prime");
+            wait(cx, "the prime after the retry", |cx| {
+                drawn(cx, "context prime depots")
+            });
+            assert_eq!(prime_label(&refused_view, cx, "yardmaster"), "Prime · 4");
+        }
+
+        // A yard at an address serves the prime to no device, down the
+        // link from its edge too, whatever it has staged: it is not asked
+        // for, and the tab says it is read on the yard's machine.
+        let remote = Yard::start_tcp();
+        a_yard_of_jo(&remote);
+        remote.answer("Flows", &flows());
+        remote.answer_for("Line", "depot", "yardr", &line_yardr());
+        remote.answer_for("Prime", "crew", "yardmaster", &prime_yardmaster(true));
+        let (remote_view, cx) = opened(&remote, &["Shall I land it?"], cx);
+        click_on(cx, "talk context yardmaster");
+        wait(cx, "the role at an address", |cx| {
+            drawn(cx, "context role file")
+        });
+        click_on(cx, "context tab prime");
+        wait(cx, "the yard's machine", |cx| {
+            drawn(cx, "context prime on the yard")
+        });
+        assert_eq!(remote.asked("Prime"), Vec::<Value>::new());
+        assert_eq!(prime_label(&remote_view, cx, "yardmaster"), "Prime");
 
         // A device that is not the operator's does not get a Context
         // button in the conversation head, even for a crew member. Its
@@ -17749,6 +17952,18 @@ yardr.dev
             );
         });
         assert!(!drawn(cx, "talk context operator_probe"));
+        // The drawer is the operator's: opened on a member all the same (no
+        // button offers it), it reads nothing, and its Prime tab says whose
+        // it is.
+        other_view.update_in(cx, |v, _, cx| {
+            v.open_crew_context("operator_probe".into(), cx)
+        });
+        click_on(cx, "context tab prime");
+        wait(cx, "the operator's drawer", |cx| {
+            drawn(cx, "context prime operator only")
+        });
+        assert_eq!(other.asked("Prime"), Vec::<Value>::new());
+        assert_eq!(prime_label(&other_view, cx, "operator_probe"), "Prime");
     }
 
     /// Propose an edit in the drawer's Prompt tab mails the yardmaster

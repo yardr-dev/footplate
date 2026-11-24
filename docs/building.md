@@ -458,7 +458,9 @@ context drawer open on footplate's default flow at new, over the pane),
 `lines-served` (that pane with the drawer's Group tab open on yardr's
 default flow at new, its serving picker open with a group marked),
 `crew-context` (the yardmaster's conversation with the member's context
-drawer open on its Role tab, over the pane),
+drawer open on its Role tab, over the pane), `crew-prime` (that drawer on its
+Prime tab: the yard's Prime answer as four numbered items, the memories
+three of seven titles, and one of two depots with its rules),
 `keys` (the cheatsheet open over an open card),
 `about` (the About card open over the yardmaster's conversation,
 naming footplate's version and the yardr's, with its path), `about-missing`

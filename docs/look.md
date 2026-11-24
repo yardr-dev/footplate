@@ -294,9 +294,10 @@ accent's edge.
 
 The press opens the member's context drawer: the stage drawer's shell
 with two tabs. Its head is the `crew` kicker chip with `{member}'s
-context`; its tabs are Role and Prime with how many shape it (`Prime ·
-2`, the role alone where the settings carry neither of the operator's
-words).
+context`; its tabs are Role and Prime, the Prime tab with how many
+items it lists once the yard has answered (`Prime · 4`, `Prime · 3`
+where the prime carries none of the operator's words; the word alone
+while the prime is read, and where it is not).
 
 The Role tab opens with the file line — the path in the code role, a
 digest in a file name said by its first twelve, over `depot X · N
@@ -309,10 +310,29 @@ the foot going while the editor stands.
 
 The Prime tab opens with what the member's session reads when it
 starts, in order, with the yard's command for the whole (`yardr prime
---crew X`); under it each known shaping stands numbered — the
-18-wide number in the code role and quiet, its title in the meta role
-medium, its value in code, whose in quiet. First the role, with its
-path and `depot X · N lines` (`no prompt` where the read has none),
-then how to work with the operator — the style and the note as the
-settings carry them — with `the yard's settings · every session reads
-both`. The tab lists, and carries no foot.
+--crew X`); under it the yard's Prime answer stands as numbered items —
+the 18-wide number in the code role and quiet, its title in the meta
+role medium, its value in code, what it says of and whose in quiet,
+the numbers running over the items that stand. First the role, with
+its path and `N lines · as its session reads it` (`no prompt` where
+the member's config names none). Then how to work with you, where the
+prime carries the operator's words: the style with the answer it stands
+for (`show · Show me`), what the style asks of an agent, their note in
+code, and `jo's settings · every session reads both`; no item where it
+has neither. Then the member's memories, a title each in the meta role
+with `the yard's` or `{member}'s own` beneath, and `until` the time
+where one retires; `N more` for those the yard left out, and `no
+memories` where it has none. Last each depot's rules: the depot's name
+in code, and under it each rules file's path with its lines (`no
+rules`, and `no depots` where the yard has none). A title is one line
+of letters, whoever wrote it.
+
+Where the tab has no prime to list it says why, in one quiet line in
+place of the items and in no red: `The context drawer is the operator's.`
+where the window is not the operator's, `the prime is read on the yard's
+machine` (a yard at an address serves the call to no device), that the
+yard's yardr is older than the Prime read, the yard's own refusal, which
+names the depot and the file it could not read, over `Press Context
+again to try again.`, or `Reading the prime…` while it is read. The tab
+stands whether or not the Role tab's line was read. It lists, and
+carries no foot.

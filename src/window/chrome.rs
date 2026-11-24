@@ -1455,19 +1455,25 @@ impl Footplate {
                         );
                         effects.extend(model.open_context("yardr", "default", "", "new"));
                     }
-                    // The crew shot opens the drawer on the yardmaster's
+                    // The crew shots open the drawer on the yardmaster's
                     // conversation, as a press on its Context button
-                    // does: the first depot's line is read, and the
-                    // drawer shows it once the call answers. A debug
-                    // build's alone, as above.
+                    // does: the first depot's line and the member's prime
+                    // are read, and the drawer shows them once the calls
+                    // answer, on the Role tab or, for the prime's shot,
+                    // the Prime one. A debug build's alone, as above.
                     #[cfg(debug_assertions)]
-                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("crew-context") {
+                    if let shot @ ("crew-context" | "crew-prime") =
+                        std::env::var("FOOTPLATE_SHOT").unwrap_or_default().as_str()
+                    {
                         self.context = Some(super::context::ContextOpen {
                             subject: crate::model::ContextSubject::Crew {
                                 depot: "footplate".into(),
                                 member: "yardmaster".into(),
                             },
-                            tab: super::context::ContextTab::Role,
+                            tab: match shot {
+                                "crew-prime" => super::context::ContextTab::Prime,
+                                _ => super::context::ContextTab::Role,
+                            },
                             served_open: false,
                             stage_whole: false,
                             prompt_whole: false,
@@ -3577,6 +3583,27 @@ impl Footplate {
                         },
                     )
                 }
+                // Made only when a crew drawer opens, and never at a yard
+                // at an address: the yard serves the call on its socket
+                // alone. A yard too old for it has no call to make again.
+                Effect::Prime { crew, generation } => self.ask_in(
+                    session,
+                    cx,
+                    {
+                        let crew = crew.clone();
+                        move |client, _| client.prime(&crew)
+                    },
+                    move |this, answered, cx| match answered {
+                        Ok(prime) => this.change_in(session, cx, |m| {
+                            m.prime_read(&crew, generation, prime);
+                            Vec::new()
+                        }),
+                        Err(err) => this.change_in(session, cx, |m| {
+                            m.prime_failed(&crew, generation, &err);
+                            Vec::new()
+                        }),
+                    },
+                ),
                 Effect::Bead { bead } => {
                     // Stamped as the queue's reads are: the notes of a
                     // read made before a note's call ended cannot say the

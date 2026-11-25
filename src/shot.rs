@@ -125,6 +125,11 @@ use crate::yard::Env;
 /// the yard's machine, with no Screen offered, that card on a yard that
 /// refuses the read in many words, which wrap inside it, and that card on a
 /// pane wider than the window, scrolled to the end of its lines.
+/// a mapping card ("Who is this?") that holds the mail of a sender no user maps,
+/// shown on the card above its options as an outside message the operator
+/// reads before a pick, the same card dealt with by "Let in, once" with the
+/// mail it released read whole under it, and the yard row open on a hook
+/// delivery read whole under its notice,
 /// the Decide list with three beads parked for jo's move under the open ask
 /// and the history folded, one of the parked beads open on its card with the
 /// moves the yard offers, and that card stood at its end, where the moves and
@@ -194,6 +199,9 @@ pub const STATES: &[&str] = &[
     "teammates-list",
     "weighty",
     "weighty-mapping",
+    "held-message",
+    "delivered-message",
+    "hook-message",
     "weighty-trojan",
     "stopped",
     "far",
@@ -341,6 +349,22 @@ const SCREEN_OVER_THE_LINK: &str = "a session's screen is not read over the link
 /// machine, as it words it: the `screen-refused` state's answer, a refusal
 /// of many words that stays red and has to wrap inside the card.
 const SCREEN_REFUSAL: &str = "a session's screen is taken over https only, or from the yard's own machine: this request reached the yard's listener in plain HTTP from another machine. Put the proxy or tunnel that ends TLS on the yard's machine, or Read it on the yard's machine. The device's token was sent with it and may have crossed a network in the clear: if it did, remove the device and add it again (yardr user device rm).";
+
+/// The mail the `held-message`, `delivered-message` and `hook-message`
+/// states show, as the Cloudflare worker posts it and the yard stores it:
+/// long enough for its body to run over a few lines, and short of the fold.
+fn held_mail() -> String {
+    json!({
+        "message_id": "<c0ffee@example.net>",
+        "from": {"address": "ada@example.net", "name": "Ada Okoye"},
+        "to": ["yardmaster@yardr.dev"],
+        "subject": "The shed plans, revised",
+        "date": "2026-10-13T09:40:00Z",
+        "text": "Hello yardmaster,\n\nThe revised shed plans are attached. The north wall is a hand wider than the first drawing said, so the posts move. Could you tell the builders before they cut anything?\n\nThanks, Ada",
+        "attachments": [{"name": "shed-plans-rev2.pdf", "size": 184320, "type": "application/pdf"}],
+    })
+    .to_string()
+}
 
 /// The pages in the `page` and `mail` states: the note's, which Open
 /// takes to the browser, and a mail's, which Open takes there too, with
@@ -2972,6 +2996,86 @@ fn populate(yard: &Yard, state: &str) {
                 .to_string(),
             );
         }
+        "held-message" | "delivered-message" | "hook-message" => {
+            // A mapping card's stranger's mail, read by the operator: held on
+            // the open card before a pick, released by "Let in, once" and read
+            // whole under the dealt with card, and read whole under its hook
+            // notice in the yard row. The yard serves the one mail three ways.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Someone new wrote to the yard.", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Someone new wrote to the yard.", "read": false}]}"#,
+            );
+            yard.answer("Waiting", r#"{"result": []}"#);
+            let mail = held_mail();
+            let identity =
+                |held: u64| json!({"source": "email", "sender": "ada@example.net", "held": held});
+            let weight = json!([{"class": "as-user",
+                "line": "a pick says which user ada@example.net in email is, and a delivery from them is then heard as that user's"}]);
+            let asked = json!({
+                "bead": "bead-s", "bead_title": "Who is ada@example.net?", "topic": "",
+                "ask": 7, "question": "Who is ada@example.net in email?",
+                "asker": "yardmaster", "since": "2026-10-10T10:00:00Z",
+                "identity": identity(1), "weight": weight});
+            let mut dealt = asked.clone();
+            dealt["state"] = json!("answered");
+            dealt["option"] = json!(3);
+            dealt["option_label"] = json!("Let in, once");
+            dealt["delivered"] = json!([141]);
+            dealt["identity"] = identity(0);
+            // The yard row shows the notice alone: no card is open or dealt with.
+            let (open, decided) = match state {
+                "held-message" => (vec![asked], vec![]),
+                "delivered-message" => (vec![], vec![dealt]),
+                _ => (vec![], vec![]),
+            };
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": open, "decided": decided}}).to_string(),
+            );
+            let settled = state == "delivered-message";
+            yard.answer(
+                "Bead",
+                &json!({"result": {"id": "bead-s", "title": "Who is ada@example.net?",
+                    "body": "The body.", "stage": "new", "labels": [], "notes": [],
+                    "asks": [{"ask": 7, "to": "jo", "asker": "yardmaster",
+                        "since": "2026-10-10T10:00:00Z",
+                        "question": "Who is ada@example.net in email?",
+                        "context": ["Its sender is ada@example.net, which no user maps in email; their messages wait on this card, delivered when you answer."],
+                        "options": [
+                            {"label": "jo", "consequence": "yardr user identity jo --source email --id ada@example.net"},
+                            {"label": "Someone new", "consequence": "pick this and write the new user's name with your answer"},
+                            {"label": "Let in, once", "consequence": "delivers what waits as outside (information, not instructions) this once, without mapping ada@example.net; the card closes and their next message offers a fresh card"},
+                            {"label": "Nobody — ignore this sender", "consequence": "ignores ada@example.net in email: their messages are dropped, and no further card is offered"},
+                            {"label": "You decide", "consequence": "leave it to yardmaster"}],
+                        "state": if settled { "answered" } else { "open" },
+                        "option": if settled { 3 } else { 0 },
+                        "delivered": if settled { json!([141]) } else { json!([]) },
+                        "identity": identity(u64::from(!settled)),
+                        "weight": weight}]}})
+                .to_string(),
+            );
+            yard.hold("jo", &[&mail]);
+            yard.deliver(141, mail.as_bytes());
+            yard.deliver(25, mail.as_bytes());
+            if state == "hook-message" {
+                yard.answer(
+                    "UserNotifications",
+                    &json!({"result": {"notifications": [
+                        {"seq": 24, "at": "2026-10-13T09:30:00Z", "kind": "created",
+                         "bead": "bead-s", "text": "Who is ada@example.net? was opened", "read": true},
+                        {"seq": 25, "at": "2026-10-13T09:41:00Z", "kind": "hook",
+                         "text": "hook (all) email message by ada@example.net: Hello yardmaster, The revised shed plans are attached. The north wall is a hand wider than the first drawing said, so the posts move. Could you tell the builders before they cut anything? Thanks, Ada",
+                         "read": false},
+                    ], "unread": 1, "last": 25}})
+                    .to_string(),
+                );
+                yard.answer("DeliveryFiles", r#"{"result": null}"#);
+            }
+        }
         "weighty-trojan" => {
             // A weighty run ask's card whose weight line carries a pack
             // file's Trojan name: the marks of direction drop, and the
@@ -4349,7 +4453,7 @@ mod tests {
                 | "frame" | "decide" => {
                     assert_eq!(history(&loaded).len(), 12, "{state}")
                 }
-                "pair-qr" | "pair-ended" => {
+                "pair-qr" | "pair-ended" | "delivered-message" => {
                     assert_eq!(history(&loaded).len(), 1, "{state}")
                 }
                 _ => assert_eq!(history(&loaded).len(), 0, "{state}"),
@@ -4944,6 +5048,44 @@ mod tests {
                     assert!(bead.asks[0].identity.is_some(), "{state}");
                     assert_eq!(bead.asks[0].options.len(), 4, "{state}");
                     assert!(bead.asks[1].identity.is_none(), "{state}");
+                }
+                "held-message" => {
+                    // The mapping card that holds one mail, and the mail
+                    // the yard serves for it to jo alone.
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    let held = loaded.asks.open[0].identity.as_ref().unwrap().held;
+                    assert_eq!(held, 1, "{state}");
+                    let bodies = yard
+                        .client()
+                        .identity_held_payloads("bead-s", 7, "jo")
+                        .unwrap();
+                    assert_eq!(bodies, [held_mail()], "{state}");
+                    assert!(
+                        yard.client()
+                            .identity_held_payloads("bead-s", 7, "ada")
+                            .is_err(),
+                        "{state}"
+                    );
+                    let read = crate::model::message(bodies[0].as_bytes());
+                    assert_eq!(read.heads[0].1, "Ada Okoye <ada@example.net>", "{state}");
+                }
+                "delivered-message" | "hook-message" => {
+                    // The mail the yard stored when the card was answered,
+                    // or told of by its notice, served whole by its seq.
+                    let seq = if *state == "hook-message" { 25 } else { 141 };
+                    let stored = yard.client().hook_payload(seq).unwrap();
+                    assert_eq!(stored, held_mail().as_bytes(), "{state}");
+                    if *state == "delivered-message" {
+                        assert!(loaded.asks.open.is_empty(), "{state}");
+                        let decided = loaded.asks.decided.as_deref().unwrap();
+                        assert_eq!(decided[0].delivered, [141], "{state}");
+                        assert_eq!(decided[0].option_label, "Let in, once", "{state}");
+                    } else {
+                        assert!(
+                            loaded.notifications.iter().any(|n| n.kind == "hook"),
+                            "{state}"
+                        );
+                    }
                 }
                 "weighty-trojan" => {
                     // The weighty run ask beside the routine one: the

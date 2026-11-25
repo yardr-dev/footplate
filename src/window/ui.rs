@@ -11,7 +11,7 @@ use super::Footplate;
 use super::metrics::SELECT_CHOICE;
 use crate::input::Line;
 use crate::model::Outcome;
-use crate::theme::Palette;
+use crate::theme::{Palette, TYPE_META};
 
 /// A rail glyph's canvas: 28 pixels, drawn from the mock's geometry
 /// (docs/design/2026-10-16-footplate-zj5f-rail-mock.html), a 24-grid with
@@ -385,6 +385,20 @@ pub(crate) fn small_button(text: String, palette: Palette) -> Div {
         .cursor_pointer()
         .hover(|style| style.bg(palette.hover))
         .child(text)
+}
+
+/// A control that is a word and no button, for what acts on the text it
+/// stands beside: the link colour in the meta role, with a pointer, as the
+/// run block's `Copy` is. `id` names it and the test finds it by that name.
+pub(crate) fn link_word(id: String, label: String, palette: Palette) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(id.clone()))
+        .debug_selector(move || id.clone())
+        .flex_none()
+        .text_size(rems(TYPE_META))
+        .text_color(palette.link)
+        .cursor_pointer()
+        .child(label)
 }
 
 /// "? all keys", which opens the cheatsheet of the open view's keys:

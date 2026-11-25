@@ -440,7 +440,8 @@ impl Yard {
     }
 
     /// What it answers from now on to a call of the method whose argument
-    /// `arg` is `is`: the conversation with one party, mail to one peer.
+    /// `arg` is `is`: the conversation with one party, mail to one peer. A
+    /// number argument is `is` by its digits.
     pub fn answer_for(&self, method: &str, arg: &str, is: &str, body: &str) {
         let reply = Reply {
             status: 200,
@@ -453,6 +454,32 @@ impl Yard {
             .unwrap()
             .answers_for
             .insert((method.into(), arg.into(), is.into()), reply);
+    }
+
+    /// The held messages of a mapping card, as `IdentityHeldPayloads`
+    /// serves them: to `actor` alone, the person the card asks. Any other
+    /// caller is told what the listener tells one that is not the operator,
+    /// that it has no such method, and so is a call before this is made.
+    pub fn hold(&self, actor: &str, bodies: &[&str]) {
+        let result = serde_json::json!({ "result": bodies }).to_string();
+        self.answer_for("IdentityHeldPayloads", "actor", actor, &result);
+    }
+
+    /// What the yard stored of the hook event `seq`, as `HookPayload` serves
+    /// it: the bytes as one base64 string, as Go writes a `[]byte`. A seq
+    /// nothing was stored for is unscripted, and says no such method.
+    pub fn deliver(&self, seq: u64, body: &[u8]) {
+        let sent = base64::engine::general_purpose::STANDARD.encode(body);
+        let result = serde_json::json!({ "result": sent }).to_string();
+        self.answer_for("HookPayload", "seq", &seq.to_string(), &result);
+    }
+
+    /// The body of the hook event `seq` was pruned: not found, as the yard
+    /// says it.
+    pub fn prune(&self, seq: u64) {
+        let why = format!("hook payload for event {seq}: not found");
+        let result = serde_json::json!({"error": {"code": "not-found", "message": why}});
+        self.answer_for("HookPayload", "seq", &seq.to_string(), &result.to_string());
     }
 
     /// What it answers to the next call of the method only.
@@ -1484,7 +1511,15 @@ fn call_reply(shared: &Shared, method: &str, body: &[u8], listener: bool) -> Opt
     let by_arg = state
         .answers_for
         .iter()
-        .find(|((m, arg, is), _)| m == method && args[arg.as_str()] == is.as_str())
+        .find(|((m, arg, is), _)| {
+            // A string argument is matched by its value, and a number by
+            // its digits.
+            m == method
+                && (args[arg.as_str()] == is.as_str()
+                    || args[arg.as_str()]
+                        .as_u64()
+                        .is_some_and(|n| n.to_string() == *is))
+        })
         .map(|(_, reply)| reply.clone());
     if state.silent.contains(&method.to_string()) {
         return None;

@@ -38,6 +38,11 @@
 # Open), `run` (an
 # open card of a run ask), `teammates` (an open card of a teammate
 # invite), `teammates-list` (the teammates view open on its row),
+# `held-message` (a mapping card that holds a stranger's mail, which the
+# operator reads on the card above its options before a pick),
+# `delivered-message` (that card dealt with by "Let in, once", the mail
+# it released read whole under it) and `hook-message` (the yard row with
+# a hook delivery's notice read whole),
 # `stopped` (a stopped yard), `far`
 # (a yard at an address, away), `settings` (the settings on each of
 # their sections: `settings` is this window, and `settings-appearance`,

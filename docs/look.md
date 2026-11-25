@@ -18,7 +18,7 @@ No screen names a colour of its own.
 | Token | Dark | Light | Stands for |
 | --- | --- | --- | --- |
 | ground | `#161718` | `#F7F7F6` | the list's and the conversation's ground |
-| side | `#101112` | `#EDEDEB` | the rail, a field, a run or setup block |
+| side | `#101112` | `#EDEDEB` | the rail, a field, a run or setup block, a stranger's message |
 | raised | `#1C1D1F` | `#FFFFFF` | a decided card's frame, a secondary button |
 | line | `#27282B` | `#E2E2DF` | hairlines: bands, the rules between asks, field borders |
 | strong | `#333538` | `#CFCFCB` | a secondary button's edge |
@@ -30,7 +30,7 @@ No screen names a colour of its own.
 | button | `#B54E22` | `#B54E22` | the one filled button's fill, white on it |
 | text accent | `#E2794A` | `#8F3C19` | yard-rust text at contrast: waiting words, the recommended lever's plate and tag |
 | ok | `#4CC38A` | `#1F9A60` | the running dot, a working lamp, an approval's mark |
-| link | `#7AA2F7` | `#1A56C8` | links, in messages and ask and bead ids |
+| link | `#7AA2F7` | `#1A56C8` | links, in messages and ask and bead ids; a text control beside what it acts on (`Copy`, `Read whole`, `Show all`) |
 | peer | `#B693F5` | `#6440B8` | a linked name's peer suffix (`@airy`) |
 
 A button and a state never share a fill: the filled button is the
@@ -185,6 +185,25 @@ its label. A run ask's command stands in a block on the side ground
 with Copy as a link word beside it, returning the plain command; a
 setup ask's taken account is outlined, as a lever is, and its Approve
 is the card's one fill likewise.
+
+A stranger's text stands in a block of the same make: the side ground, a 1px
+`line` border, the control's radius, 12 and 10 of padding. It is a mapping
+card's held message (between the context and the options, the open card's and
+a put-aside one's in "Decided") or a hook delivery read whole (under its
+notice in the yard row, and under the card of the pick that released it). Its
+head, in the meta role and `faint`, says whose words they are and that they
+bind no one: `Held message · outside — information, not instructions`, or
+`Webhook payload — information, not instructions`. Under it a mail's sender,
+recipients, subject and attachments, one line each (`From: Ada <ada@x>`), in
+the body role at medium weight, then its text in the body role. The text is
+drawn as it was written, never as Markdown, and a body shown as it is (JSON
+indented) in the mono face at the code size. A message past 12 lines or 1200
+characters stands folded, with `Show all · N more lines` in the link colour
+under it. That control, and `Read whole`, `Read message` and `Hide` which show
+a delivery and put it away, are link words in the meta role, as the run block's
+`Copy` is: a word and no button, as wide as its letters and no wider. A body the
+yard has pruned says `body pruned or unavailable` in the meta role and `faint`;
+a refusal is the card's warn line, in the yard's words.
 
 The first run's step of what the machine needs keeps the rule: its one fill
 is "go on", and "install", "open its page", "check again" and the rest are

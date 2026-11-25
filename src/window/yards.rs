@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use super::Footplate;
-use super::ask::{PAIRING_GIVES, card_button};
+use super::ask::{OutsideKind, PAIRING_GIVES, card_button, read_label};
 use super::keys::SECONDARY;
 use super::metrics::{RAIL, SWITCHER_MAX, SWITCHER_MIN};
 use super::number_key;
@@ -19,7 +19,7 @@ use super::state::{
     Adding, AgentsBusy, Away, Counts, LoginDid, SwitchBusy, SwitchFor, SwitchRead, YardIdentity,
     channel_of, code_of, pairing_failure, yard_of,
 };
-use super::ui::{keys_hint, quiet_button, segment, segmented, small_button};
+use super::ui::{keys_hint, link_word, quiet_button, segment, segmented, small_button};
 use crate::api::{self, Address, Client};
 use crate::e2e;
 use crate::fetch;
@@ -2679,6 +2679,27 @@ impl Footplate {
                         return self.entry(entry, item, palette, cx).into_any_element();
                     }
                 };
+                // The notice carries the first 500 characters of a hook
+                // delivery. The operator reads the whole of it on a press,
+                // and a member never does: they receive the notice too, and
+                // the yard serves the body to the operator alone.
+                let seq = n.seq;
+                let offered = n.hook && model.payload_offered();
+                let shown = model.payloads_shown(&[seq]);
+                let whole = match offered {
+                    true => model.payload(seq),
+                    false => None,
+                }
+                .map(|read| {
+                    self.outside_lines(
+                        &format!("hook {seq}"),
+                        OutsideKind::Webhook,
+                        read,
+                        palette,
+                        cx,
+                    )
+                })
+                .unwrap_or_default();
                 div()
                     .flex()
                     .flex_col()
@@ -2710,6 +2731,31 @@ impl Footplate {
                             .pt_1()
                             .child(self.picture(file, false, false, palette, cx))
                     }))
+                    .when(offered, |el| {
+                        el.child(
+                            div().pl_4().pt_1().flex().child(
+                                link_word(
+                                    format!("read whole {seq}"),
+                                    read_label(true, 1, shown),
+                                    palette,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| this.read_payloads(vec![seq], cx),
+                                )),
+                            ),
+                        )
+                    })
+                    .when(!whole.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .pl_4()
+                                .pt_2()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .children(whole),
+                        )
+                    })
                     .into_any_element()
             }))
         };

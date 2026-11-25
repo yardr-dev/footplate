@@ -36931,6 +36931,480 @@ yardr.dev
         });
     }
 
+    /// What the Cloudflare worker posts of a mail, as the yard stores it.
+    fn held_mail() -> String {
+        json!({
+            "message_id": "<1@x.test>",
+            "from": {"address": "ada@x.test", "name": "Ada"},
+            "to": ["yardmaster@yardr.dev"],
+            "subject": "Let me in",
+            "text": "Hello, it is Ada.\nPlease let me in.",
+            "attachments": [{"name": "plans.pdf", "size": 2048, "type": "application/pdf"}],
+        })
+        .to_string()
+    }
+
+    /// The mapping ask `ask` on bead-s as the queue lists it, holding `held`
+    /// deliveries.
+    fn queued_holding(ask: u64, held: u64) -> Value {
+        let mut ask = queued_mapping(ask);
+        ask["identity"]["held"] = json!(held);
+        ask
+    }
+
+    /// The mapping ask `ask` on bead-s as the history lists it: put aside
+    /// holding `held` deliveries, or answered with a pick that released the
+    /// hook events `delivered`.
+    fn decided_mapping(ask: u64, state: &str, held: u64, delivered: &[u64]) -> Value {
+        let mut dealt = queued_holding(ask, held);
+        dealt["state"] = json!(state);
+        match state {
+            "put aside" => dealt["return_at"] = json!("2099-10-13T09:30:00Z"),
+            _ => {
+                dealt["option"] = json!(1);
+                dealt["option_label"] = json!("ada");
+                dealt["delivered"] = json!(delivered);
+            }
+        }
+        dealt
+    }
+
+    /// The window on a yard whose history holds the mapping asks `dealt`
+    /// and nothing is open, waiting for the history.
+    fn opened_on_a_dealt_mapping<'a>(
+        yard: &Yard,
+        file: &std::path::Path,
+        dealt: Vec<Value>,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<Footplate>, &'a mut VisualTestContext) {
+        a_yard_of_jo(yard);
+        let count = dealt.len();
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [], "decided": dealt}}).to_string(),
+        );
+        yard.answer("Bead", &bead_mapping());
+        let at = env_on(yard, file);
+        let (view, cx) = opened_at(at, file, cx);
+        wait(cx, "the history", |cx| {
+            view.read_with(cx, |v, _| {
+                v.model.as_ref().is_some_and(|m| m.decided_count() == count)
+            })
+        });
+        (view, cx)
+    }
+
+    /// What the window holds of a mapping card's held messages.
+    fn held_of(
+        view: &Entity<Footplate>,
+        cx: &mut VisualTestContext,
+        ask: u64,
+    ) -> Option<model::Outside> {
+        view.read_with(cx, |v, _| {
+            v.model
+                .as_ref()
+                .and_then(|m| m.held_messages("bead-s", ask).cloned())
+        })
+    }
+
+    /// An operator's open mapping card shows what the yard holds of the
+    /// sender before a pick: asked as the person the card asks, once, and
+    /// drawn in a block of its own between the card's words and its options,
+    /// headed as a stranger's, with who wrote it and what it says.
+    #[gpui::test]
+    fn an_open_mapping_card_shows_its_held_message_above_its_options(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [queued_holding(7, 1), queued_mapping(8)], "decided": []}})
+                .to_string(),
+        );
+        yard.answer("Bead", &bead_mapping());
+        yard.hold("jo", &[&held_mail()]);
+        let at = env_on(&yard, &file);
+        let (view, cx) = opened_on_the_ask(at, &file, cx);
+        wait(cx, "the held message", |cx| drawn(cx, "held bead-s 7 0"));
+
+        assert_eq!(
+            yard.asked("IdentityHeldPayloads"),
+            [json!({"bead": "bead-s", "ask": 7, "actor": "jo"})]
+        );
+        for part in ["label", "head", "text"] {
+            assert!(drawn(cx, &format!("held bead-s 7 0 {part}")), "{part}");
+        }
+        // Between the card's own words and its options.
+        let context = bounds_of(cx, "context bead-s 7 0");
+        let held = bounds_of(cx, "held bead-s 7 0");
+        let pick = bounds_of(cx, "pick bead-s 7 1");
+        assert!(
+            context.bottom() <= held.top() && held.bottom() <= pick.top(),
+            "{context:?} {held:?} {pick:?}"
+        );
+        // Who wrote it and what it says, as the model reads the body.
+        let Some(model::Outside::Read(read)) = held_of(&view, cx, 7) else {
+            panic!("{:?}", held_of(&view, cx, 7));
+        };
+        assert_eq!(
+            read[0].heads,
+            [
+                ("From", "Ada <ada@x.test>".to_string()),
+                ("To", "yardmaster@yardr.dev".to_string()),
+                ("Subject", "Let me in".to_string()),
+                (
+                    "Attachments",
+                    "plans.pdf (application/pdf, 2 KiB)".to_string()
+                ),
+            ]
+        );
+        assert_eq!(read[0].text, "Hello, it is Ada.\nPlease let me in.");
+        // The card that holds none asks nothing and draws none, and a
+        // frame more asks nothing again.
+        assert_eq!(held_of(&view, cx, 8), None);
+        assert!(!drawn(cx, "held bead-s 8 0"));
+        assert_eq!(yard.asked("IdentityHeldPayloads").len(), 1);
+    }
+
+    /// A put-aside mapping card in "Decided" holds what it held, and shows
+    /// it again when it is opened there; an answered one holds hook events
+    /// instead, which the yard says it has no held message for.
+    #[gpui::test]
+    fn a_put_aside_mapping_card_in_decided_shows_its_held_message_too(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        yard.hold("jo", &[&held_mail()]);
+        let (view, cx) = opened_on_a_dealt_mapping(
+            &yard,
+            &file,
+            vec![
+                decided_mapping(7, "put aside", 1, &[]),
+                decided_mapping(8, "answered", 1, &[]),
+            ],
+            cx,
+        );
+        // Nothing is asked of the history until a card is open.
+        assert_eq!(yard.asked("IdentityHeldPayloads"), Vec::<Value>::new());
+        open_decided(&view, cx, "bead-s", 7);
+        wait(cx, "the held message", |cx| drawn(cx, "held bead-s 7 0"));
+        assert_eq!(
+            yard.asked("IdentityHeldPayloads"),
+            [json!({"bead": "bead-s", "ask": 7, "actor": "jo"})]
+        );
+        for part in ["label", "head", "text"] {
+            assert!(drawn(cx, &format!("held bead-s 7 0 {part}")), "{part}");
+        }
+        let held = bounds_of(cx, "held bead-s 7 0");
+        let pick = bounds_of(cx, "pick bead-s 7 1");
+        assert!(held.bottom() <= pick.top(), "{held:?} {pick:?}");
+
+        // The answered one asks for none, though its count says it held one.
+        open_decided(&view, cx, "bead-s", 8);
+        wait(cx, "the answered card", |cx| {
+            drawn(cx, "decided card bead-s 8")
+        });
+        assert_eq!(held_of(&view, cx, 8), None);
+        assert_eq!(yard.asked("IdentityHeldPayloads").len(), 1);
+    }
+
+    /// A pick that let a sender in released their held deliveries as hook
+    /// events, which the answered card reads whole on a press: never ahead,
+    /// each once however often it is shown and hidden, and one the yard has
+    /// pruned says so, quietly.
+    #[gpui::test]
+    fn an_answered_mapping_card_reads_its_deliveries_whole_on_a_press(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        yard.deliver(141, held_mail().as_bytes());
+        yard.prune(142);
+        let (view, cx) = opened_on_a_dealt_mapping(
+            &yard,
+            &file,
+            vec![decided_mapping(7, "answered", 0, &[141, 142])],
+            cx,
+        );
+        open_decided(&view, cx, "bead-s", 7);
+        wait(cx, "the control", |cx| drawn(cx, "read message bead-s 7"));
+        assert_eq!(yard.asked("HookPayload"), Vec::<Value>::new());
+        assert_eq!(yard.asked("IdentityHeldPayloads"), Vec::<Value>::new());
+
+        click_on(cx, "read message bead-s 7");
+        wait(cx, "the message", |cx| drawn(cx, "hook 141 0"));
+        assert_eq!(
+            yard.asked("HookPayload"),
+            [json!({"seq": 141}), json!({"seq": 142})]
+        );
+        for part in ["label", "head", "text"] {
+            assert!(drawn(cx, &format!("hook 141 0 {part}")), "{part}");
+        }
+        // The pruned one says so where its body would stand.
+        assert!(drawn(cx, "hook 142 gone"));
+        let shown = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
+            view.read_with(cx, |v, _| {
+                v.model.as_ref().unwrap().payloads_shown(&[141, 142])
+            })
+        };
+        assert!(shown(&view, cx));
+        assert_eq!(notice(&view, cx), "");
+
+        // A press hides them, and the next shows them with no call.
+        click_on(cx, "read message bead-s 7");
+        cx.run_until_parked();
+        assert!(!shown(&view, cx));
+        click_on(cx, "read message bead-s 7");
+        cx.run_until_parked();
+        assert!(shown(&view, cx));
+        assert_eq!(yard.asked("HookPayload").len(), 2);
+    }
+
+    /// A yard from before the calls says it has no such method: the card
+    /// shows no message and says nothing of it, the window does not ask
+    /// again, and nothing offers to read a delivery whole. The card stands.
+    #[gpui::test]
+    fn a_yard_from_before_the_calls_shows_no_message_and_says_nothing(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [queued_holding(7, 2)], "decided": []}}).to_string(),
+        );
+        yard.answer("Bead", &bead_mapping());
+        let at = env_on(&yard, &file);
+        let (view, cx) = opened_on_the_ask(at, &file, cx);
+        wait(cx, "the call refused", |_| {
+            yard.asked("IdentityHeldPayloads").len() == 1
+        });
+        wait(cx, "the card without it", |cx| {
+            held_of(&view, cx, 7).is_none()
+        });
+        assert!(drawn(cx, "pick bead-s 7 1"));
+        assert!(!drawn(cx, "held bead-s 7 0"));
+        assert_eq!(notice(&view, cx), "");
+
+        // The queue read again asks nothing more.
+        let reads = yard.asked("UserAsks").len();
+        yard.emit(r#"{"seq": 30, "kind": "noted", "actor": "yardmaster", "data": {"note": 1}}"#);
+        wait_reread(cx, "the queue read again", |_| {
+            yard.asked("UserAsks").len() > reads
+        });
+        cx.run_until_parked();
+        assert_eq!(yard.asked("IdentityHeldPayloads").len(), 1);
+        assert_eq!(held_of(&view, cx, 7), None);
+        assert_eq!(notice(&view, cx), "");
+
+        // A delivery pressed for is refused the same way: nothing is
+        // offered after it, and nothing is said.
+        view.update(cx, |v, cx| v.read_payloads(vec![141], cx));
+        wait(cx, "the call refused", |_| {
+            yard.asked("HookPayload").len() == 1
+        });
+        wait(cx, "nothing offered", |cx| {
+            view.read_with(cx, |v, _| !v.model.as_ref().unwrap().payload_offered())
+        });
+        assert_eq!(notice(&view, cx), "");
+        view.update(cx, |v, cx| v.read_payloads(vec![141], cx));
+        cx.run_until_parked();
+        assert_eq!(yard.asked("HookPayload").len(), 1);
+    }
+
+    /// A window that is not the operator's asks for no held message and no
+    /// delivery, on any card: the yard serves both to the operator alone.
+    #[gpui::test]
+    fn a_window_that_is_not_the_operator_s_asks_for_no_held_message(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        yard.hold("jo", &[&held_mail()]);
+        yard.deliver(141, held_mail().as_bytes());
+        a_yard_of_jo(&yard);
+        yard.answer("Settings", r#"{"result": {"operator": "ada"}}"#);
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [queued_holding(7, 1)],
+                               "decided": [decided_mapping(8, "answered", 0, &[141])]}})
+            .to_string(),
+        );
+        yard.answer("Bead", &bead_mapping());
+        let at = env_on(&yard, &file);
+        let (view, cx) = opened_on_the_ask(at, &file, cx);
+        assert!(drawn(cx, "pick bead-s 7 1"));
+        open_decided(&view, cx, "bead-s", 8);
+        wait(cx, "the answered card", |cx| {
+            drawn(cx, "decided card bead-s 8")
+        });
+        assert!(!drawn(cx, "read message bead-s 8"));
+        view.update(cx, |v, cx| v.read_payloads(vec![141], cx));
+        cx.run_until_parked();
+        assert_eq!(yard.asked("IdentityHeldPayloads"), Vec::<Value>::new());
+        assert_eq!(yard.asked("HookPayload"), Vec::<Value>::new());
+        assert!(!drawn(cx, "held bead-s 7 0"));
+    }
+
+    /// The notices of the yard row, two of them a hook delivery's, and the
+    /// window on it.
+    fn opened_on_hook_notices<'a>(
+        yard: &Yard,
+        operator: &str,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<Footplate>, &'a mut VisualTestContext) {
+        a_yard_of_jo(yard);
+        yard.answer(
+            "Settings",
+            &json!({"result": {"operator": operator}}).to_string(),
+        );
+        let hook = |seq: u64| {
+            json!({"seq": seq, "at": "2026-10-08T09:31:00Z", "kind": "hook",
+                   "text": "hook (all) email message by ada@x.test: Hello, it is Ada. Please let m",
+                   "read": false})
+        };
+        yard.answer(
+            "UserNotifications",
+            &json!({"result": {"notifications": [
+                hook(5),
+                {"seq": 6, "at": "2026-10-08T09:30:00Z", "kind": "created",
+                 "bead": "yd-shed", "text": "yd-shed created", "read": false},
+                hook(7)
+            ], "unread": 3, "last": 7}})
+            .to_string(),
+        );
+        mails(yard, &["Hello."]);
+        let (view, cx) = opened(yard, &["Hello."], cx);
+        view.update_in(cx, |v, window, cx| v.select(Selected::Yard, window, cx));
+        wait(cx, "the yard row", |cx| {
+            view.read_with(cx, |v, _| {
+                v.model.as_ref().is_some_and(|m| {
+                    m.selected() == Some(&Selected::Yard) && m.notices().len() == 3
+                })
+            })
+        });
+        (view, cx)
+    }
+
+    /// The operator reads the whole of a hook delivery on its notice: a
+    /// quiet `Read whole` under it, which asks the yard for that delivery's
+    /// body on a press and never ahead, shows it in a block headed as a
+    /// webhook's, hides it again, and shows it again with no second call. A
+    /// notice of any other kind has no such control.
+    #[gpui::test]
+    fn an_operator_reads_a_hook_notice_whole_on_a_press(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        yard.deliver(5, held_mail().as_bytes());
+        let (view, cx) = opened_on_hook_notices(&yard, "jo", cx);
+        assert!(drawn(cx, "read whole 5"));
+        assert!(drawn(cx, "read whole 7"));
+        assert!(!drawn(cx, "read whole 6"));
+        // Opening the row pulled no body.
+        assert_eq!(yard.asked("HookPayload"), Vec::<Value>::new());
+
+        click_on(cx, "read whole 5");
+        wait(cx, "the whole delivery", |cx| drawn(cx, "hook 5 0"));
+        assert_eq!(yard.asked("HookPayload"), [json!({"seq": 5})]);
+        for part in ["label", "head", "text"] {
+            assert!(drawn(cx, &format!("hook 5 0 {part}")), "{part}");
+        }
+        let shown = |view: &Entity<Footplate>, cx: &mut VisualTestContext, seq: u64| {
+            view.read_with(cx, |v, _| v.model.as_ref().unwrap().payloads_shown(&[seq]))
+        };
+        assert!(shown(&view, cx, 5));
+        assert!(!shown(&view, cx, 7));
+        // The block stands under its notice, over the next one.
+        let notice_five = bounds_of(cx, "read whole 5");
+        let block = bounds_of(cx, "hook 5 0");
+        assert!(
+            notice_five.bottom() <= block.top(),
+            "{notice_five:?} {block:?}"
+        );
+
+        // Hidden, and shown again with no call.
+        click_on(cx, "read whole 5");
+        cx.run_until_parked();
+        assert!(!shown(&view, cx, 5));
+        click_on(cx, "read whole 5");
+        cx.run_until_parked();
+        assert!(shown(&view, cx, 5));
+        assert_eq!(yard.asked("HookPayload").len(), 1);
+        // A long body folds after its first lines, and the control that
+        // shows the rest is on it: pressed it shows them all, and pressed
+        // again it folds. The other delivery's block has none.
+        let long = (1..=40)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        yard.deliver(
+            7,
+            json!({"text": long, "subject": "Long"})
+                .to_string()
+                .as_bytes(),
+        );
+        click_on(cx, "read whole 7");
+        wait(cx, "the long delivery", |cx| drawn(cx, "hook 7 0 fold"));
+        assert!(!drawn(cx, "hook 5 0 fold"));
+        let unfolded = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
+            view.read_with(cx, |v, _| v.model.as_ref().unwrap().unfolded("hook 7 0"))
+        };
+        assert!(!unfolded(&view, cx));
+        let folded = bounds_of(cx, "hook 7 0 text").size.height;
+        // The control is past the pane's foot, which scrolls to it; only
+        // its word is pressed, not the width of the block.
+        cx.simulate_keystrokes("secondary-end");
+        cx.run_until_parked();
+        assert!(bounds_of(cx, "hook 7 0 fold").size.width < px(300.));
+        click_on(cx, "hook 7 0 fold");
+        cx.run_until_parked();
+        assert!(unfolded(&view, cx));
+        assert!(bounds_of(cx, "hook 7 0 text").size.height > folded);
+        // Its control moved down with the rest of the text.
+        cx.simulate_keystrokes("secondary-end");
+        cx.run_until_parked();
+        click_on(cx, "hook 7 0 fold");
+        cx.run_until_parked();
+        assert!(!unfolded(&view, cx));
+        assert_eq!(notice(&view, cx), "");
+    }
+
+    /// A member has the same notices and no `Read whole`: the yard serves
+    /// the body to the operator alone, and the window never asks.
+    #[gpui::test]
+    fn a_member_s_hook_notice_has_no_read_whole_and_asks_nothing(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        yard.deliver(5, held_mail().as_bytes());
+        let (view, cx) = opened_on_hook_notices(&yard, "ada", cx);
+        assert!(drawn(cx, "yard pane"));
+        assert!(!drawn(cx, "read whole 5"));
+        assert!(!drawn(cx, "read whole 7"));
+        view.update(cx, |v, cx| v.read_payloads(vec![5], cx));
+        cx.run_until_parked();
+        assert_eq!(yard.asked("HookPayload"), Vec::<Value>::new());
+        assert_eq!(notice(&view, cx), "");
+    }
+
+    /// A yard from before `HookPayload` is asked once, on the first press,
+    /// and its refusal is no failure: the controls are gone, no notice is
+    /// raised, and no press asks again.
+    #[gpui::test]
+    fn a_hook_notice_degrades_quietly_on_a_yard_from_before_the_call(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        let (view, cx) = opened_on_hook_notices(&yard, "jo", cx);
+        assert!(drawn(cx, "read whole 5"));
+        click_on(cx, "read whole 5");
+        wait(cx, "the call refused", |_| {
+            yard.asked("HookPayload").len() == 1
+        });
+        wait(cx, "nothing offered", |cx| {
+            view.read_with(cx, |v, _| !v.model.as_ref().unwrap().payload_offered())
+        });
+        assert_eq!(notice(&view, cx), "");
+        assert!(!drawn(cx, "hook 5 0"));
+        view.update(cx, |v, cx| v.read_payloads(vec![7], cx));
+        cx.run_until_parked();
+        assert_eq!(yard.asked("HookPayload").len(), 1);
+    }
+
     /// A setup ask's card: the yard's block with what approving does, each
     /// sentence whole — the credential's placement, the call's path, the
     /// mint's digest, the account and the grants — the account choice with

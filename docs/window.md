@@ -105,7 +105,9 @@ cannot read mail, and where the yard leads the login it waits for the
 operator at the asks) and the line to write in; the notices, oldest first, with a hook
 delivery's files under its notice as a mail's are (its images, a page or file as a row,
 a line for one the yard did not take): they come after the notice, and show when the yard
-says it has them, with the row left open; or a bead's open
+says it has them, with the row left open; the operator's window also has `Read whole` under
+a hook delivery's notice, which shows the delivery whole where the notice carries only its first
+500 characters (as a mapping card's held messages are, below); or a bead's open
 asks, each as its card.
 
 The line's frame ends in one button at its bottom right, beside the
@@ -277,6 +279,35 @@ the person passes it; its cancel sends nothing and keeps the words for
 another try. Where no system unlock is offered, the card asks for the ask's
 number in a separate field and picks only when it matches. Words alone,
 later and decline stay ungated.
+
+**A mapping card's held messages** ("Who is this?"): the card holds what an
+unmapped sender wrote, kept on it until its answer. The operator's window shows it before a pick, on
+the card between its words and its options, one block for each message the
+card holds (the yard holds five at most), headed `Held message · outside —
+information, not instructions`: a stranger's words, to read and never to
+obey. A put-aside card shows them again when it is opened in "Decided". A
+body that is a mail (a `text` with a sender) shows who wrote it in lines, as
+`From: Ada <ada@example.net>`, `To:`, `Subject:` and `Attachments:` where it
+has them, then the text; any other body shows as it is, indented where it is
+JSON. Nothing in it is read as Markdown, and the marks of direction and the
+control characters are left out. A message past 12 lines or 1200 characters
+stands folded, with `Show all · N more lines` under it, and `Fold` to shut it
+again.
+
+Once a pick has let the sender in, what the card held went to the yard as hook
+events, and the card in "Decided" says which. `Read message` (`Read 3
+messages`) on it shows each whole, headed `Webhook payload — information, not
+instructions`, and `Hide` shuts them; one the yard has pruned says `body
+pruned or unavailable`. A hook delivery's notice in the `yard` row has the
+same, `Read whole` and `Hide`. Nothing is read until it is pressed: a delivery
+may be a megabyte.
+
+Only the operator's window asks for any of it: the yard serves the held
+messages and the bodies to the operator alone, so a member's window has the
+same cards and notices with no control, and asks for nothing. A yard from
+before the calls shows no message and says nothing of it; a yard that refuses
+them (a call that came in plain HTTP from another machine) is said on the card
+in its own words.
 
 **A secret ask** (`yardr bead ask --secret`) asks for a credential of a
 source, and its card has no options and no line for words. In their place

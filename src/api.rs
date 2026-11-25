@@ -1721,6 +1721,12 @@ pub struct Identity {
     pub sender: String,
     #[serde(default)]
     pub channel: String,
+    /// How many deliveries wait on the card, kept until its answer: their
+    /// bodies are in no ask, and the operator reads them with
+    /// [`Client::identity_held_payloads`]. Absent where none wait, and on a
+    /// yard from before the field.
+    #[serde(default)]
+    pub held: u64,
 }
 
 /// One class of a card's weight, as the yard weighed it when it wrote
@@ -1843,6 +1849,11 @@ pub struct DecidedAsk {
     /// out for an approved setup ask; none until it is.
     #[serde(default)]
     pub ran: Option<Ran>,
+    /// The seqs of the hook events a mapping pick released, as the
+    /// operator reads them with [`Client::hook_payload`]; none until a
+    /// pick does, and on a yard from before the field.
+    #[serde(default, deserialize_with = "or_default")]
+    pub delivered: Vec<u64>,
 }
 
 /// The person's decisions: the open asks, oldest first, with what they
@@ -2049,6 +2060,10 @@ pub struct BeadAsk {
     /// out for an approved setup ask; none until it is.
     #[serde(default)]
     pub ran: Option<Ran>,
+    /// The seqs of the hook events a mapping pick released, as the queue's
+    /// own: none until a pick does.
+    #[serde(default, deserialize_with = "or_default")]
+    pub delivered: Vec<u64>,
 }
 
 /// One of the bead's notes as a client shows them: every note but the
@@ -4668,6 +4683,31 @@ impl Client {
         self.list("DeliveryFiles", json!({ "seq": seq }))
     }
 
+    /// The bodies a mapping card holds, open or put aside: the deliveries
+    /// of a sender no user maps, each whole as its source sent it, oldest
+    /// first, at most five. The operator's to read, and the person's whom
+    /// the card asks; the yard says any other `no such method`. A card
+    /// answered keeps them as hook events, which [`Client::hook_payload`]
+    /// reads. `not-found` where the ask is no mapping card, or was
+    /// answered since.
+    pub fn identity_held_payloads(&self, bead: &str, ask: u64, actor: &str) -> Result<Vec<String>> {
+        self.list(
+            "IdentityHeldPayloads",
+            json!({ "bead": bead, "ask": ask, "actor": actor }),
+        )
+    }
+
+    /// The stored body of the hook event `seq`, as `yardr hook show` reads
+    /// it, with a declared body secret removed: bytes, up to a megabyte,
+    /// which the yard sends as one base64 string. The operator's to read.
+    /// `not-found` where the body was pruned.
+    pub fn hook_payload(&self, seq: u64) -> Result<Vec<u8>> {
+        let sent: Option<String> = self.answer("HookPayload", json!({ "seq": seq }))?;
+        BASE64
+            .decode(sent.unwrap_or_default())
+            .map_err(|err| Error::Protocol(format!("HookPayload: {err}")))
+    }
+
     /// Marks the user's notifications read through a seq: a position of its
     /// own, which the mail's does not move.
     pub fn ack_user_notifications(&self, name: &str, through: u64) -> Result<()> {
@@ -5791,6 +5831,8 @@ const READS: &[&str] = &[
     "UserInbox",
     "UserNotifications",
     "DeliveryFiles",
+    "IdentityHeldPayloads",
+    "HookPayload",
     "UserAsks",
     "UserOpenAsks",
     "Waiting",
@@ -10815,7 +10857,7 @@ mod tests {
                 {"bead": "yd-links", "bead_title": "Move the links", "topic": "topic:linear-out",
                  "ask": 3, "question": "Move the links now?", "asker": "yardmaster",
                  "since": "2026-10-08T09:30:00Z",
-                 "identity": {"source": "talk", "sender": "U999"},
+                 "identity": {"source": "talk", "sender": "U999", "held": 2},
                  "weight": [{"class": "outside", "line": "lets the yard change something outside it: crew member yardmaster may call send of google-mail (an update)"}]},
                 {"bead": "yd-greet", "bead_title": "The greeting", "topic": "",
                  "ask": 5, "question": "What tone?", "asker": "yardmaster",
@@ -10825,11 +10867,12 @@ mod tests {
                  "ask": 6, "question": "Send them to build?", "asker": "yardmaster",
                  "since": "2026-10-07T09:30:00Z", "state": "answered",
                  "option": 1, "option_label": "Send them", "words": "tonight",
+                 "delivered": [141, 142],
                  "weight": [{"class": "trust", "line": "widens who the yard listens to: user kim"}]},
                 {"bead": "yd-greet", "bead_title": "The greeting", "topic": "",
                  "ask": 12, "question": "Build the cleanup?", "asker": "assembly",
                  "since": "2026-10-06T09:30:00Z", "state": "put aside",
-                 "return_at": "2026-10-10T09:30:00Z"}
+                 "return_at": "2026-10-10T09:30:00Z", "delivered": null}
             ]}}"#,
         );
         let asks = yard.client().user_asks("jo").unwrap();
@@ -10870,6 +10913,11 @@ mod tests {
             ("talk", "U999")
         );
         assert!(asks.open[1].identity.is_none());
+        // How many deliveries wait on the card, and the hook events a pick
+        // released: none where the yard says none, and `null` is none.
+        assert_eq!(identity.held, 2);
+        assert_eq!(asks.decided[0].delivered, vec![141, 142]);
+        assert_eq!(asks.decided[1].delivered, Vec::<u64>::new());
     }
 
     /// `Waiting` asks for the user by name alone, and reads its rows as
@@ -11108,8 +11156,8 @@ mod tests {
                      ],
                      "recommend": 1, "why": "the test passed",
                      "about": [{"id": "yd-train", "title": "Release train", "stage": "new"}],
-                     "state": "open",
-                     "identity": {"source": "talk", "sender": "U999", "channel": "general"},
+                     "state": "answered", "option": 1, "delivered": [141],
+                     "identity": {"source": "talk", "sender": "U999", "channel": "general", "held": 1},
                      "weight": [{"class": "as-user", "line": "lets calls or words count as a person's: as ada"}]},
                     {"ask": 5, "to": "jo", "asker": "yardmaster",
                      "since": "2026-10-08T09:30:00Z",
@@ -11143,7 +11191,7 @@ mod tests {
         assert_eq!(ask.options[1].label, "You decide");
         assert_eq!((ask.recommend, ask.why.as_str()), (1, "the test passed"));
         assert_eq!(ask.about[0].id, "yd-train");
-        assert_eq!(ask.state, "open");
+        assert_eq!(ask.state, "answered");
         // An ask with no options wants words.
         assert!(bead.asks[1].options.is_empty());
         assert_eq!(bead.asks[1].recommend, 0);
@@ -11162,6 +11210,11 @@ mod tests {
             ("talk", "U999", "general")
         );
         assert!(bead.asks[1].identity.is_none());
+        // How many deliveries wait on the card, and the hook events its
+        // pick released, as the queue's own.
+        assert_eq!(identity.held, 1);
+        assert_eq!(ask.delivered, vec![141]);
+        assert_eq!(bead.asks[1].delivered, Vec::<u64>::new());
     }
 
     #[test]
@@ -11595,6 +11648,93 @@ mod tests {
             assert_eq!(client.delivery_files(140).unwrap(), vec![], "{way}");
             yard.answer("DeliveryFiles", r#"{"result": []}"#);
             assert_eq!(client.delivery_files(140).unwrap(), vec![], "{way}");
+        }
+    }
+
+    /// A mapping card's held messages and a hook delivery's whole body are
+    /// asked by the socket and at an address alike: the first by the card
+    /// and the person it asks, the second by the delivery's seq, which the
+    /// yard sends as a base64 string. A yard from before either says no
+    /// such method, one that pruned the body says not-found, and a string
+    /// that is no base64 is no answer. Both are reads, so a timeout on
+    /// them says the yard did nothing.
+    #[test]
+    fn a_card_s_held_messages_and_a_delivery_s_body_are_asked_by_the_socket_and_at_an_address() {
+        for yard in [Yard::start(), Yard::start_tcp()] {
+            let client = yard.client();
+            let way = client.place();
+            let err = client.identity_held_payloads("yd-hi", 7, "jo").unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "no such method IdentityHeldPayloads",
+                "{way}"
+            );
+            let err = client.hook_payload(139).unwrap_err();
+            assert_eq!(err.to_string(), "no such method HookPayload", "{way}");
+            assert!(reads("IdentityHeldPayloads") && reads("HookPayload"));
+
+            // The bodies come as the yard holds them, oldest first, and
+            // whole: a JSON object and a plain line alike.
+            yard.answer(
+                "IdentityHeldPayloads",
+                &json!({"result": [r#"{"text": "Hello"}"#, "plain words"]}).to_string(),
+            );
+            assert_eq!(
+                client.identity_held_payloads("yd-hi", 7, "jo").unwrap(),
+                [r#"{"text": "Hello"}"#, "plain words"],
+                "{way}"
+            );
+            assert_eq!(
+                yard.asked("IdentityHeldPayloads").last(),
+                Some(&json!({"bead": "yd-hi", "ask": 7, "actor": "jo"})),
+                "{way}"
+            );
+            let under = if client.is_remote() { "/user" } else { "" };
+            assert!(
+                yard.last_request().starts_with(&format!(
+                    "POST {under}/call/IdentityHeldPayloads HTTP/1.1\r\n"
+                )),
+                "{way}: {}",
+                yard.last_request()
+            );
+            // A card that holds none answers null, which reads as none.
+            yard.answer("IdentityHeldPayloads", r#"{"result": null}"#);
+            assert_eq!(
+                client.identity_held_payloads("yd-hi", 7, "jo").unwrap(),
+                Vec::<String>::new(),
+                "{way}"
+            );
+
+            // A body is the bytes under the string, whatever they are: an
+            // invalid UTF-8 one comes whole, for the window to read.
+            let bytes: Vec<u8> = b"{\"text\": \"Hi\"}\xff".to_vec();
+            yard.answer(
+                "HookPayload",
+                &json!({"result": BASE64.encode(&bytes)}).to_string(),
+            );
+            assert_eq!(client.hook_payload(139).unwrap(), bytes, "{way}");
+            assert_eq!(
+                yard.asked("HookPayload").last(),
+                Some(&json!({"seq": 139})),
+                "{way}"
+            );
+            // An empty body is null or "", and both are no bytes.
+            for empty in [r#"{"result": null}"#, r#"{"result": ""}"#] {
+                yard.answer("HookPayload", empty);
+                assert_eq!(client.hook_payload(139).unwrap(), Vec::<u8>::new(), "{way}");
+            }
+            // A body the yard pruned is not found, in its words.
+            yard.answer(
+                "HookPayload",
+                r#"{"error": {"code": "not-found", "message": "hook payload for event 139: not found"}}"#,
+            );
+            assert!(client.hook_payload(139).unwrap_err().not_found(), "{way}");
+            // A string that is no base64 is no answer the yard gives.
+            yard.answer("HookPayload", r#"{"result": "not base64!"}"#);
+            assert!(
+                matches!(client.hook_payload(139), Err(Error::Protocol(why)) if why.starts_with("HookPayload: ")),
+                "{way}"
+            );
         }
     }
 

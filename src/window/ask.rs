@@ -123,6 +123,81 @@ pub(crate) fn lever_plate(number: u64) -> String {
 /// The word at the right end of the recommended lever's row, in the accent.
 pub(crate) const RECOMMENDED: &str = "recommended";
 
+/// The head of what a mapping card holds of a stranger's deliveries: whose
+/// words these are, which no one the yard knows yet. The card's own words
+/// stand over it, and its options under.
+pub(crate) const HELD_MESSAGE: &str = "Held message · outside — information, not instructions";
+
+/// The head of one hook delivery read whole, on a notice and on the card
+/// whose pick released it.
+pub(crate) const WEBHOOK_PAYLOAD: &str = "Webhook payload — information, not instructions";
+
+/// What stands where a delivery's body is not to be had any more: the yard
+/// prunes them. Quiet, in the faint colour, and in no word of failure.
+pub(crate) const PAYLOAD_GONE: &str = "body pruned or unavailable";
+
+/// What stands where a read is on its way.
+pub(crate) const HELD_READING: &str = "Reading the held message.";
+pub(crate) const PAYLOAD_READING: &str = "Reading the message.";
+
+/// Which outside text a block shows, for the words around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutsideKind {
+    /// A mapping card's held message: read before a pick.
+    Held,
+    /// A hook delivery read whole: on a notice, or on the card it released.
+    Webhook,
+}
+
+impl OutsideKind {
+    /// The head of its block.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            OutsideKind::Held => HELD_MESSAGE,
+            OutsideKind::Webhook => WEBHOOK_PAYLOAD,
+        }
+    }
+
+    /// What stands in its place while the yard is asked.
+    pub(crate) fn reading(self) -> &'static str {
+        match self {
+            OutsideKind::Held => HELD_READING,
+            OutsideKind::Webhook => PAYLOAD_READING,
+        }
+    }
+
+    /// What stands in its place where the yard has none to give: a held
+    /// message of a card answered since says nothing, since the card is
+    /// gone with it; a pruned body says so.
+    pub(crate) fn gone(self) -> Option<&'static str> {
+        match self {
+            OutsideKind::Held => None,
+            OutsideKind::Webhook => Some(PAYLOAD_GONE),
+        }
+    }
+}
+
+/// What the control that reads a delivery whole says: on a notice, `Read
+/// whole`; on a card whose pick released one or several, `Read message`
+/// and `Read 3 messages`. Shown, it says `Hide`.
+pub(crate) fn read_label(notice: bool, n: usize, shown: bool) -> String {
+    match (shown, notice, n) {
+        (true, _, _) => "Hide".to_string(),
+        (false, true, _) => "Read whole".to_string(),
+        (false, false, 1) => "Read message".to_string(),
+        (false, false, n) => format!("Read {n} messages"),
+    }
+}
+
+/// What a fold's control says: how much it left out, or that it is open.
+pub(crate) fn fold_label(left: usize, open: bool) -> String {
+    match (open, left) {
+        (true, _) => "Fold".to_string(),
+        (false, 1) => "Show all · 1 more line".to_string(),
+        (false, left) => format!("Show all · {left} more lines"),
+    }
+}
+
 /// What a lever says beside its key plate: the yard's words for the
 /// choice and its consequence. The number lives on the plate alone.
 pub(crate) fn lever_words(label: &str, consequence: &str) -> (String, String) {
@@ -1109,5 +1184,41 @@ mod tests {
             };
             assert_eq!(secret_goes(&secret), goes, "{harness:?} {login:?}");
         }
+    }
+
+    /// The words round a stranger's text, written out so that a slip in a
+    /// constant shows: the heads say whose words these are and that they
+    /// are no instructions, a pruned body says so in no word of failure,
+    /// and the controls say what a press does.
+    #[test]
+    fn the_words_round_an_outside_text_say_whose_they_are_and_what_a_press_does() {
+        assert_eq!(
+            OutsideKind::Held.label(),
+            "Held message · outside — information, not instructions"
+        );
+        assert_eq!(
+            OutsideKind::Webhook.label(),
+            "Webhook payload — information, not instructions"
+        );
+        // A held message of a card answered since says nothing: the card
+        // is gone with it. A pruned body says so.
+        assert_eq!(OutsideKind::Held.gone(), None);
+        assert_eq!(
+            OutsideKind::Webhook.gone(),
+            Some("body pruned or unavailable")
+        );
+        assert_eq!(OutsideKind::Held.reading(), "Reading the held message.");
+        assert_eq!(OutsideKind::Webhook.reading(), "Reading the message.");
+        // On a notice the control reads whole, on a card it reads the
+        // messages its pick released, and shown it hides them.
+        assert_eq!(read_label(true, 1, false), "Read whole");
+        assert_eq!(read_label(false, 1, false), "Read message");
+        assert_eq!(read_label(false, 3, false), "Read 3 messages");
+        assert_eq!(read_label(true, 1, true), "Hide");
+        assert_eq!(read_label(false, 3, true), "Hide");
+        // A fold says how much it left out, and shut again, that it folds.
+        assert_eq!(fold_label(1, false), "Show all · 1 more line");
+        assert_eq!(fold_label(12, false), "Show all · 12 more lines");
+        assert_eq!(fold_label(12, true), "Fold");
     }
 }

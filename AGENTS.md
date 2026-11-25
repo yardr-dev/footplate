@@ -68,6 +68,13 @@ The window, its state and the yard:
     stay while the yard is not known to have taken them; a give's value is
     kept in the secret field and `secret_typed` alone (the call hands it
     back, `give_kept`), never the line, and leaving the card forgets it.
+    A mapping card's held messages (`IdentityHeldPayloads`, open or put
+    aside, between the card's words and its options) and the hook
+    deliveries its pick released (`HookPayload`, behind `Read message`)
+    stand in `outside_block`, a stranger's words on the side ground, drawn
+    verbatim and never as Markdown, headed as outside text, folded past 12
+    lines; the operator's window alone asks for either, and `outside_lines`
+    says what stands where a read is on its way, is gone or was refused.
   - `src/window/bead.rs`: one bead's views: the bead whole (in the reading
     pane it ends with `waiting.rs`'s moves where the bead is parked), the
     conversation thread with its mail, and the pictures and attachments of
@@ -210,7 +217,9 @@ The window, its state and the yard:
     and counts say) and the colours that say what waits and for whom.
   - `src/window/yards.rs`: the yards' views: the switcher with its rows, each
     yard's card with its login switch and agents settings, pairing and
-    signing in, and the away screen with the reconnecting strip.
+    signing in, and the away screen with the reconnecting strip; and the
+    yard row's notices, a hook delivery's with `Read whole` for the
+    operator's window alone, which draws `asks.rs`'s `outside_block`.
 - `src/ansi.rs`: a session pane's ANSI parsed to styled lines, which
   `src/window/screen.rs` draws. Pane bytes are untrusted, so vte parses
   them and keeps only the text and its SGR styling.
@@ -233,12 +242,21 @@ The window, its state and the yard:
   stage file's section are plain functions here too: where a flow's stage
   files come from and whether they edit in place (`StageSource`), whether
   a file moved under an editor (`line_stage_file_moved`), and the line
-  diff the review shows (`line_diff`, `line_diff_rows`).
+  diff the review shows (`line_diff`, `line_diff_rows`). So are the rules of
+  a stranger's text the operator reads: a body's lines and text through
+  `letters` (`message`), where it folds (`fold`), and which card or
+  delivery is asked for when (`Model::held_wanted`, once for each `held`
+  count of a card the open row shows, and `Model::toggle_payloads`, on a
+  press alone), each for the operator's window alone and both stopped for
+  good by a yard's `no such method`.
 - `src/api.rs`: the yard's socket API (calls, event stream, their JSON), by
   socket (unix alone) or at an address over TCP+TLS; HTTP hand-written, no
   client library. `Client::user_open_asks` reads the open asks alone and
   reads `UserAsks` instead on the yard's whole words `no such method
   UserOpenAsks`, nothing kept of the yard being old.
+  `Client::identity_held_payloads` and `Client::hook_payload` are the
+  operator's two reads of what a stranger sent (`HookPayload` is a base64
+  string of the body's bytes).
 - `src/session.rs`: follows one yard on a thread: login, initial state
   (the queue open alone), stream, retry.
 - `src/e2e.rs`: the channel between a paired device and its yard, as bytes
@@ -422,7 +440,11 @@ Setup, release and tests:
   `PutStageFile` or `CopyRepoFlows` is scripted the yard writes to them
   (`weighed`, the digest it was read at and a repository flow refused, the
   prior text shifted, a warning of an empty `## Ask`), so that the next
-  read shows what was written.
+  read shows what was written. `Yard::hold` scripts a mapping card's held
+  messages for the person it asks alone, and `Yard::deliver` and
+  `Yard::prune` a hook event's stored body, base64 as Go writes bytes, or
+  its being gone; a call nothing was scripted for says `no such method`, as
+  the listener says to a caller that is not the operator.
 - `src/fixtures/`: `shot-page.png` and the terminal screens.
 
 ## Where to start

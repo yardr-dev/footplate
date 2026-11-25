@@ -1410,6 +1410,16 @@ impl Footplate {
                             at: gpui::point(px(x), px(y)),
                         });
                     }
+                    // The delivered-message and hook-message shots press
+                    // `Read message` and `Read whole`, as the operator
+                    // does: the delivery is asked for, and shows when it
+                    // comes. A debug build's alone, as above.
+                    #[cfg(debug_assertions)]
+                    match std::env::var("FOOTPLATE_SHOT").as_deref() {
+                        Ok("delivered-message") => effects.extend(model.toggle_payloads(&[141])),
+                        Ok("hook-message") => effects.extend(model.toggle_payloads(&[25])),
+                        _ => {}
+                    }
                     // The drawer shot opens the bead beside the
                     // yardmaster's conversation, as a click on its chip
                     // does: the bead is read whole, and the drawer shows
@@ -3742,6 +3752,52 @@ impl Footplate {
                         move |this, answers, cx| {
                             this.change_in(session, cx, |m| {
                                 m.delivery_files(&asked, answers);
+                                Vec::new()
+                            })
+                        },
+                    )
+                }
+                // A card's own bodies, asked as the person it asks: the yard
+                // says the card is no one else's to read.
+                Effect::HeldPayloads { bead, ask, held } => self.ask_in(
+                    session,
+                    cx,
+                    {
+                        let bead = bead.clone();
+                        move |client, me| client.identity_held_payloads(&bead, ask, me)
+                    },
+                    move |this, answered, cx| {
+                        this.change_in(session, cx, |m| {
+                            m.held_read(&bead, ask, held, answered);
+                            Vec::new()
+                        })
+                    },
+                ),
+                // One connection at a time, as the files above. A body the
+                // yard pruned is no reason to stop: the others may be held.
+                // The first failure that is no missing body ends the batch,
+                // since a yard that fails one fails the rest, each after its
+                // own wait.
+                Effect::HookPayloads { seqs } => {
+                    let asked = seqs.clone();
+                    self.ask_in(
+                        session,
+                        cx,
+                        move |client, _| {
+                            let mut answers = Vec::new();
+                            for seq in seqs {
+                                let answer = client.hook_payload(seq);
+                                let ended = matches!(&answer, Err(err) if !err.not_found());
+                                answers.push((seq, answer));
+                                if ended {
+                                    break;
+                                }
+                            }
+                            answers
+                        },
+                        move |this, answers, cx| {
+                            this.change_in(session, cx, |m| {
+                                m.payloads_read(&asked, answers);
                                 Vec::new()
                             })
                         },
@@ -7587,7 +7643,8 @@ fn shot_selected() -> Option<Selected> {
         Ok("frame") | Ok("decide") => {
             return Some(Selected::Decision("footplate-q2rd".into()));
         }
-        Ok("pair-qr") | Ok("pair-ended") => {
+        Ok("held-message") => return Some(Selected::Decision("bead-s".into())),
+        Ok("pair-qr") | Ok("pair-ended") | Ok("delivered-message") => {
             return Some(Selected::Decided("bead-s".into(), 7));
         }
         Ok("arrivals")
@@ -7619,7 +7676,7 @@ fn shot_selected() -> Option<Selected> {
         Ok("grants") => return Some(Selected::Grants),
         Ok("teammates-list") => return Some(Selected::Teammates),
         Ok("pairing") => return Some(Selected::Pairing),
-        Ok("delivery") => return Some(Selected::Yard),
+        Ok("delivery") | Ok("hook-message") => return Some(Selected::Yard),
         _ => {}
     }
     None

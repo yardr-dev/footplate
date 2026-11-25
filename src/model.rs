@@ -989,6 +989,10 @@ pub struct Notice {
     /// notice, and for a delivery until the yard has fetched its files,
     /// which it does after it told of the delivery.
     pub files: Vec<BlobRef>,
+    /// Whether it tells of a hook delivery, whose seq is its own: the
+    /// operator may read the whole of it ([`Model::payload_offered`]), the
+    /// text above being cut at 500 characters.
+    pub hook: bool,
 }
 
 /// One option of a card, numbered from 1, `you decide` last.
@@ -1131,6 +1135,9 @@ pub struct DecidedDetail {
     pub account: String,
     /// What the yard ran when the ask was approved; none until it is.
     pub ran: Option<Ran>,
+    /// The hook events a mapping pick released, which the operator reads
+    /// whole ([`Model::payload`]); none until a pick does.
+    pub delivered: Vec<u64>,
 }
 
 /// How much of the person's queue a read of it asks for. The open asks are
@@ -1228,6 +1235,12 @@ pub enum Effect {
     /// `DeliveryFiles` of each hook delivery `seqs` names, one after
     /// another, newest first; answered to [`Model::delivery_files`].
     DeliveryFiles { seqs: Vec<u64> },
+    /// `IdentityHeldPayloads` of the mapping card `ask` of `bead`, which
+    /// holds `held` deliveries; answered to [`Model::held_read`].
+    HeldPayloads { bead: String, ask: u64, held: u64 },
+    /// `HookPayload` of each delivery `seqs` names, one after another;
+    /// answered to [`Model::payloads_read`].
+    HookPayloads { seqs: Vec<u64> },
 }
 
 /// A read of the yard made again and again, whose answer replaces what
@@ -1954,6 +1967,26 @@ pub struct Model {
     /// The yard has no DeliveryFiles call: one from before it. The notices
     /// show no files, and no notice is raised.
     deliveries_too_old: bool,
+    /// The held messages of the mapping cards shown, by bead, ask and the
+    /// `held` count the card stood at when they were read: a card that
+    /// holds one more is read again. Only the operator's window reads any,
+    /// and what a card's answer or a newer count leaves behind is let go
+    /// at the next read of the queue, since the words are a stranger's.
+    held_messages: HashMap<(String, u64, u64), Outside>,
+    /// The yard has no IdentityHeldPayloads call: one from before it. The
+    /// cards show no message and none is asked for, and no notice is raised.
+    held_unserved: bool,
+    /// Hook deliveries read whole, by the delivery's seq: asked on a press
+    /// alone, since one may be a megabyte, and kept for the model's life.
+    payloads: HashMap<u64, Outside>,
+    /// The deliveries standing open, from a notice's `Read whole` or a
+    /// card's `Read message`.
+    payloads_open: HashSet<u64>,
+    /// The yard has no HookPayload call: one from before it. Nothing offers
+    /// to read a delivery whole, and none is asked for.
+    payload_unserved: bool,
+    /// The messages standing whole where a fold cuts them, by their key.
+    unfolded: HashSet<String>,
     /// The bead the drawer was opened on last. The queue read again keeps
     /// it read, as it keeps the open travelling bead: it is none of the
     /// queue's, and a closed bead never is.
@@ -4948,6 +4981,11 @@ impl Model {
             weight: a.weight.clone(),
             account: self.account_choice(bead, ask),
             ran: a.ran.clone(),
+            // Whichever read has them first: the history, or the bead.
+            delivered: match a.delivered.is_empty() {
+                false => a.delivered.clone(),
+                true => full.map_or(Vec::new(), |f| f.delivered.clone()),
+            },
         })
     }
 
@@ -5183,6 +5221,7 @@ impl Model {
                     identity: open.identity,
                     weight: open.weight,
                     ran: None,
+                    delivered: Vec::new(),
                 },
             );
         } else {
@@ -5758,6 +5797,7 @@ impl Model {
                     identity: open.identity,
                     weight: open.weight,
                     ran,
+                    delivered: Vec::new(),
                 },
             );
         } else {
@@ -5846,6 +5886,7 @@ impl Model {
                 identity: open.identity,
                 weight: open.weight,
                 ran: None,
+                delivered: Vec::new(),
             },
         );
         self.chosen.remove(&(bead.to_string(), ask));
@@ -5898,6 +5939,7 @@ impl Model {
                 identity: open.identity,
                 weight: open.weight,
                 ran: None,
+                delivered: Vec::new(),
             },
         );
         self.chosen.remove(&(bead.to_string(), ask));
@@ -5950,6 +5992,7 @@ impl Model {
                 text: plain(&n.text),
                 read: n.read,
                 files: self.delivered(n).to_vec(),
+                hook: n.kind == "hook",
             })
             .collect()
     }
@@ -6045,6 +6088,229 @@ impl Model {
             }
             Some(_) => {}
             None => {}
+        }
+    }
+
+    /// The held messages of the mapping card `ask` of `bead`, as the window
+    /// has them of the yard: none where the card holds none, where the
+    /// window is not the operator's (which never asks) and before it asks.
+    pub fn held_messages(&self, bead: &str, ask: u64) -> Option<&Outside> {
+        let held = self.identity(bead, ask)?.held;
+        self.held_messages.get(&(bead.to_string(), ask, held))
+    }
+
+    /// The mapping cards that hold deliveries and that `IdentityHeldPayloads`
+    /// reads: the open ones, and the put-aside ones of the history, which
+    /// keep what they hold. An answered card's deliveries are hook events.
+    fn held_cards(&self) -> impl Iterator<Item = (&str, u64, u64)> {
+        let open = self
+            .open
+            .iter()
+            .map(|a| (a.bead.as_str(), a.ask, a.identity.as_ref()));
+        let aside = self
+            .decided
+            .iter()
+            .filter(|a| a.state == "put aside")
+            .map(|a| (a.bead.as_str(), a.ask, a.identity.as_ref()));
+        open.chain(aside).filter_map(|(bead, ask, identity)| {
+            let held = identity?.held;
+            (held > 0).then_some((bead, ask, held))
+        })
+    }
+
+    /// The held messages of the mapping cards the open row shows that the
+    /// yard was not asked for, as one [`Effect::HeldPayloads`] each, once
+    /// for each count a card holds: the operator's window alone, where the
+    /// row is the open decision of a bead (every open card of it) or a
+    /// put-aside card of the history, and the yard has the call. A card that
+    /// holds one more is asked again; a refusal stands as it was said, since
+    /// asking again would be refused the same.
+    fn held_wanted(&mut self) -> Vec<Effect> {
+        if !self.is_operator() || self.held_unserved {
+            return Vec::new();
+        }
+        let shown: Vec<(String, u64, u64)> = match &self.selected {
+            Some(Selected::Decision(bead)) => self
+                .open
+                .iter()
+                .filter(|a| a.bead == *bead)
+                .filter_map(|a| {
+                    let held = a.identity.as_ref()?.held;
+                    (held > 0).then(|| (a.bead.clone(), a.ask, held))
+                })
+                .collect(),
+            Some(Selected::Decided(bead, ask)) => self
+                .decided
+                .iter()
+                .filter(|a| a.bead == *bead && a.ask == *ask && a.state == "put aside")
+                .filter_map(|a| {
+                    let held = a.identity.as_ref()?.held;
+                    (held > 0).then(|| (a.bead.clone(), a.ask, held))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let mut effects = Vec::new();
+        for (bead, ask, held) in shown {
+            let key = (bead.clone(), ask, held);
+            if self.held_messages.contains_key(&key) {
+                continue;
+            }
+            self.held_messages.insert(key, Outside::Reading);
+            effects.push(Effect::HeldPayloads { bead, ask, held });
+        }
+        effects
+    }
+
+    /// What the yard said of the held messages of one card, which
+    /// [`Effect::HeldPayloads`] asked. A yard from before the call says it
+    /// has no such method: no card shows a message then, and none is asked
+    /// for again, in no word of failure. A card answered since, or no
+    /// mapping card, is not found: it shows none. A refusal in any other
+    /// words (a call that came in plain HTTP) is shown on the card as the
+    /// yard said it, since a card that shows nothing would be picked blind.
+    /// A yard that did not answer is asked again when the card is shown
+    /// next, and says so as a notice.
+    pub fn held_read(
+        &mut self,
+        bead: &str,
+        ask: u64,
+        held: u64,
+        answer: Result<Vec<String>, api::Error>,
+    ) {
+        let key = (bead.to_string(), ask, held);
+        let said = match answer {
+            Ok(bodies) if bodies.is_empty() => Outside::Gone,
+            Ok(bodies) => {
+                Outside::Read(bodies.iter().map(|body| message(body.as_bytes())).collect())
+            }
+            Err(err) if held_too_old(&err) => {
+                self.held_unserved = true;
+                self.held_messages.clear();
+                return;
+            }
+            Err(err) if err.not_found() => Outside::Gone,
+            Err(api::Error::Refused { message, .. }) => Outside::Refused(letters(&message)),
+            Err(err) => {
+                self.held_messages.remove(&key);
+                self.notice = format!("the held messages could not be read: {err}");
+                return;
+            }
+        };
+        // A card answered since, or holding more, was let go: what was
+        // read of it is not put back.
+        if let Some(have) = self.held_messages.get_mut(&key) {
+            *have = said;
+        }
+    }
+
+    /// Whether the window offers to read a hook delivery whole: it runs as
+    /// the yard's operator, and the yard has the call. A member's window
+    /// is offered none and asks for none: the yard serves the call to the
+    /// operator alone, and sends a member the same notices.
+    pub fn payload_offered(&self) -> bool {
+        self.is_operator() && !self.payload_unserved
+    }
+
+    /// The delivery `seq` read whole, while it stands open on a notice or a
+    /// card: none before it is asked for, and none once it is hidden.
+    pub fn payload(&self, seq: u64) -> Option<&Outside> {
+        match self.payloads_open.contains(&seq) {
+            true => self.payloads.get(&seq),
+            false => None,
+        }
+    }
+
+    /// Whether every one of the deliveries `seqs` stands open: what a
+    /// control that shows or hides them reads as its state.
+    pub fn payloads_shown(&self, seqs: &[u64]) -> bool {
+        !seqs.is_empty() && seqs.iter().all(|seq| self.payloads_open.contains(seq))
+    }
+
+    /// A press on `Read whole` or `Read message` for the deliveries
+    /// `seqs`: shows them all, or hides them where all are shown. The ones
+    /// not read before are asked for as one [`Effect::HookPayloads`], here
+    /// and nowhere else, so that opening the yard row pulls no body: a
+    /// delivery may be a megabyte. None is asked for by a window that is
+    /// not the operator's.
+    pub fn toggle_payloads(&mut self, seqs: &[u64]) -> Vec<Effect> {
+        if !self.payload_offered() {
+            return Vec::new();
+        }
+        if self.payloads_shown(seqs) {
+            for seq in seqs {
+                self.payloads_open.remove(seq);
+            }
+            return Vec::new();
+        }
+        let mut wanted = Vec::new();
+        for &seq in seqs {
+            self.payloads_open.insert(seq);
+            // Not `Entry`: the mail's is this module's own.
+            if let std::collections::hash_map::Entry::Vacant(read) = self.payloads.entry(seq) {
+                read.insert(Outside::Reading);
+                wanted.push(seq);
+            }
+        }
+        match wanted.is_empty() {
+            true => Vec::new(),
+            false => vec![Effect::HookPayloads { seqs: wanted }],
+        }
+    }
+
+    /// What the yard said of the deliveries [`Effect::HookPayloads`] asked
+    /// for. A body the yard pruned is not found: it says so quietly where
+    /// it stands. A yard from before the call has none to read: nothing
+    /// offers to read one again, in no word of failure. A refusal in any
+    /// other words is said where the body would stand, as the yard said it.
+    /// What the batch did not reach (it ends at its first failure that is
+    /// no missing body) was never asked, and one the yard did not answer
+    /// is closed, so that a press asks again; it says so as a notice. Only
+    /// the `asked` of this batch are let go: another press may be in flight.
+    pub fn payloads_read(
+        &mut self,
+        asked: &[u64],
+        answers: Vec<(u64, Result<Vec<u8>, api::Error>)>,
+    ) {
+        let answered: HashSet<u64> = answers.iter().map(|(seq, _)| *seq).collect();
+        for (seq, answer) in answers {
+            let said = match answer {
+                Ok(body) => Outside::Read(vec![message(&body)]),
+                Err(err) if payload_too_old(&err) => {
+                    self.payload_unserved = true;
+                    self.payloads.clear();
+                    self.payloads_open.clear();
+                    return;
+                }
+                Err(err) if err.not_found() => Outside::Gone,
+                Err(api::Error::Refused { message, .. }) => Outside::Refused(letters(&message)),
+                Err(err) => {
+                    self.payloads.remove(&seq);
+                    self.payloads_open.remove(&seq);
+                    self.notice = format!("a hook delivery could not be read: {err}");
+                    continue;
+                }
+            };
+            self.payloads.insert(seq, said);
+        }
+        // Asked for and never answered: the batch ended before it.
+        for seq in asked.iter().filter(|seq| !answered.contains(seq)) {
+            if self.payloads.get(seq) == Some(&Outside::Reading) {
+                self.payloads.remove(seq);
+                self.payloads_open.remove(seq);
+            }
+        }
+    }
+
+    /// Whether the message `key` stands whole, with no fold cutting it.
+    pub fn unfolded(&self, key: &str) -> bool {
+        self.unfolded.contains(key)
+    }
+
+    /// A press on a fold's `Show all`, or on its `Fold`.
+    pub fn toggle_fold(&mut self, key: &str) {
+        if !self.unfolded.remove(key) {
+            self.unfolded.insert(key.to_string());
         }
     }
 
@@ -6818,11 +7084,15 @@ impl Model {
             | Some(Selected::Waiting(bead))
             | Some(Selected::Decided(bead, _))
             | Some(Selected::Bead(bead)) => {
-                if self.beads.contains_key(&bead) {
-                    Vec::new()
-                } else {
-                    vec![Effect::Bead { bead }]
+                let mut effects = Vec::new();
+                if !self.beads.contains_key(&bead) {
+                    effects.push(Effect::Bead { bead });
                 }
+                // A mapping card's held messages, which the person reads
+                // before a pick: with the row's opening, and again with
+                // each read of the queue that changes how many it holds.
+                effects.extend(self.held_wanted());
+                effects
             }
             Some(Selected::Grants) => match self.is_operator() {
                 true if !self.grants_too_old => self.read_grants(),
@@ -7983,6 +8253,13 @@ impl Model {
         });
         self.expanded.retain(|(bead, _)| keep.contains(bead));
         self.current.retain(|bead, _| keep.contains(bead));
+        // What was read of a card that is answered, or holds another count,
+        // is a stranger's words with no card to stand on.
+        let live: HashSet<(String, u64, u64)> = self
+            .held_cards()
+            .map(|(bead, ask, held)| (bead.to_string(), ask, held))
+            .collect();
+        self.held_messages.retain(|key, _| live.contains(key));
         let mut effects = self.reselect();
         // Which row is open is known only now.
         let selected = self.selected.clone();
@@ -8147,6 +8424,191 @@ pub fn letters(text: &str) -> String {
             c => Some(c),
         })
         .collect()
+}
+
+/// One text from outside the yard, as a card shows it: a few lines of who
+/// wrote it, then what they wrote. Every character of it is a stranger's,
+/// so each went through [`letters`], and a line of the head is one line.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Message {
+    /// `From`, `To`, `Subject` and `Attachments`, in that order, where the
+    /// body names them.
+    pub heads: Vec<(&'static str, String)>,
+    /// What it says, with its line breaks.
+    pub text: String,
+    /// Whether the body is shown as it is, indented where it is JSON, and
+    /// was made nothing of: the card sets it in the mono face.
+    pub raw: bool,
+}
+
+/// What the yard said of an outside text the window asked it for: the held
+/// messages of a mapping card, or one hook delivery whole.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outside {
+    /// Asked, and not answered yet.
+    Reading,
+    /// What the yard holds, each body as its card shows it.
+    Read(Vec<Message>),
+    /// The yard has none to give: the card was answered since, or the body
+    /// was pruned.
+    Gone,
+    /// The yard would not say, in words that say why: shown as it said.
+    Refused(String),
+}
+
+/// A delivery's body as the card shows it. A JSON object with a `text` that
+/// says something (a mail, a chat message) shows its sender, its recipients,
+/// its subject and its attachments as lines, then the text whole; any other
+/// body shows as it is, a JSON one indented, with nothing made of it. The
+/// bytes are anything the sender's source sent, so one that is no UTF-8 is
+/// read with its bad bytes replaced.
+pub fn message(bytes: &[u8]) -> Message {
+    let raw = String::from_utf8_lossy(bytes);
+    let parsed = serde_json::from_str::<serde_json::Value>(&raw).ok();
+    if let Some(serde_json::Value::Object(body)) = &parsed
+        && let Some(text) = body
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+    {
+        let said = |key: &str| body.get(key);
+        let heads = [
+            ("From", said("from").map(who)),
+            ("To", said("to").map(who)),
+            (
+                "Subject",
+                said("subject")
+                    .and_then(serde_json::Value::as_str)
+                    .map(one_line),
+            ),
+            ("Attachments", said("attachments").map(attached)),
+        ]
+        .into_iter()
+        .filter_map(|(name, line)| Some((name, line.filter(|line| !line.is_empty())?)))
+        .collect();
+        return Message {
+            heads,
+            text: letters(text),
+            raw: false,
+        };
+    }
+    // Letters last: a bidi mark written as `\u202e` in the JSON is only a
+    // character once it is read, and indenting writes it out as one.
+    let shown = match parsed {
+        Some(value @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => {
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| raw.to_string())
+        }
+        _ => raw.into_owned(),
+    };
+    Message {
+        heads: Vec::new(),
+        text: letters(&shown),
+        raw: true,
+    }
+}
+
+/// A stranger's words on one line: letters, with every run of space,
+/// tabs and line breaks one space.
+fn one_line(text: &str) -> String {
+    letters(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Who a body names, as one line: a name and an address as `Ada <ada@x>`,
+/// a bare address or name as it is, and a list of them with commas.
+fn who(value: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let field = |from: &serde_json::Map<String, Value>, key: &str| {
+        from.get(key)
+            .and_then(Value::as_str)
+            .map(one_line)
+            .unwrap_or_default()
+    };
+    match value {
+        Value::String(text) => one_line(text),
+        Value::Object(from) => match (field(from, "name"), field(from, "address")) {
+            (name, address) if name.is_empty() => address,
+            (name, address) if address.is_empty() => name,
+            (name, address) => format!("{name} <{address}>"),
+        },
+        Value::Array(list) => list
+            .iter()
+            .map(who)
+            .filter(|one| !one.is_empty())
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => String::new(),
+    }
+}
+
+/// A body's attachments as one line: each by its name, with its type and
+/// size where it says them. The bytes stay with the sender; only this is
+/// listed.
+fn attached(value: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let Value::Array(list) = value else {
+        return String::new();
+    };
+    list.iter()
+        .filter_map(|file| match file {
+            Value::String(name) => Some(one_line(name)),
+            Value::Object(file) => {
+                let named = file
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(one_line)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "unnamed".to_string());
+                let kind = file.get("type").and_then(Value::as_str).map(one_line);
+                let bytes = file.get("size").and_then(Value::as_u64).map(size);
+                let detail = [kind, bytes]
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(match detail.is_empty() {
+                    true => named,
+                    false => format!("{named} ({detail})"),
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The lines a folded message shows at most, and the characters: enough to
+/// see who wrote it and how it begins. A held mail may run to 64 KiB and a
+/// card holds five of them, which would put the card's options out of
+/// reach; the rest is one press away.
+pub const FOLD_LINES: usize = 12;
+pub const FOLD_CHARS: usize = 1200;
+
+/// A text cut where its fold ends: what shows, and how many lines are left
+/// out (0 where the text fits). The cut is at a line break where lines end
+/// it, and mid-line only where the characters do.
+pub fn fold(text: &str) -> (&str, usize) {
+    let text = text.trim_end();
+    let mut lines = 1;
+    for (n, (at, c)) in text.char_indices().enumerate() {
+        let cut = n >= FOLD_CHARS
+            || match c {
+                '\n' if lines == FOLD_LINES => true,
+                '\n' => {
+                    lines += 1;
+                    false
+                }
+                _ => false,
+            };
+        if cut {
+            let left = text[at..].trim_start_matches('\n');
+            return (&text[..at], left.split('\n').count());
+        }
+    }
+    (text, 0)
 }
 
 /// The bead ids a text names, as its chips find them: an id alone, or the
@@ -9988,6 +10450,23 @@ pub fn telemetry_payload(preview: &TelemetryPreview) -> Option<String> {
 /// Its words are read here, as above, and when they change this is shown
 /// as any refusal.
 pub fn deliveries_too_old(err: &api::Error) -> bool {
+    matches!(err, api::Error::Refused { message, .. } if message.starts_with("no such method"))
+}
+
+/// Whether the yard has no IdentityHeldPayloads call: one from before a
+/// card's held messages could be read, which says it has no such method.
+/// The yard says the same to a window that is not the operator's, which
+/// never asks. That is no error: the cards show no message, and no notice
+/// is raised. Its words are read here, as above, and when they change this
+/// is shown as any refusal.
+pub fn held_too_old(err: &api::Error) -> bool {
+    matches!(err, api::Error::Refused { message, .. } if message.starts_with("no such method"))
+}
+
+/// Whether the yard has no HookPayload call: one from before a delivery
+/// could be read whole, which says it has no such method. No error either:
+/// nothing offers to read one then.
+pub fn payload_too_old(err: &api::Error) -> bool {
     matches!(err, api::Error::Refused { message, .. } if message.starts_with("no such method"))
 }
 
@@ -19755,6 +20234,7 @@ mod tests {
             identity: None,
             weight: Vec::new(),
             ran: None,
+            delivered: Vec::new(),
         }
     }
 
@@ -21288,6 +21768,558 @@ mod tests {
                 deliveries_of(m.select(Selected::Yard)),
                 [delivery_asked(&[31, 30])]
             );
+        }
+    }
+
+    /// A body whose `text` says something shows who wrote it in lines of
+    /// its own, then the text whole: a mail's sender as `name <address>`,
+    /// its recipients, its subject on one line, its attachments with what
+    /// they are. A line the body does not have is not shown.
+    #[test]
+    fn a_mail_body_shows_its_sender_recipients_subject_and_attachments_then_the_text() {
+        let body = json!({
+            "message_id": "<1@x.test>",
+            "from": {"address": "ada@x.test", "name": "Ada"},
+            "to": ["yardmaster@yardr.dev", {"name": "Kim", "address": "kim@x.test"}],
+            "subject": "The   shed\nplans",
+            "date": "2026-11-25T09:00:00Z",
+            "text": "Hello.\n\nSee attached.\n",
+            "attachments": [
+                {"name": "plans.pdf", "size": 2048, "type": "application/pdf"},
+                {"name": "", "size": 5},
+                "notes.txt"
+            ],
+        });
+        let m = message(body.to_string().as_bytes());
+        assert_eq!(
+            m.heads,
+            [
+                ("From", "Ada <ada@x.test>".to_string()),
+                ("To", "yardmaster@yardr.dev, Kim <kim@x.test>".to_string()),
+                ("Subject", "The shed plans".to_string()),
+                (
+                    "Attachments",
+                    "plans.pdf (application/pdf, 2 KiB), unnamed (5 bytes), notes.txt".to_string()
+                ),
+            ]
+        );
+        assert_eq!(m.text, "Hello.\n\nSee attached.\n");
+        assert!(!m.raw);
+
+        // A chat message carries what it has: a bare sender, no more.
+        let chat = message(br#"{"text": "on my way", "from": "ada", "to": [], "attachments": []}"#);
+        assert_eq!(chat.heads, [("From", "ada".to_string())]);
+        assert_eq!(chat.text, "on my way");
+        // A sender with an address alone, and with a name alone.
+        let from = |from: Value| message(json!({"text": "x", "from": from}).to_string().as_bytes());
+        assert_eq!(
+            from(json!({"address": "ada@x.test"})).heads,
+            [("From", "ada@x.test".to_string())]
+        );
+        assert_eq!(
+            from(json!({"name": "Ada"})).heads,
+            [("From", "Ada".to_string())]
+        );
+        assert_eq!(from(json!(7)).heads, []);
+    }
+
+    /// A body with no `text` that says anything shows as it is: a JSON one
+    /// indented, any other as the bytes read, with the bad ones replaced.
+    /// Nothing of the body is lost to it, a mail's subject included.
+    #[test]
+    fn any_other_body_shows_as_it_is_indented_where_it_is_json() {
+        let empty = message(br#"{"text": "  \n", "subject": "Shed", "from": {"address": "a@b"}}"#);
+        assert_eq!(empty.heads, []);
+        assert!(empty.raw);
+        assert!(
+            empty.text.contains("\"subject\": \"Shed\""),
+            "{}",
+            empty.text
+        );
+        assert!(empty.text.contains('\n'), "indented: {}", empty.text);
+        // The text is no string, or the body no object.
+        let list = message(br#"[1, {"text": "x"}]"#);
+        assert_eq!((list.heads.len(), list.text.lines().count()), (0, 6));
+        assert_eq!(message(br#"{"text": 7}"#).heads, []);
+        // A plain body, a JSON string and a number are as written.
+        for plain in ["no braces at all", "\"quoted\"", "42"] {
+            assert_eq!(message(plain.as_bytes()).text, plain);
+        }
+        assert_eq!(message(b"").text, "");
+        // Bytes that are no UTF-8 are read, with the bad ones replaced.
+        assert_eq!(message(b"caf\xe9 au lait").text, "caf\u{fffd} au lait");
+    }
+
+    /// Every character of a body is a stranger's: the marks of direction and
+    /// the control characters (an ANSI escape, a bell, a NUL) are dropped
+    /// from the head, the text and the indented rest alike, written out
+    /// plainly or as JSON escapes, which only reading makes characters of.
+    /// Line breaks and tabs stay in the text and go from the head.
+    #[test]
+    fn a_body_is_stripped_of_marks_of_direction_and_control_characters() {
+        let bidi = "\u{202e}\u{2066}\u{200f}\u{61c}";
+        let body = json!({
+            "from": {"name": format!("Eve{bidi}"), "address": "eve@x.test\u{1b}[31m"},
+            "to": format!("a{bidi}\u{7}@x.test"),
+            "subject": format!("Re:{bidi}\u{0}\tpay\r\nnow"),
+            "text": format!("pay{bidi} now\u{1b}[31m\r\n\twith a tab\u{2028}end"),
+        });
+        // Once as JSON text, where the characters are escapes, and once
+        // with them written out.
+        for sent in [
+            body.to_string(),
+            body.to_string().replace("\\u202e", "\u{202e}"),
+        ] {
+            let m = message(sent.as_bytes());
+            let all = m
+                .heads
+                .iter()
+                .map(|(_, line)| line.as_str())
+                .chain([m.text.as_str()])
+                .collect::<String>();
+            for c in all.chars() {
+                assert!(
+                    c == '\n' || c == '\t' || !c.is_control(),
+                    "control {c:?} in {all:?}"
+                );
+                assert!(
+                    !"\u{202e}\u{2066}\u{200f}\u{61c}\u{2028}".contains(c),
+                    "{c:?}"
+                );
+            }
+            assert_eq!(m.heads[0].1, "Eve <eve@x.test[31m>");
+            assert_eq!(m.heads[2].1, "Re: pay now");
+            // The text keeps its breaks and its tab, and the carriage
+            // return goes with the other controls.
+            assert_eq!(m.text, "pay now[31m\n\twith a tabend");
+        }
+        // A body that is no mail is as plain once indented: the marks of
+        // direction go, and a control character shows as the escape the
+        // indenting writes it as, which is printable text and no control.
+        let raw = message(
+            json!({"data": format!("x{bidi}\u{1b}y")})
+                .to_string()
+                .as_bytes(),
+        );
+        assert!(raw.text.contains("\"data\": \"x\\u001by\""), "{}", raw.text);
+        assert!(raw.text.chars().all(|c| c == '\n' || !c.is_control()));
+        assert_eq!(message(format!("a{bidi}b\u{1b}c").as_bytes()).text, "abc");
+    }
+
+    /// A message folds after its first lines or its first characters,
+    /// whichever come first, and says how many lines it left out: none
+    /// where it fits, and a trailing line break is no line.
+    #[test]
+    fn a_long_message_folds_after_its_lines_or_its_characters() {
+        assert_eq!(fold(""), ("", 0));
+        assert_eq!(fold("one\ntwo"), ("one\ntwo", 0));
+        let lines = |n: usize| {
+            (1..=n)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // The lines that fit, with a break or two after them.
+        let fits = lines(FOLD_LINES);
+        assert_eq!(fold(&fits), (fits.as_str(), 0));
+        assert_eq!(fold(&format!("{fits}\n\n")), (fits.as_str(), 0));
+        // One more is cut, and the cut is at the line break.
+        let (one_more, many_more) = (lines(FOLD_LINES + 1), lines(FOLD_LINES + 16));
+        assert_eq!(fold(&one_more), (fits.as_str(), 1));
+        let (shown, left) = fold(&many_more);
+        assert_eq!((shown.lines().count(), left), (FOLD_LINES, 16));
+        // Blank lines count as lines, and the cut skips the ones it ends at.
+        let blank = format!("{fits}\n\n\ntail");
+        assert_eq!(fold(&blank), (fits.as_str(), 1));
+        // A line alone that runs past the characters is cut inside it, on a
+        // character: never inside a letter of more than one byte.
+        let long = "é".repeat(FOLD_CHARS + 100);
+        let (shown, left) = fold(&long);
+        assert_eq!((shown.chars().count(), left), (FOLD_CHARS, 1));
+        assert!(long.starts_with(shown));
+        // Short lines are cut by the characters before the lines are: in
+        // the tenth of twelve lines of 120 characters, which is left out
+        // with the two after it.
+        let wide = format!("{}\n", "x".repeat(FOLD_CHARS / FOLD_LINES + 20)).repeat(FOLD_LINES);
+        let (shown, left) = fold(&wide);
+        assert_eq!((shown.chars().count(), left), (FOLD_CHARS, 3));
+        // A break that stands exactly at the limit is cut there as well.
+        let text = format!("{}\nrest", "y".repeat(FOLD_CHARS));
+        assert_eq!(fold(&text), ("y".repeat(FOLD_CHARS).as_str(), 1));
+    }
+
+    /// The operator's window reads the held messages of a mapping card when
+    /// its row opens: each count of each card once, and again when a read of
+    /// the queue says the card holds more. Another window asks for none, and
+    /// nor does a card that holds none, an answered one, or a yard that has
+    /// said it has no such call.
+    #[test]
+    fn the_operator_s_window_asks_for_a_mapping_card_s_held_messages_once_for_each_count() {
+        let mapping = |ask: u64, held: u64| OpenAsk {
+            identity: Some(Identity {
+                source: "email".into(),
+                sender: "ada@x.test".into(),
+                held,
+                ..Identity::default()
+            }),
+            ..open_ask(
+                "yd-hi",
+                "Who is ada@x.test?",
+                "",
+                ask,
+                "Who is this?",
+                "yardmaster",
+                "2026-10-08T09:30:00Z",
+            )
+        };
+        let asked = |bead: &str, ask: u64, held: u64| Effect::HeldPayloads {
+            bead: bead.into(),
+            ask,
+            held,
+        };
+        let held_of = |effects: Vec<Effect>| -> Vec<Effect> {
+            effects
+                .into_iter()
+                .filter(|e| matches!(e, Effect::HeldPayloads { .. }))
+                .collect()
+        };
+        let state = |operator: &str| {
+            let mut state = yard(&[]);
+            state.operator = operator.into();
+            state.asks.open = vec![
+                mapping(7, 2),
+                mapping(8, 0),
+                open_ask(
+                    "yd-hi",
+                    "Who is ada@x.test?",
+                    "",
+                    9,
+                    "Which tone?",
+                    "yardmaster",
+                    "2026-10-08T09:30:00Z",
+                ),
+            ];
+            state.asks.decided = Some(vec![
+                DecidedAsk {
+                    state: "put aside".into(),
+                    return_at: "2030-01-01T00:00:00Z".into(),
+                    identity: mapping(10, 1).identity,
+                    ..decided_ask("yd-hi", 10, "Who is bob@x.test?", "put aside", "", "", "")
+                },
+                DecidedAsk {
+                    identity: mapping(11, 3).identity,
+                    ..decided_ask("yd-hi", 11, "Who is cy@x.test?", "answered", "ada", "", "")
+                },
+            ]);
+            state
+        };
+        // The window opens on the decision, which asks for each of its
+        // cards that holds any, and once: opening it again, or the queue
+        // read as it was, asks nothing.
+        let (mut m, first) = Model::new(state("jo"), Mode::Decisions, None);
+        assert_eq!(held_of(first), [asked("yd-hi", 7, 2)]);
+        assert_eq!(m.held_messages("yd-hi", 7), Some(&Outside::Reading));
+        assert_eq!(m.held_messages("yd-hi", 8), None);
+        assert_eq!(held_of(m.select(Selected::Decision("yd-hi".into()))), []);
+        let open = state("jo").asks.open;
+        assert_eq!(held_of(m.open_asks(open.clone())), []);
+
+        // What the yard held, each body as a message, oldest first.
+        m.held_read(
+            "yd-hi",
+            7,
+            2,
+            Ok(vec![
+                r#"{"from": "ada@x.test", "text": "Let me in."}"#.into(),
+                "second, plain".into(),
+            ]),
+        );
+        let Some(Outside::Read(held)) = m.held_messages("yd-hi", 7) else {
+            panic!("{:?}", m.held_messages("yd-hi", 7));
+        };
+        assert_eq!(held.len(), 2);
+        assert_eq!(held[0].heads, [("From", "ada@x.test".to_string())]);
+        assert_eq!(held[0].text, "Let me in.");
+        assert_eq!(
+            (held[1].heads.len(), held[1].text.as_str()),
+            (0, "second, plain")
+        );
+
+        // A read that says the card holds one more asks again, for that
+        // count, and what was read for the count before is let go.
+        let mut open = open;
+        open[0] = mapping(7, 3);
+        assert_eq!(held_of(m.open_asks(open.clone())), [asked("yd-hi", 7, 3)]);
+        assert_eq!(m.held_messages("yd-hi", 7), Some(&Outside::Reading));
+        assert_eq!(m.held_messages.len(), 1);
+        // An answer to the count it was asked at, which came after the card
+        // moved on, is put nowhere.
+        m.held_read("yd-hi", 7, 2, Ok(vec!["late".into()]));
+        assert_eq!(m.held_messages("yd-hi", 7), Some(&Outside::Reading));
+        // The card answered since: not found, and no message.
+        m.held_read(
+            "yd-hi",
+            7,
+            3,
+            Err(refused_with(
+                "not-found",
+                "identity ask 7 on yd-hi: not found",
+            )),
+        );
+        assert_eq!(m.held_messages("yd-hi", 7), Some(&Outside::Gone));
+        // The card is gone from the queue: what was read of it goes too.
+        m.open_asks(Vec::new());
+        assert!(m.held_messages.is_empty());
+
+        // A put-aside card of the history asks as an open one does, and
+        // the answered one beside it, which holds hook events now, does not.
+        m.toggle_decided();
+        assert_eq!(held_of(m.select(Selected::Decided("yd-hi".into(), 11))), []);
+        assert_eq!(
+            held_of(m.select(Selected::Decided("yd-hi".into(), 10))),
+            [asked("yd-hi", 10, 1)]
+        );
+        // A refusal in any other words is kept as the yard said it, and not
+        // asked again for that count.
+        m.held_read(
+            "yd-hi",
+            10,
+            1,
+            Err(refused_with(
+                "error",
+                "a mapping card's held messages is taken over https only\u{202e}\u{1b}[31m",
+            )),
+        );
+        assert_eq!(
+            m.held_messages("yd-hi", 10),
+            Some(&Outside::Refused(
+                "a mapping card's held messages is taken over https only[31m".into()
+            ))
+        );
+        assert_eq!(held_of(m.select(Selected::Decided("yd-hi".into(), 10))), []);
+        assert!(m.notice.is_empty(), "{}", m.notice);
+
+        // A yard that did not answer is said, and asked again at the next
+        // opening of the card.
+        m.held_read("yd-hi", 10, 1, Ok(vec!["x".into()]));
+        m.held_messages.clear();
+        assert_eq!(
+            held_of(m.select(Selected::Decided("yd-hi".into(), 10))),
+            [asked("yd-hi", 10, 1)]
+        );
+        m.held_read(
+            "yd-hi",
+            10,
+            1,
+            Err(api::Error::Down(std::io::Error::other(
+                "the yard went away",
+            ))),
+        );
+        assert!(
+            m.notice
+                .starts_with("the held messages could not be read: "),
+            "{}",
+            m.notice
+        );
+        assert_eq!(m.held_messages("yd-hi", 10), None);
+        assert_eq!(
+            held_of(m.select(Selected::Decided("yd-hi".into(), 10))),
+            [asked("yd-hi", 10, 1)]
+        );
+
+        // A yard from before the call says so, as of any method: no
+        // message, no notice, and never asked again.
+        m.notice.clear();
+        m.held_read(
+            "yd-hi",
+            10,
+            1,
+            Err(refused_with("error", "no such method IdentityHeldPayloads")),
+        );
+        assert!(m.notice.is_empty(), "{}", m.notice);
+        assert!(m.held_messages.is_empty());
+        assert_eq!(held_of(m.select(Selected::Decided("yd-hi".into(), 10))), []);
+        assert_eq!(held_of(m.select(Selected::Decision("yd-hi".into()))), []);
+        assert!(held_too_old(&refused_with(
+            "error",
+            "no such method IdentityHeldPayloads"
+        )));
+        assert!(!held_too_old(&refused_with(
+            "error",
+            "only jo may read held messages on this card"
+        )));
+
+        // A window that is not the operator's asks for none, whatever it
+        // opens: the yard answers it as a method it does not have.
+        for operator in ["ada", ""] {
+            let (mut m, effects) = Model::new(state(operator), Mode::Decisions, None);
+            assert_eq!(held_of(effects), [], "{operator:?}");
+            assert_eq!(held_of(m.select(Selected::Decision("yd-hi".into()))), []);
+            assert_eq!(held_of(m.select(Selected::Decided("yd-hi".into(), 10))), []);
+            assert!(m.held_messages.is_empty());
+        }
+    }
+
+    /// A hook delivery is read whole on a press alone, by the operator's
+    /// window alone: each seq once, however often it is shown and hidden,
+    /// a body the yard pruned says so, and a yard from before the call has
+    /// nothing offered.
+    #[test]
+    fn a_hook_delivery_is_read_whole_on_a_press_once_and_by_the_operator_alone() {
+        let state = |operator: &str| {
+            let mut state = yard(&[]);
+            state.operator = operator.into();
+            state.notifications = vec![hook(30), hook(31)];
+            state
+        };
+        let payloads = |seqs: &[u64]| Effect::HookPayloads {
+            seqs: seqs.to_vec(),
+        };
+        let (mut m, _) = Model::new(state("jo"), Mode::Chat, None);
+        // Opening the yard row reads no body: only the files, as before.
+        let opened = m.select(Selected::Yard);
+        assert!(
+            opened
+                .iter()
+                .all(|e| !matches!(e, Effect::HookPayloads { .. }))
+        );
+        assert!(m.payload_offered());
+        assert!(m.notices().iter().all(|n| n.hook));
+        assert_eq!((m.payload(30), m.payloads_shown(&[30])), (None, false));
+
+        // A press shows it and asks; the answer fills it.
+        assert_eq!(m.toggle_payloads(&[30]), [payloads(&[30])]);
+        assert_eq!(m.payload(30), Some(&Outside::Reading));
+        m.payloads_read(
+            &[30],
+            vec![(30, Ok(br#"{"text": "Whole.", "subject": "S"}"#.to_vec()))],
+        );
+        let Some(Outside::Read(read)) = m.payload(30) else {
+            panic!("{:?}", m.payload(30));
+        };
+        assert_eq!(
+            (read[0].heads.clone(), read[0].text.as_str()),
+            (vec![("Subject", "S".to_string())], "Whole.")
+        );
+        // Hidden, it shows nothing; shown again it asks nothing.
+        assert_eq!(m.toggle_payloads(&[30]), []);
+        assert_eq!(m.payload(30), None);
+        assert_eq!(m.toggle_payloads(&[30]), []);
+        assert!(m.payload(30).is_some());
+
+        // Several at once, as a card with two deliveries presses them: the
+        // ones read before are not asked, all are shown, and a press on
+        // them hides them all.
+        assert_eq!(m.toggle_payloads(&[30, 31, 32]), [payloads(&[31, 32])]);
+        assert!(m.payloads_shown(&[30, 31, 32]));
+        // 31's body was pruned, and 32 was not answered: the yard went away
+        // after the first, and the batch ended there.
+        m.payloads_read(
+            &[31, 32],
+            vec![(
+                31,
+                Err(refused_with(
+                    "not-found",
+                    "hook payload for event 31: not found",
+                )),
+            )],
+        );
+        assert_eq!(m.payload(31), Some(&Outside::Gone));
+        assert_eq!(m.payload(32), None, "never answered, so closed");
+        assert!(m.notice.is_empty(), "{}", m.notice);
+        assert_eq!(m.toggle_payloads(&[30, 31]), []);
+        assert!(!m.payloads_shown(&[30, 31]));
+        // 32 is asked again at the next press.
+        assert_eq!(m.toggle_payloads(&[32]), [payloads(&[32])]);
+
+        // A refusal in other words is shown as the yard said it, and a
+        // yard that did not answer is said, with the body closed.
+        m.payloads_read(
+            &[32],
+            vec![(
+                32,
+                Err(refused_with(
+                    "error",
+                    "a webhook delivery's body is taken over https only\u{202e}\u{1b}[31m",
+                )),
+            )],
+        );
+        assert_eq!(
+            m.payload(32),
+            Some(&Outside::Refused(
+                "a webhook delivery's body is taken over https only[31m".into()
+            ))
+        );
+        assert_eq!(m.toggle_payloads(&[33]), [payloads(&[33])]);
+        m.payloads_read(
+            &[33],
+            vec![(33, Err(api::Error::Down(std::io::Error::other("gone"))))],
+        );
+        assert!(
+            m.notice.starts_with("a hook delivery could not be read: "),
+            "{}",
+            m.notice
+        );
+        assert_eq!(m.payload(33), None);
+        assert!(!m.payloads_shown(&[33]));
+
+        // Two presses in flight at once: the answer of the first does not
+        // take the second's read from under it, and each is shown as it
+        // comes.
+        assert_eq!(m.toggle_payloads(&[40]), [payloads(&[40])]);
+        assert_eq!(m.toggle_payloads(&[41]), [payloads(&[41])]);
+        m.payloads_read(&[40], vec![(40, Ok(b"first".to_vec()))]);
+        assert_eq!(m.payload(41), Some(&Outside::Reading));
+        m.payloads_read(&[41], vec![(41, Ok(b"second".to_vec()))]);
+        let Some(Outside::Read(second)) = m.payload(41) else {
+            panic!("{:?}", m.payload(41));
+        };
+        assert_eq!(second[0].text, "second");
+
+        // A yard from before the call says so: nothing is offered, nothing
+        // is shown, no notice is raised, and no press asks.
+        m.notice.clear();
+        assert_eq!(m.toggle_payloads(&[34]), [payloads(&[34])]);
+        m.payloads_read(
+            &[34],
+            vec![(34, Err(refused_with("error", "no such method HookPayload")))],
+        );
+        assert!(!m.payload_offered());
+        assert_eq!((m.payload(30), m.payload(34)), (None, None));
+        assert!(m.notice.is_empty(), "{}", m.notice);
+        assert_eq!(m.toggle_payloads(&[35]), []);
+        assert!(payload_too_old(&refused_with(
+            "error",
+            "no such method HookPayload"
+        )));
+        assert!(!payload_too_old(&refused_with(
+            "not-found",
+            "hook payload for event 3: not found"
+        )));
+
+        // Not the operator's window: the notices are the same, and nothing
+        // is offered or asked.
+        for operator in ["ada", ""] {
+            let (mut m, _) = Model::new(state(operator), Mode::Chat, None);
+            assert!(!m.payload_offered(), "{operator:?}");
+            assert_eq!(m.toggle_payloads(&[30]), []);
+            assert_eq!(m.payload(30), None);
+            assert_eq!(m.notices().len(), 2);
+        }
+
+        // A fold stands open until it is pressed again.
+        assert!(!m.unfolded("hook 30 0"));
+        m.toggle_fold("hook 30 0");
+        assert!(m.unfolded("hook 30 0"));
+        m.toggle_fold("hook 30 0");
+        assert!(!m.unfolded("hook 30 0"));
+    }
+
+    /// A refusal as the yard words it, with the code it says.
+    fn refused_with(code: &str, message: &str) -> api::Error {
+        api::Error::Refused {
+            code: code.into(),
+            message: message.into(),
         }
     }
 

@@ -13,15 +13,15 @@ use gpui::{
 use super::Expanded;
 use super::Footplate;
 use super::ask::{
-    ANSWER_WORDS, APPROVE_ELSEWHERE, Approval, DECLINE_IS_NO_PICK, RECOMMENDED, RUN_PROPOSED,
-    RunText, SEND_WORDS, SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate, answer_label,
-    approval, approve_button, approve_move_label, ask_line, asked_age, asks_on_you,
+    ANSWER_WORDS, APPROVE_ELSEWHERE, Approval, DECLINE_IS_NO_PICK, OutsideKind, RECOMMENDED,
+    RUN_PROPOSED, RunText, SEND_WORDS, SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate,
+    answer_label, approval, approve_button, approve_move_label, ask_line, asked_age, asks_on_you,
     candidate_choice_line, card_head, carried_texts, decided_keys, decision_head, description_line,
-    fenced, fold_head, give_label, give_unlock_label, is_device_pair_run, lever_plate, lever_words,
-    move_button, pair_door, recommended_line, run_keys, run_runs, run_texts, secret_goes,
-    secret_keys, section_head, send_button, setup_keys, setup_runs, show_button, take_back_label,
-    teammate_email, teammate_kind, teammate_of, teammate_role, teammate_user, texts_label,
-    typeback_line, typeback_mismatch, words_send,
+    fenced, fold_head, fold_label, give_label, give_unlock_label, is_device_pair_run, lever_plate,
+    lever_words, move_button, pair_door, read_label, recommended_line, run_keys, run_runs,
+    run_texts, secret_goes, secret_keys, section_head, send_button, setup_keys, setup_runs,
+    show_button, take_back_label, teammate_email, teammate_kind, teammate_of, teammate_role,
+    teammate_user, texts_label, typeback_line, typeback_mismatch, words_send,
 };
 use super::expanded_text_key;
 use super::keys::{APPROVE_KEY, SETUP_SECRET_CONTEXT};
@@ -31,7 +31,7 @@ use super::metrics::{
 };
 use super::rail::{Picture, RailTip, UnsentNote, post_note};
 use super::state::{Adding, ApprovalPairing};
-use super::ui::{field, keys_row, outcome_glyph, send_held, shorten, small_button};
+use super::ui::{field, keys_row, link_word, outcome_glyph, send_held, shorten, small_button};
 use super::words::{bead_words, decide_words, decided_words, left_words};
 use super::{AskAbout, Decline, Expand, FocusFilter, FocusWords};
 use crate::api::{self};
@@ -4131,6 +4131,12 @@ impl Footplate {
                 cx,
             ));
         }
+        // A mapping card's held messages, a stranger's words, between the
+        // context and the options: the operator reads who wrote them
+        // before a pick.
+        if ask.identity.is_some() {
+            card = card.children(self.held_lines(&bead_id, ask_seq, palette, cx));
+        }
         // The options numbered, each with its consequence, `you decide`
         // last as the yard lists it. A secret ask has none and wants no
         // words: what it asks for is said in the yard's line, as it is.
@@ -4769,6 +4775,226 @@ impl Footplate {
                     .debug_selector(move || words_id.clone())
                     .child(select::verbatim(key, words, &self.selection)),
             )
+    }
+
+    /// A press on a delivery's `Read whole` or `Read message`: its body
+    /// is shown, asked of the yard the first time, or hidden again.
+    pub(crate) fn read_payloads(&mut self, seqs: Vec<u64>, cx: &mut Context<Self>) {
+        self.change(cx, |m| m.toggle_payloads(&seqs));
+    }
+
+    /// A press on a message's fold: the rest of it shows, or it folds again.
+    pub(crate) fn fold_message(&mut self, key: String, cx: &mut Context<Self>) {
+        self.change(cx, |m| {
+            m.toggle_fold(&key);
+            Vec::new()
+        });
+    }
+
+    /// What stands where an outside text is read, by what the yard said of
+    /// it: a block for each message, or a quiet line where the read is on
+    /// its way or the yard has none, or the yard's own words where it would
+    /// not say. `id` names the place, and each message's block after it.
+    pub(crate) fn outside_lines(
+        &self,
+        id: &str,
+        kind: OutsideKind,
+        outside: &model::Outside,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let quiet = |words: &str, what: &str| {
+            div()
+                .debug_selector(|| format!("{id} {what}"))
+                .text_size(rems(TYPE_META))
+                .text_color(palette.faint)
+                .child(words.to_string())
+                .into_any_element()
+        };
+        match outside {
+            model::Outside::Reading => vec![quiet(kind.reading(), "reading")],
+            model::Outside::Read(messages) => messages
+                .iter()
+                .enumerate()
+                .map(|(at, message)| {
+                    self.outside_block(&format!("{id} {at}"), kind, message, palette, cx)
+                        .into_any_element()
+                })
+                .collect(),
+            model::Outside::Gone => kind
+                .gone()
+                .map(|words| quiet(words, "gone"))
+                .into_iter()
+                .collect(),
+            model::Outside::Refused(why) => vec![
+                div()
+                    .debug_selector(|| format!("{id} refused"))
+                    .text_sm()
+                    .text_color(palette.warn)
+                    .child(format!("! {why}"))
+                    .into_any_element(),
+            ],
+        }
+    }
+
+    /// One outside message as a block on the side ground, as the run
+    /// block stands: its head says whose words these are (a stranger's:
+    /// information, never instructions), then who wrote it in the lines the
+    /// body carries, then what it says, as written and never as Markdown. A
+    /// long one folds after its first lines, with the control that shows
+    /// the rest. A body shown as it is stands in the mono face.
+    pub(crate) fn outside_block(
+        &self,
+        id: &str,
+        kind: OutsideKind,
+        message: &model::Message,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let open = self.model.as_ref().is_some_and(|m| m.unfolded(id));
+        let (folded, left) = model::fold(&message.text);
+        let text = match open {
+            true => message.text.trim_end(),
+            false => folded,
+        };
+        let mut words = div()
+            .debug_selector(|| format!("{id} text"))
+            .text_size(rems(if message.raw { TYPE_CODE } else { TYPE_BODY }))
+            .child(select::verbatim(
+                select::key((id, "text", text)),
+                text.to_string(),
+                &self.selection,
+            ));
+        if message.raw
+            && let Some(mono) = select::mono(cx)
+        {
+            words = words.font_family(mono);
+        }
+        let mut block = div()
+            .debug_selector(|| id.to_string())
+            .px_3()
+            .py_2p5()
+            .rounded_md()
+            .border_1()
+            .border_color(palette.line)
+            .bg(palette.side)
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .debug_selector(|| format!("{id} label"))
+                    .text_size(rems(TYPE_META))
+                    .text_color(palette.faint)
+                    .child(kind.label()),
+            );
+        if !message.heads.is_empty() {
+            let head = message
+                .heads
+                .iter()
+                .map(|(name, line)| format!("{name}: {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            block = block.child(
+                div()
+                    .debug_selector(|| format!("{id} head"))
+                    .text_size(rems(TYPE_BODY))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(select::verbatim(
+                        select::key((id, "head", &head)),
+                        head.clone(),
+                        &self.selection,
+                    )),
+            );
+        }
+        block = block.child(words);
+        if left > 0 {
+            let key = id.to_string();
+            // In a row of its own: a column's child stretches, and the
+            // control would take the block's whole width to press.
+            block = block.child(div().flex().child(
+                link_word(format!("{id} fold"), fold_label(left, open), palette).on_click(
+                    cx.listener(move |this, _, _, cx| this.fold_message(key.clone(), cx)),
+                ),
+            ));
+        }
+        block
+    }
+
+    /// A mapping card's held messages, where the window has asked the yard
+    /// for them and it answered: the card's own words stand over them and
+    /// its options under, so that the sender is known before a pick. Nothing
+    /// for a card that holds none, for a window that is not the operator's,
+    /// and for a yard that does not serve them.
+    pub(crate) fn held_lines(
+        &self,
+        bead: &str,
+        ask: u64,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        match self
+            .model
+            .as_ref()
+            .and_then(|model| model.held_messages(bead, ask))
+        {
+            Some(held) => self.outside_lines(
+                &format!("held {bead} {ask}"),
+                OutsideKind::Held,
+                held,
+                palette,
+                cx,
+            ),
+            None => Vec::new(),
+        }
+    }
+
+    /// The deliveries a mapping pick released, which the operator reads
+    /// whole: the control that shows them and hides them again, then each
+    /// as a block while it is shown. Nothing where the pick released none,
+    /// where the window is not the operator's, and where the yard has no
+    /// such call.
+    pub(crate) fn delivered_lines(
+        &self,
+        model: &Model,
+        card: (&str, u64),
+        delivered: &[u64],
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        if delivered.is_empty() || !model.payload_offered() {
+            return Vec::new();
+        }
+        let (bead, ask) = card;
+        let seqs = delivered.to_vec();
+        let shown = model.payloads_shown(delivered);
+        let mut lines = vec![
+            div()
+                .flex()
+                .child(
+                    link_word(
+                        format!("read message {bead} {ask}"),
+                        read_label(false, delivered.len(), shown),
+                        palette,
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.read_payloads(seqs.clone(), cx)),
+                    ),
+                )
+                .into_any_element(),
+        ];
+        for seq in delivered {
+            if let Some(read) = model.payload(*seq) {
+                lines.extend(self.outside_lines(
+                    &format!("hook {seq}"),
+                    OutsideKind::Webhook,
+                    read,
+                    palette,
+                    cx,
+                ));
+            }
+        }
+        lines
     }
 
     /// What a secret ask asks for: the yard's line, which is made from the
@@ -5464,6 +5690,21 @@ impl Footplate {
                             )),
                     );
                 }
+            }
+            // What a stranger sent that a mapping card holds, while it is
+            // put aside, or released with its pick, between the context and
+            // the options as on an open card.
+            if detail.identity.is_some() {
+                if detail.state == "put aside" {
+                    body = body.children(self.held_lines(bead, ask, palette, cx));
+                }
+                body = body.children(self.delivered_lines(
+                    model,
+                    (bead, ask),
+                    &detail.delivered,
+                    palette,
+                    cx,
+                ));
             }
             // Whether a put-aside run or setup ask can still be approved
             // from here: one approved, declined or taken back takes no

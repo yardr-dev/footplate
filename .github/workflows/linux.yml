@@ -1,0 +1,68 @@
+# footplate on Linux: it builds, and its tests pass, on the Debian 13 and the
+# packages the Linux release is built with (scripts/linux-container.sh). The
+# yard's own gate (.yardr/test) runs on a Mac, where the Linux half of the
+# code is never compiled; this is that try. A run builds gpui's whole tree and
+# costs Actions minutes, so it runs by hand and on no push, as windows.yml
+# does. A builder on a Linux bead starts a run on its branch: gh workflow run
+# linux.yml --ref yard/<bead>.
+name: linux
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+defaults:
+  run:
+    # Bash stops at the first command that fails, and with pipefail a curl
+    # that fails does not hand rustup's installer an empty script, which
+    # would end well and leave no cargo.
+    shell: bash
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    # The release is built in debian:13 (linux_provision), so this is too. The
+    # image has no git: the checkout is then downloaded as an archive, which
+    # is all the build and the tests need of it.
+    container: debian:13
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The list of linux_provision in scripts/linux-container.sh, which it
+      # must match: a package the release needs is one this run needs.
+      - name: Packages
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            build-essential curl ca-certificates pkg-config \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libx11-dev libvulkan-dev libasound2-dev
+
+      # The edition is 2024, which wants a newer Rust than the image has: none.
+      # Rustup installs as linux_provision does, and the steps after this one
+      # find cargo through GITHUB_PATH.
+      - name: Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable -q
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustc" --version
+          "$HOME/.cargo/bin/cargo" --version
+
+      # gpui's tree is most of the build, and a cache of `target` would be
+      # gigabytes: it is built each time.
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo test --locked

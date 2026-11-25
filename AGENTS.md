@@ -101,7 +101,8 @@ The window, its state and the yard:
     Copy path and Propose an edit, and what opens and shuts it. Its
     Line read is the Line window's, over another selection; its prompt
     editor, hand-off and Served-by picker are the Line window's rows,
-    drawn here. A crew drawer's Prime tab is not the line's: it lists
+    drawn here, and its Stage tab draws `src/window/stagefile.rs`'s
+    section and editor over the file. A crew drawer's Prime tab is not the line's: it lists
     the yard's `Prime` answer for its member (`Model::prime_read_for`),
     asked for when the drawer opens, on the socket alone (a yard at an
     address says the prime is read on the yard's machine, and is not
@@ -119,9 +120,10 @@ The window, its state and the yard:
     Rule line, chain, Other rules and next stages, its stage file and
     prompts each behind Read (Edit on a prompt the read answers
     carriable, group and crew alike, and on that answer alone; the
-    read's reason where it says a card cannot; none on a stage file),
-    and the crew prompts below, over the `Line` call, read when the
-    window opens or its depot changes. Its one write is the prompt
+    read's reason where it says a card cannot) and a stage file behind
+    Read with its own section (`src/window/stagefile.rs`'s), and the
+    crew prompts below, over the `Line` call, read when the
+    window opens or its depot changes. Its one write by mail is the prompt
     editor: Edit opens an `input::Line::editor` under the prompt's row
     over the text that stands, and Send mails the yardmaster one `Mail`
     (the depot, the group or crew member, the prompt file and digest
@@ -166,6 +168,25 @@ The window, its state and the yard:
     estimate is at the root's text size, `select::ROOT_TEXT_REM`:
     `window.text_style()` has gpui's 1 rem while the view renders, before the
     root's element sets its own.
+  - `src/window/stagefile.rs`: a stage file edited in place, which the
+    Line window's stage detail and the context drawer's Stage tab both
+    draw: where its text comes from (`model::line_stage_source`), the
+    yard's warning of a broken `## Ask` in warn, and the controls that
+    follow (Edit or Add stage file, Restore prior text…, or Copy flow into
+    yard… on a repository flow, which is not edited here). The one
+    `StageEdit` on `Footplate` is the editor with its two steps: the text
+    typed, and the review (`model::line_diff`) where Confirm save passes
+    the weighty gate (`Footplate::unlock_then`, or the stage's name typed
+    back where `unlock_available` is false) and only then calls
+    `PutStageFile` over the digest the file was read at, with `weighed`.
+    Restore prior text… opens that review over the text the file stood as
+    before its last save. A file the line read again says moved holds the
+    save, and a refusal leaves the text typed. `StageCopy` is the
+    confirmation of `CopyRepoFlows`, through the same gate, which renames
+    the Line window's pick and the drawer's subject to the store flow each
+    flow became (matched by its bead type); `StageSaved` is the line a
+    save or copy leaves. No mail and no card: a crew member's proposal is
+    still a card, in Decide.
   - `src/window/state.rs`: what the window keeps beside the model: where a
     yard stood when it was left, what waits in the yards it follows, and
     what the switch and the settings are asking or doing.
@@ -208,7 +229,11 @@ The window, its state and the yard:
   "Decided") and by the person's own writes. The history stands as the last
   whole read left it, through a yard lost and found (`Model::resumed`), and
   is judged by a stamp of its own (`Read::Decided`): a whole read takes
-  seconds, and an open read made after it answers first.
+  seconds, and an open read made after it answers first. The rules of a
+  stage file's section are plain functions here too: where a flow's stage
+  files come from and whether they edit in place (`StageSource`), whether
+  a file moved under an editor (`line_stage_file_moved`), and the line
+  diff the review shows (`line_diff`, `line_diff_rows`).
 - `src/api.rs`: the yard's socket API (calls, event stream, their JSON), by
   socket (unix alone) or at an address over TCP+TLS; HTTP hand-written, no
   client library. `Client::user_open_asks` reads the open asks alone and
@@ -328,9 +353,11 @@ Platform surface:
   and a window that others cover wholly sends none, so it counts as hidden.
 - `src/unlock.rs`: the system's unlock in front of a weighty approval
   (the Mac's LocalAuthentication, Linux's polkit with the action in
-  `assets/linux/`), with the reasons as plain functions; where no
-  unlock is offered, the card takes the ask's number typed back instead
-  (`Approval::TypeBack`).
+  `assets/linux/`), with the reasons as plain functions (an ask's
+  approval or giving, a stage file's change, a repository flow's copy);
+  where no unlock is offered, the card takes the ask's number typed back
+  instead (`Approval::TypeBack`), and a stage file's or a copy's review
+  the stage's or the depot's name.
 - `src/titlebar.rs`: the window's title bar options per platform, and on
   macOS, where the content reaches up into it, the drag and double-click on
   the window's top strip, which gpui has no call for there.
@@ -390,7 +417,12 @@ Setup, release and tests:
   server's side of a voice session as events in and out, held to the
   reference, not to the module that uses it, and able to resolve the audio
   otherwise than it was asked). `Yard::start()` is the
-  socket's on unix and the TCP one's on Windows.
+  socket's on unix and the TCP one's on Windows. A test's scripted `Line`
+  answer is the yard's flows and stage files: where no answer to
+  `PutStageFile` or `CopyRepoFlows` is scripted the yard writes to them
+  (`weighed`, the digest it was read at and a repository flow refused, the
+  prior text shifted, a warning of an empty `## Ask`), so that the next
+  read shows what was written.
 - `src/fixtures/`: `shot-page.png` and the terminal screens.
 
 ## Where to start

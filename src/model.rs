@@ -6997,20 +6997,53 @@ impl Model {
             .context
             .as_ref()
             .map(|context| context.depot().to_string())
-            .filter(|depot| !depot.is_empty())
         else {
             return Vec::new();
         };
-        if !self.line_offered() {
+        self.reread_line(&depot)
+    }
+
+    /// Reads `depot`'s line again where the Line window or the context
+    /// drawer stands on it, as reopening the window does: what a save of
+    /// a stage file or a copy of a repository flow leaves to be read, so
+    /// that the window shows what the yard holds now. Nothing where
+    /// neither stands on the depot, where no depot names the call, or
+    /// where the line is not offered.
+    pub fn reread_line(&mut self, depot: &str) -> Vec<Effect> {
+        let stands = matches!(&self.selected, Some(Selected::LineWindow(open)) if open == depot)
+            || self
+                .context
+                .as_ref()
+                .is_some_and(|context| context.depot() == depot);
+        if depot.is_empty() || !stands || !self.line_offered() {
             return Vec::new();
         }
         self.line_generation = self.line_generation.wrapping_add(1);
         self.line = None;
         self.line_notice = None;
         vec![Effect::Line {
-            depot,
+            depot: depot.to_string(),
             generation: self.line_generation,
         }]
+    }
+
+    /// Stands the context drawer, where it is on the stage of the flow
+    /// `from` of `flow_type` in `depot`, on the flow `to` instead: the
+    /// store flow the yard copied it into, which the line read again
+    /// names so.
+    pub fn rename_context_flow(&mut self, depot: &str, flow_type: &str, from: &str, to: &str) {
+        if let Some(ContextSubject::Stage {
+            depot: at,
+            flow,
+            flow_type: at_type,
+            ..
+        }) = self.context.as_mut()
+            && at == depot
+            && at_type == flow_type
+            && flow == from
+        {
+            *flow = to.to_string();
+        }
     }
 
     /// What the context drawer stands open on, while one does.
@@ -9114,6 +9147,213 @@ pub fn line_edit_mail(
 /// the window says of a prompt that it read again.
 pub fn line_prompt_moved(was: &LinePrompt, now: &LinePrompt) -> bool {
     was.path != now.path || was.digest != now.digest || was.text != now.text
+}
+
+/// What a save names as the file it writes over where the stage had no
+/// file: the yard takes it for "none stands", and refuses the save if one
+/// does by then.
+pub const STAGE_FILE_NONE: &str = "none";
+
+/// Where a flow's stage files come from, which says whether this window
+/// edits them in place.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StageSource {
+    /// The yard's store: its stage files are the yard's own.
+    Store,
+    /// A pack's flow, imported into the store: the stage files are the
+    /// yard's copy, and applying the pack again keeps what was changed.
+    Pack(String),
+    /// A repository's flow, the commit it was read at or `directory`:
+    /// the file is the repository's, copied into the yard's store before
+    /// its stages edit here.
+    Repo(String),
+    /// A source this window does not know: nothing is claimed of it and
+    /// nothing is offered.
+    Other,
+}
+
+/// A flow's stage files' source, by how the line names the flow's own:
+/// `store`, `pack <name>`, `repo@<commit>` or `repo (directory)`.
+pub fn line_stage_source(flow: &LineFlow) -> StageSource {
+    let source = flow.source.as_str();
+    if source == "store" {
+        StageSource::Store
+    } else if let Some(pack) = source.strip_prefix("pack ") {
+        StageSource::Pack(pack.to_string())
+    } else if source == "repo (directory)" {
+        StageSource::Repo("directory".to_string())
+    } else if source.starts_with("repo@") {
+        StageSource::Repo(source.to_string())
+    } else {
+        StageSource::Other
+    }
+}
+
+impl StageSource {
+    /// Whether the stage files edit in place: the yard's store holds them.
+    pub fn editable(&self) -> bool {
+        matches!(self, StageSource::Store | StageSource::Pack(_))
+    }
+
+    /// What a stage's file section says of where its text comes from, and
+    /// what that means for editing it; none for a source nothing is
+    /// claimed of.
+    pub fn words(&self) -> Option<String> {
+        match self {
+            StageSource::Store => Some("store flow".to_string()),
+            StageSource::Pack(pack) => Some(format!(
+                "from pack {pack}: you change the yard's copy, applying the pack again keeps it"
+            )),
+            StageSource::Repo(from) => Some(format!(
+                "from repository ({from}): copy this flow into the yard before editing its stages"
+            )),
+            StageSource::Other => None,
+        }
+    }
+}
+
+/// Whether the stage file an editor was opened over is another now, or
+/// gone: `over` is the digest the read named when the editor opened
+/// (`none` where the stage had no file) and `now` the stage as the line
+/// reads it since, none where the flow or the stage is gone from it. The
+/// yard refuses a save over the old digest, so the window holds Save
+/// where this says it moved. A digest the yard did not send, on a yard
+/// from before stage files were edited, reads as no change.
+pub fn line_stage_file_moved(over: &str, now: Option<&LineStage>) -> bool {
+    let Some(stage) = now else {
+        return true;
+    };
+    match (&stage.stage_file, over == STAGE_FILE_NONE) {
+        (None, none) => !none,
+        (Some(_), true) => true,
+        (Some(file), false) => file.digest != over,
+    }
+}
+
+/// One line of what a change does to a text: kept, taken out or put in.
+/// A line carries its own break, so that a last line with none differs
+/// from one that has it, and the window says so in words.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LineDiff {
+    Same(String),
+    Removed(String),
+    Added(String),
+}
+
+/// How many cells the table of lines two texts share may have before the
+/// diff gives up finding what they share and says the whole of the
+/// middle was taken out and put in again: a stage file is a page, and a
+/// text this far from one is shown whole rather than worked out.
+const DIFF_CELLS: usize = 4_000_000;
+
+/// What a change to a text does, line by line: the lines both texts share
+/// stay as they are, and what lies between them is taken out and put in.
+/// The lines the two begin and end with are matched first, and the longest
+/// run of lines they share in order is found between them, so a line moved
+/// is seen as taken out and put in again, as a person reading would say.
+pub fn line_diff(was: &str, now: &str) -> Vec<LineDiff> {
+    let was: Vec<&str> = was.split_inclusive('\n').collect();
+    let now: Vec<&str> = now.split_inclusive('\n').collect();
+    let head = was.iter().zip(&now).take_while(|(a, b)| a == b).count();
+    let tail = was[head..]
+        .iter()
+        .rev()
+        .zip(now[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (was_mid, now_mid) = (&was[head..was.len() - tail], &now[head..now.len() - tail]);
+    let same = |lines: &[&str]| -> Vec<LineDiff> {
+        lines
+            .iter()
+            .map(|line| LineDiff::Same(line.to_string()))
+            .collect()
+    };
+    let mut diff = same(&was[..head]);
+    diff.extend(line_diff_middle(was_mid, now_mid));
+    diff.extend(same(&was[was.len() - tail..]));
+    diff
+}
+
+/// The diff of what lies between the lines two texts begin and end with.
+fn line_diff_middle(was: &[&str], now: &[&str]) -> Vec<LineDiff> {
+    let (rows, cols) = (was.len() + 1, now.len() + 1);
+    if rows.saturating_mul(cols) > DIFF_CELLS {
+        return was
+            .iter()
+            .map(|l| LineDiff::Removed(l.to_string()))
+            .chain(now.iter().map(|l| LineDiff::Added(l.to_string())))
+            .collect();
+    }
+    // `shared[i][j]`: how many lines `was[i..]` and `now[j..]` share in order.
+    let mut shared = vec![0u32; rows * cols];
+    for i in (0..was.len()).rev() {
+        for j in (0..now.len()).rev() {
+            shared[i * cols + j] = match was[i] == now[j] {
+                true => shared[(i + 1) * cols + j + 1] + 1,
+                false => shared[(i + 1) * cols + j].max(shared[i * cols + j + 1]),
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut diff = Vec::new();
+    while i < was.len() && j < now.len() {
+        if was[i] == now[j] {
+            diff.push(LineDiff::Same(was[i].to_string()));
+            (i, j) = (i + 1, j + 1);
+        } else if shared[(i + 1) * cols + j] >= shared[i * cols + j + 1] {
+            diff.push(LineDiff::Removed(was[i].to_string()));
+            i += 1;
+        } else {
+            diff.push(LineDiff::Added(now[j].to_string()));
+            j += 1;
+        }
+    }
+    diff.extend(was[i..].iter().map(|l| LineDiff::Removed(l.to_string())));
+    diff.extend(now[j..].iter().map(|l| LineDiff::Added(l.to_string())));
+    diff
+}
+
+/// One row of a change as the review shows it: a line of the diff, or the
+/// count of the unchanged lines left out between two changes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffRow {
+    Line(LineDiff),
+    Folded(usize),
+}
+
+/// The diff as the review shows it: each change with `context` unchanged
+/// lines either side of it, and a longer run of unchanged lines between
+/// changes, or before the first or after the last, as one row that counts
+/// them. A run of one line is shown, since a row that counts it saves
+/// nothing.
+pub fn line_diff_rows(diff: &[LineDiff], context: usize) -> Vec<DiffRow> {
+    // Each change shows with its neighbours; what is left stands in runs.
+    let mut shown = vec![false; diff.len()];
+    for (at, line) in diff.iter().enumerate() {
+        if !matches!(line, LineDiff::Same(_)) {
+            let (from, to) = (
+                at.saturating_sub(context),
+                (at + context + 1).min(diff.len()),
+            );
+            shown[from..to].fill(true);
+        }
+    }
+    let mut rows = Vec::new();
+    let mut at = 0;
+    while at < diff.len() {
+        if shown[at] {
+            rows.push(DiffRow::Line(diff[at].clone()));
+            at += 1;
+            continue;
+        }
+        let run = shown[at..].iter().take_while(|shown| !**shown).count();
+        match run {
+            1 => rows.push(DiffRow::Line(diff[at].clone())),
+            run => rows.push(DiffRow::Folded(run)),
+        }
+        at += run;
+    }
+    rows
 }
 
 /// A prompt's path as a row of the Line window says it: a digest in a
@@ -16879,6 +17119,188 @@ mod tests {
         }
     }
 
+    /// A change to a text is shown line by line: what both share stays,
+    /// what lies between is taken out and put in, a line moved is both,
+    /// and a last line with no break is not the line with one.
+    #[test]
+    fn a_change_to_a_text_is_shown_line_by_line() {
+        use LineDiff::{Added, Removed, Same};
+        let same = |text: &str| Same(text.to_string());
+        let out = |text: &str| Removed(text.to_string());
+        let put = |text: &str| Added(text.to_string());
+        assert_eq!(line_diff("", ""), Vec::new());
+        assert_eq!(line_diff("a\n", "a\n"), vec![same("a\n")]);
+        // One line replaced: taken out, then put in, between what stands.
+        assert_eq!(
+            line_diff("a\nb\nc\n", "a\nB\nc\n"),
+            vec![same("a\n"), out("b\n"), put("B\n"), same("c\n")]
+        );
+        // Lines added at the end and at the start, and taken out of the middle.
+        assert_eq!(line_diff("a\n", "a\nb\n"), vec![same("a\n"), put("b\n")]);
+        assert_eq!(line_diff("b\n", "a\nb\n"), vec![put("a\n"), same("b\n")]);
+        assert_eq!(
+            line_diff("a\nb\nc\n", "a\nc\n"),
+            vec![same("a\n"), out("b\n"), same("c\n")]
+        );
+        // A text made, and one emptied.
+        assert_eq!(line_diff("", "a\nb\n"), vec![put("a\n"), put("b\n")]);
+        assert_eq!(line_diff("a\nb\n", ""), vec![out("a\n"), out("b\n")]);
+        // A line moved is seen as taken out and put in again; what both
+        // keep in order stays.
+        assert_eq!(
+            line_diff("a\nb\nc\nd\n", "b\nc\nd\na\n"),
+            vec![
+                out("a\n"),
+                same("b\n"),
+                same("c\n"),
+                same("d\n"),
+                put("a\n")
+            ]
+        );
+        // The last line with no break is another line from the one with it.
+        assert_eq!(
+            line_diff("a\nb\n", "a\nb"),
+            vec![same("a\n"), out("b\n"), put("b")]
+        );
+        // A text too far from the other to work out what they share is
+        // shown as the whole of the middle out and in again, the ends kept.
+        let many = |tag: &str| (0..2100).map(|n| format!("{tag}{n}\n")).collect::<String>();
+        let (was, now) = (
+            format!("top\n{}end\n", many("w")),
+            format!("top\n{}end\n", many("n")),
+        );
+        let diff = line_diff(&was, &now);
+        assert_eq!(diff.len(), 2 + 2100 * 2);
+        assert_eq!(diff[0], same("top\n"));
+        assert_eq!(diff[1], out("w0\n"));
+        assert_eq!(diff[2100], out("w2099\n"));
+        assert_eq!(diff[2101], put("n0\n"));
+        assert_eq!(diff[4201], same("end\n"));
+
+        // The review shows each change with its neighbours, and counts a
+        // longer run of unchanged lines it leaves out. One line is shown:
+        // a row that counts it would save nothing.
+        let lines = |text: &str| line_diff(text, &text.replace("m\n", "M\n"));
+        let rows = line_diff_rows(&lines("1\n2\n3\n4\n5\n6\nm\n8\n9\n10\n11\n12\n13\n"), 2);
+        assert_eq!(
+            rows,
+            vec![
+                DiffRow::Folded(4),
+                DiffRow::Line(same("5\n")),
+                DiffRow::Line(same("6\n")),
+                DiffRow::Line(out("m\n")),
+                DiffRow::Line(put("M\n")),
+                DiffRow::Line(same("8\n")),
+                DiffRow::Line(same("9\n")),
+                DiffRow::Folded(4),
+            ]
+        );
+        let rows = line_diff_rows(&lines("1\n2\n3\nm\n5\n6\n7\n"), 2);
+        assert_eq!(rows.first(), Some(&DiffRow::Line(same("1\n"))), "{rows:?}");
+        assert!(!rows.iter().any(|row| matches!(row, DiffRow::Folded(_))));
+        // Two changes far apart are two stretches with the run between
+        // them counted; nothing changed is one count, and nothing is none.
+        let far = line_diff("m\n1\n2\n3\n4\n5\n6\n7\nm\n", "M\n1\n2\n3\n4\n5\n6\n7\nM\n");
+        let rows = line_diff_rows(&far, 1);
+        assert_eq!(
+            rows.iter()
+                .filter_map(|row| match row {
+                    DiffRow::Folded(count) => Some(*count),
+                    DiffRow::Line(_) => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![5]
+        );
+        assert_eq!(
+            line_diff_rows(&line_diff("1\n2\n3\n", "1\n2\n3\n"), 2),
+            vec![DiffRow::Folded(3)]
+        );
+        assert_eq!(line_diff_rows(&[], 2), Vec::new());
+    }
+
+    /// A stage's file says where its text comes from in words of the
+    /// flow's source, and offers an edit only where the yard's store holds
+    /// it; and an editor over a file knows when the file moved under it.
+    #[test]
+    fn a_stage_file_says_where_it_comes_from_and_whether_it_moved() {
+        let flow = |source: &str| LineFlow {
+            name: "default".into(),
+            source: source.into(),
+            ..Default::default()
+        };
+        let source = |source: &str| line_stage_source(&flow(source));
+        assert_eq!(source("store"), StageSource::Store);
+        assert_eq!(source("pack starter"), StageSource::Pack("starter".into()));
+        assert_eq!(
+            source("repo@abcdef0"),
+            StageSource::Repo("repo@abcdef0".into())
+        );
+        assert_eq!(
+            source("repo (directory)"),
+            StageSource::Repo("directory".into())
+        );
+        assert_eq!(source("somewhere else"), StageSource::Other);
+        assert_eq!(source(""), StageSource::Other);
+        assert_eq!(
+            [source("store"), source("pack starter")].map(|from| from.editable()),
+            [true, true]
+        );
+        assert_eq!(
+            [
+                source("repo@abcdef0"),
+                source("repo (directory)"),
+                source("")
+            ]
+            .map(|from| from.editable()),
+            [false, false, false]
+        );
+        assert_eq!(source("store").words().as_deref(), Some("store flow"));
+        assert_eq!(
+            source("pack starter").words().as_deref(),
+            Some("from pack starter: you change the yard's copy, applying the pack again keeps it")
+        );
+        assert_eq!(
+            source("repo@abcdef0").words().as_deref(),
+            Some(
+                "from repository (repo@abcdef0): copy this flow into the yard before editing its stages"
+            )
+        );
+        assert_eq!(
+            source("repo (directory)").words().as_deref(),
+            Some(
+                "from repository (directory): copy this flow into the yard before editing its stages"
+            )
+        );
+        assert_eq!(source("somewhere else").words(), None);
+
+        // An editor over a digest: the stage as the line reads it now
+        // says whether the file is that one still. `none` is no file.
+        let file = |digest: &str| LineStage {
+            stage: "new".into(),
+            stage_file: Some(crate::api::LineStageFile {
+                path: "new.md".into(),
+                digest: digest.into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let bare = LineStage {
+            stage: "new".into(),
+            ..Default::default()
+        };
+        let (one, two) = ("1".repeat(64), "2".repeat(64));
+        assert!(!line_stage_file_moved(&one, Some(&file(&one))));
+        assert!(line_stage_file_moved(&one, Some(&file(&two))));
+        assert!(line_stage_file_moved(&one, Some(&bare)));
+        assert!(!line_stage_file_moved(STAGE_FILE_NONE, Some(&bare)));
+        assert!(line_stage_file_moved(STAGE_FILE_NONE, Some(&file(&two))));
+        // A flow or a stage gone from the line is moved, with a file or none.
+        assert!(line_stage_file_moved(&one, None));
+        assert!(line_stage_file_moved(STAGE_FILE_NONE, None));
+        // A yard that sends no digest moves nothing the window can see.
+        assert!(!line_stage_file_moved("", Some(&file(""))));
+    }
+
     /// The Line window is the operator's alone, read only when it
     /// opens or its depot changes: a yard from before the call is
     /// said too old in the pane, in plain words, is offered no more
@@ -17384,7 +17806,39 @@ mod tests {
             }]
         );
         assert!(m.line_read_for("yardr").is_none());
+        // What a save leaves to be read is the depot's line again, where
+        // the drawer or the Line window stands on it, and no other depot's.
+        assert_eq!(m.reread_line("notes"), Vec::new());
+        assert_eq!(m.reread_line(""), Vec::new());
+        assert_eq!(
+            m.reread_line("yardr"),
+            vec![Effect::Line {
+                depot: "yardr".into(),
+                generation: 6,
+            }]
+        );
+        // The drawer stands on the flow the yard copied into its store
+        // once that is its name: another depot's, type's or flow's is left.
+        m.rename_context_flow("notes", "", "default", "notes.default");
+        m.rename_context_flow("yardr", "task", "default", "yardr.default");
+        m.rename_context_flow("yardr", "", "other", "yardr.default");
+        assert_eq!(m.context().map(ContextSubject::depot), Some("yardr"));
+        assert!(matches!(
+            m.context(),
+            Some(ContextSubject::Stage { flow, .. }) if flow == "default"
+        ));
+        m.rename_context_flow("yardr", "", "default", "yardr.default");
+        assert_eq!(
+            m.context(),
+            Some(&ContextSubject::Stage {
+                depot: "yardr".into(),
+                flow: "yardr.default".into(),
+                flow_type: String::new(),
+                stage: "new".into(),
+            })
+        );
         m.leave();
+        assert_eq!(m.reread_line("yardr"), Vec::new());
         assert_eq!(m.context(), None);
         m.line_read(
             "yardr",

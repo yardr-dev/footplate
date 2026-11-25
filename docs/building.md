@@ -410,7 +410,7 @@ that prompt before it changed: the yardmaster's answer and Read again), `line-pi
 its serving picker under the Rule line, a group marked with Send live, and the route change the stream
 gave its Last change line), `line-refused` (that window
 with a stage removal refused where a bead stands in the stage), `line-pack` (that window on a pack's flow, at its
-middle stage: the Stages row's controls with the flow card's own words for a pack's flow under them), `old-lines` (the Lines pane against a yard too old to
+middle stage: the Stages row's controls with the flow card's own words for a pack's flow under them), `line-stage-edit` (the context drawer's Stage tab on that pack's flow before any edit: the yard's warning of an empty `## Ask` in red, where the text comes from, Edit and Restore prior text…, and the text), `line-stage-review` (that drawer with the stage file editor at its review: the change line by line, the weight, and Confirm save), `line-stage-copy` (the Line window on the repository's flow, whose stage file says it is the repository's and offers Copy flow into yard…), `line-stage-copying` (that stage with the copy's confirmation open), `old-lines` (the Lines pane against a yard too old to
 serve it, saying so in plain words), `grants` (the grants view open on
 its row, with a read, an update and an `--as` grant, and a source's named
 read call and update call), `pairing` (the Pair a phone pane open on

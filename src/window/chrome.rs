@@ -936,6 +936,9 @@ impl Footplate {
         // The Line window's editor and hand-off name a prompt of the yard
         // that is left.
         self.line_edit = None;
+        self.stage_edit = None;
+        self.stage_copy = None;
+        self.stage_saved = None;
         self.line_sent = None;
         self.line_filing = false;
         self.line_served_marks.clear();
@@ -1438,6 +1441,31 @@ impl Footplate {
                             role_whole: false,
                         });
                         effects.extend(model.open_context("footplate", "default", "task", "new"));
+                    }
+                    // The stage file's shots open the drawer on the pack's
+                    // flow at new, on its Stage tab, over the Line window;
+                    // the review's opens the editor over it once the line
+                    // is read (`shot_line_window`). A debug build's alone,
+                    // as above.
+                    #[cfg(debug_assertions)]
+                    if matches!(
+                        std::env::var("FOOTPLATE_SHOT").as_deref(),
+                        Ok("line-stage-edit") | Ok("line-stage-review")
+                    ) {
+                        self.context = Some(super::context::ContextOpen {
+                            subject: crate::model::ContextSubject::Stage {
+                                depot: "yardr".into(),
+                                flow: "managed".into(),
+                                flow_type: "".into(),
+                                stage: "new".into(),
+                            },
+                            tab: super::context::ContextTab::Stage,
+                            served_open: false,
+                            stage_whole: false,
+                            prompt_whole: false,
+                            role_whole: false,
+                        });
+                        effects.extend(model.open_context("yardr", "managed", "", "new"));
                     }
                     // The served shot opens the drawer on yardr's
                     // default flow at new, as above, on its Group tab
@@ -3828,11 +3856,12 @@ impl Footplate {
             return self.feedback_step(window, cx);
         }
         // So are the Line window's prompt editor's: a prompt is no list to
-        // step, and Tab in its field does nothing.
+        // step, and Tab in its field does nothing. Nor is a stage file's.
         if self
             .line_edit
             .as_ref()
             .is_some_and(|edit| edit.field.focus_handle(cx).is_focused(window))
+            || self.stage_field_focused(window, cx)
         {
             return;
         }
@@ -3985,11 +4014,13 @@ impl Footplate {
             return;
         }
         // Esc in the Line window's prompt editor leaves its field, and what
-        // is typed stays: Cancel is what drops it.
+        // is typed stays: Cancel is what drops it. So it does in a stage
+        // file's editor and in the name its review takes back.
         if self
             .line_edit
             .as_ref()
             .is_some_and(|edit| edit.field.focus_handle(cx).is_focused(window))
+            || self.stage_field_focused(window, cx)
         {
             window.focus(&self.focus.clone());
             return;
@@ -7573,8 +7604,16 @@ fn shot_selected() -> Option<Selected> {
         Ok("lines-flow") => {
             return Some(Selected::Flow("yardr".into(), "default".into(), "".into()));
         }
-        Ok("line-window") | Ok("line-edit") | Ok("line-sent") | Ok("line-picker")
-        | Ok("line-refused") | Ok("line-pack") => {
+        Ok("line-window")
+        | Ok("line-edit")
+        | Ok("line-sent")
+        | Ok("line-picker")
+        | Ok("line-refused")
+        | Ok("line-pack")
+        | Ok("line-stage-edit")
+        | Ok("line-stage-review")
+        | Ok("line-stage-copy")
+        | Ok("line-stage-copying") => {
             return Some(Selected::LineWindow("yardr".into()));
         }
         Ok("grants") => return Some(Selected::Grants),

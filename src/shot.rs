@@ -243,6 +243,10 @@ pub const STATES: &[&str] = &[
     "line-picker",
     "line-refused",
     "line-pack",
+    "line-stage-edit",
+    "line-stage-review",
+    "line-stage-copy",
+    "line-stage-copying",
     "old-lines",
     "grants",
     "pairing",
@@ -1452,8 +1456,21 @@ fn populate(yard: &Yard, state: &str) {
                 | "line-picker"
                 | "line-refused"
                 | "line-pack"
+                | "line-stage-edit"
+                | "line-stage-review"
+                | "line-stage-copy"
+                | "line-stage-copying"
                 | "lines-served"
         ) {
+            // The stage files of the pack's flow and the repository's
+            // stage: the yard's own copy, which the pack's `new` was
+            // saved over once (its digest and the text it replaced stand
+            // in the read) and whose empty `## Ask` the yard warns of, and
+            // the repository's, which is copied into the yard before its
+            // stages edit.
+            let managed_new = "A builder implements the bead here, on branch `yard/<bead>` in the bead's own worktree.\n\nBefore the bead leaves as `done`:\n\n- the work is committed on the branch, and the depot's test command passes\n  on the last commit;\n- a note on the bead says what changed and what was verified.\n\nOutcomes: `done` → review · `question` → decide\n\n## Ask\n";
+            let managed_prior = "A builder implements the bead here, on branch `yard/<bead>`.\n\nBefore the bead leaves as `done`:\n\n- the work is committed on the branch, and the depot's test command passes\n  on the last commit.\n\nOutcomes: `done` → review · `question` → decide\n";
+            let repo_new = "A new bead waits here until someone has read it and shaped it.\n\nOutcomes: `done` → build\n";
             yard.answer_for(
                 "Line",
                 "depot",
@@ -1486,7 +1503,11 @@ fn populate(yard: &Yard, state: &str) {
                          "route": {"id": "r-4", "scope": "yard-wide",
                            "filters": {"type": "", "labels": [], "priority": "", "originator": ""},
                            "chain": [{"name": "people", "runner": "manual", "members": ["jo"]}], "limit": 1},
-                         "other_routes": [], "open": 0},
+                         "other_routes": [], "open": 0,
+                         "stage_file": {"path": "/home/jo/.yardr/flows/managed/new.md",
+                           "text": managed_new, "digest": crate::fake::digest(managed_new),
+                           "prior_text": managed_prior, "prior_digest": crate::fake::digest(managed_prior),
+                           "warning": "/home/jo/.yardr/flows/managed/new.md: the ## Ask section is empty"}},
                         {"stage": "review", "next": ["merged"], "terminal": false,
                          "route": {"id": "r-5", "scope": "yard-wide",
                            "filters": {"type": "", "labels": [], "priority": "", "originator": ""},
@@ -1494,7 +1515,9 @@ fn populate(yard: &Yard, state: &str) {
                          "other_routes": [], "open": 0},
                         {"stage": "merged", "next": [], "terminal": true, "other_routes": [], "open": 0}]},
                     {"name": "repo", "type": "", "source": "repo@abcdef0", "stages": [
-                        {"stage": "new", "next": [], "terminal": false, "other_routes": [], "open": 0}]},
+                        {"stage": "new", "next": [], "terminal": false, "other_routes": [], "open": 0,
+                         "stage_file": {"path": ".yardr/flows/default/new.md",
+                           "text": repo_new, "digest": crate::fake::digest(repo_new)}}]},
                     {"name": "dirflow", "type": "", "source": "repo (directory)", "directory": "/home/jo/notes", "stages": [
                         {"stage": "inbox", "next": [], "terminal": false, "other_routes": [], "open": 0}]},
                 ], "crew": [{"name": "yardmaster", "prompt": {"path": "/home/jo/.yardr/roles/yardmaster.md",
@@ -1619,6 +1642,10 @@ fn populate(yard: &Yard, state: &str) {
         | "line-picker"
         | "line-refused"
         | "line-pack"
+        | "line-stage-edit"
+        | "line-stage-review"
+        | "line-stage-copy"
+        | "line-stage-copying"
         | "old-lines"
         | "switcher"
         | "switcher-shut"
@@ -5549,7 +5576,8 @@ mod tests {
                     assert!(!crate::model::screen_over_the_link(&err), "{state}");
                 }
                 "line-window" | "line-edit" | "line-sent" | "line-picker" | "line-refused"
-                | "line-pack" | "lines-served" => {
+                | "line-pack" | "line-stage-edit" | "line-stage-review" | "line-stage-copy"
+                | "line-stage-copying" | "lines-served" => {
                     // The window's read of yardr's depot: its flows
                     // named by their source, an exec stage's cmd
                     // whole, a prompt's text and a labelled yard-wide
@@ -5601,6 +5629,26 @@ mod tests {
                         .unwrap();
                     assert!(prompt.carriable, "{state}");
                     assert_eq!(prompt.digest.len(), 64, "{state}");
+                    // The pack's `new` stage file is the yard's copy, saved
+                    // over once: the text it replaced stands in the read, so
+                    // that Restore prior text… is offered, and the digest a
+                    // save would name. The repository's has a file too,
+                    // which is not edited here.
+                    let managed = line.flows[1].stages[0].stage_file.as_ref().unwrap();
+                    assert_eq!(managed.digest.len(), 64, "{state}");
+                    assert_eq!(managed.prior_digest.len(), 64, "{state}");
+                    assert!(!managed.prior_text.is_empty(), "{state}");
+                    assert!(
+                        managed.warning.ends_with("the ## Ask section is empty"),
+                        "{state}"
+                    );
+                    let repo = &line.flows[2];
+                    assert_eq!(repo.source, "repo@abcdef0", "{state}");
+                    assert_eq!(
+                        repo.stages[0].stage_file.as_ref().unwrap().path,
+                        ".yardr/flows/default/new.md",
+                        "{state}"
+                    );
                 }
                 _ => unreachable!("a state with no coverage: {state}"),
             }

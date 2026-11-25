@@ -49,7 +49,8 @@ code it printed.
 
 **Left out of Windows for now.** The system's unlock before a weighty
 approval: the card asks for the ask's number typed back, as it does where a
-system offers none. System notifications, which the settings say there are
+system offers none, and a stage file's save or a repository flow's copy asks
+for the stage's or the depot's name typed back. System notifications, which the settings say there are
 none of; the item in the tray, whose settings are not shown; the number on
 the taskbar. The title bar is the system's. An installer, and signing, are
 for later. The release's zip is not signed, and [Installing](../README.md#windows-pc) says

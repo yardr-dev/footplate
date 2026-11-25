@@ -7,11 +7,13 @@
 //! whose Send mails the yardmaster the proposed text: the card it
 //! becomes stands in Decide, and this window approves nothing. A
 //! prompt the read says no card can carry has the reason in Edit's
-//! place, and a stage file has no Edit. What serves a stage and
-//! its stages are filed the same way: a Served-by picker under
-//! every Rule line and the Stages row mail the yardmaster the card
-//! or the depot bead each change stands on, and approve nothing
-//! here.
+//! place. A stage file is the yard's own copy where its flow is the
+//! store's or a pack's, and saves straight to it from its own editor
+//! (`stagefile.rs`), after a review of the change and the weighty gate.
+//! What serves a stage and its stages are filed by mail: a Served-by
+//! picker under every Rule line and the Stages row mail the yardmaster
+//! the card or the depot bead each change stands on, and approve
+//! nothing here.
 
 use gpui::{
     AnyElement, Context, Div, Entity, Focusable, FontWeight, SharedString, Window, div, prelude::*,
@@ -22,6 +24,7 @@ use super::Footplate;
 use super::ask::card_button;
 use super::metrics::{LINE_TRACK_CELL, line_flow_dir_budget, line_track_overflows};
 use super::panel::{buffer_stop, panel_track_line};
+use super::stagefile::StageAt;
 use super::ui::{field, shorten, small_button};
 use crate::api::{Event, LineFlow, LinePrompt, LineStage};
 use crate::input;
@@ -144,7 +147,7 @@ const GROUP_RUNNERS: [&str; 3] = ["herdr", "exec", "manual"];
 
 /// Whether the text typed is something to send: not blank, and not the
 /// text that stands.
-fn sendable(over: &str, proposed: &str) -> bool {
+pub(crate) fn sendable(over: &str, proposed: &str) -> bool {
     !proposed.trim().is_empty() && proposed != input::line_breaks(over)
 }
 
@@ -1050,33 +1053,7 @@ impl Footplate {
                     .child(warning.clone()),
             );
         }
-        if let Some(file) = &stage.stage_file {
-            let key = format!(
-                "stagefile:{}:{}:{}:{}",
-                flow.flow_type, flow.name, flow.source, stage.stage
-            );
-            // A stage file has no Edit, and says why (design yardr-y1cn
-            // 3.2): it is part of the flow's home and changes with the flow.
-            let why = div()
-                .text_sm()
-                .text_color(palette.faint)
-                .debug_selector({
-                    let stage = stage.stage.clone();
-                    move || format!("line stagefile {stage} edit why")
-                })
-                .child("no Edit, since a stage file changes with its flow")
-                .into_any_element();
-            detail = detail.child(self.line_text_row(
-                format!("Stage file · {}", file.path),
-                format!("line stagefile {}", stage.stage),
-                key,
-                &file.text,
-                Some(why),
-                false,
-                palette,
-                cx,
-            ));
-        }
+        detail = detail.child(self.line_stage_file(depot, flow, stage, palette, cx));
         if let Some(route) = &stage.route {
             for group in &route.chain {
                 match &group.prompt {
@@ -1134,6 +1111,64 @@ impl Footplate {
             detail = detail.child(self.line_filed_row(filed, palette, cx));
         }
         detail
+    }
+
+    /// A stage's file section: its head with Read, under it where its text
+    /// comes from and the controls that follow (Edit, or Add stage file
+    /// where none stands, Restore prior text…, or Copy flow into yard… on a
+    /// repository's flow), and the stage file editor under the text where
+    /// one stands open over the stage. Where the stage has no file the head
+    /// says so. The context drawer's Stage tab draws the same section over
+    /// its own head.
+    fn line_stage_file(
+        &self,
+        depot: &str,
+        flow: &LineFlow,
+        stage: &LineStage,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let at = StageAt::of(depot, flow, &stage.stage);
+        let selector = format!("line stagefile {}", stage.stage);
+        let under = self.stage_file_source(&at, flow, stage, &selector, false, palette, cx);
+        let editing = self.stage_edit.as_ref().is_some_and(|edit| edit.at == at);
+        let mut row = match &stage.stage_file {
+            Some(file) => {
+                let key = format!(
+                    "stagefile:{}:{}:{}:{}",
+                    flow.flow_type, flow.name, flow.source, stage.stage
+                );
+                self.line_text_row(
+                    format!("Stage file · {}", file.path),
+                    selector.clone(),
+                    key,
+                    &file.text,
+                    None,
+                    under,
+                    editing,
+                    palette,
+                    cx,
+                )
+            }
+            None => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .debug_selector({
+                            let selector = selector.clone();
+                            move || selector.clone()
+                        })
+                        .child("Stage file · none"),
+                )
+                .children(under),
+        };
+        if let Some(editor) = self.stage_file_editor(&at, &selector, false, palette, cx) {
+            row = row.child(editor);
+        }
+        row
     }
 
     /// One rule's Served-by picker, standing under the Rule line it
@@ -1846,6 +1881,7 @@ impl Footplate {
             key,
             &prompt.text,
             edit,
+            None,
             editing.is_some(),
             palette,
             cx,
@@ -2114,7 +2150,8 @@ impl Footplate {
 
     /// One text's row: its head with Read, which stands its text open
     /// below (unless an editor stands over it instead), and, where `edit`
-    /// stands, the Edit or the reason none does, beside Read.
+    /// stands, the Edit or the reason none does, beside Read. `under` is
+    /// what stands between the head and the text: a stage file's section.
     #[allow(clippy::too_many_arguments)]
     fn line_text_row(
         &self,
@@ -2123,6 +2160,7 @@ impl Footplate {
         key: String,
         text: &str,
         edit: Option<AnyElement>,
+        under: Option<Div>,
         editing: bool,
         palette: Palette,
         cx: &mut Context<Self>,
@@ -2163,6 +2201,9 @@ impl Footplate {
                 )
                 .children(edit),
         );
+        if let Some(under) = under {
+            row = row.child(under);
+        }
         if open {
             row = row.child(
                 div()
@@ -2185,14 +2226,29 @@ impl Footplate {
     /// can carry, with a change typed in it, and `line-sent` stands the
     /// hand-off of an edit written over that prompt as it stood before it
     /// changed, with the yardmaster's answer; `line-pack` stands on the
-    /// pack's flow, at its middle stage. Once; a debug build's alone.
+    /// pack's flow, at its middle stage. `line-stage-review` opens the stage
+    /// file editor of the pack's flow, in the drawer standing on it, at the
+    /// review of a change typed over its text (`line-stage-edit` is that
+    /// drawer before any edit, with the file's words and controls);
+    /// `line-stage-copy` stands on the repository's flow, where its stage
+    /// file offers to be copied into the yard, and `line-stage-copying` has
+    /// that copy's confirmation open. Once; a debug build's alone.
     pub(crate) fn shot_line_window(&mut self, cx: &mut Context<Self>) {
         let shot = std::env::var("FOOTPLATE_SHOT").unwrap_or_default();
         if !matches!(
             shot.as_str(),
-            "line-edit" | "line-sent" | "line-picker" | "line-refused" | "line-pack"
+            "line-edit"
+                | "line-sent"
+                | "line-picker"
+                | "line-refused"
+                | "line-pack"
+                | "line-stage-review"
+                | "line-stage-copy"
+                | "line-stage-copying"
         ) || self.line_edit.is_some()
             || self.line_sent.is_some()
+            || self.stage_edit.is_some()
+            || self.stage_copy.is_some()
         {
             return;
         }
@@ -2211,6 +2267,61 @@ impl Footplate {
         // pack's on its flow's middle stage, where every control of the
         // Stages row is live: none needs a prompt.
         match shot {
+            "line-stage-review" => {
+                // The drawer stands on the pack's flow at new: the editor
+                // opens over its stage file with a change typed (one line
+                // of the second bullet made two), and Save… is pressed, so
+                // that the review shows the change and its weight under the
+                // pack's words.
+                let found = self
+                    .model
+                    .as_ref()
+                    .and_then(|m| m.line_read_for("yardr"))
+                    .and_then(|line| {
+                        let flow = line.flows.iter().find(|flow| flow.name == "managed")?;
+                        let file = flow.stages.first()?.stage_file.clone()?;
+                        Some((StageAt::of("yardr", flow, "new"), file))
+                    });
+                if let Some((at, file)) = found {
+                    self.edit_stage_file(at, Some(&file), false, window, cx);
+                    let typed = file.text.replace(
+                        "- a note on the bead says what changed and what was verified.",
+                        "- a note on the bead says what changed and what was verified, and ends with\n  the test line: `test: <command> @ <commit>: pass` or `fail`.",
+                    );
+                    if let Some(edit) = self.stage_edit.as_ref() {
+                        edit.field.update(cx, |line, cx| line.set_text(&typed, cx));
+                    }
+                    self.review_stage_edit(window, cx);
+                }
+                cx.notify();
+                return;
+            }
+            "line-stage-copy" | "line-stage-copying" => {
+                // The window stands on the repository's flow at new, where
+                // the stage file says it is the repository's and offers
+                // Copy flow into yard…; the copying shot has pressed it.
+                let found = self
+                    .model
+                    .as_ref()
+                    .and_then(|m| m.line_read_for("yardr"))
+                    .and_then(|line| line.flows.iter().find(|flow| flow.name == "repo"))
+                    .map(|flow| {
+                        (
+                            StageAt::of("yardr", flow, "new"),
+                            model::line_flow_key(flow),
+                        )
+                    });
+                if let Some((at, key)) = found {
+                    self.line_flow = key.clone();
+                    self.line_stage = "new".to_string();
+                    if shot == "line-stage-copying" {
+                        self.ask_copy_flow(at, key, true, window, cx);
+                    }
+                }
+                self.decision.scroll_to_bottom();
+                cx.notify();
+                return;
+            }
             "line-pack" => {
                 let key = self
                     .model

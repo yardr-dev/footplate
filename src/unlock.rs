@@ -41,6 +41,25 @@ pub fn give_reason(names: &[String], yard: &str) -> String {
     }
 }
 
+/// What the system shows with its prompt for a change to a stage file:
+/// the stage, and in which yard. A save and a restore of the prior text
+/// are both the change.
+pub fn stage_file_reason(stage: &str, yard: &str) -> String {
+    match stage.is_empty() {
+        true => format!("change a stage file in {yard}"),
+        false => format!("change the stage file of {stage} in {yard}"),
+    }
+}
+
+/// What the system shows with its prompt for copying a depot's repository
+/// flows into the yard: the depot, and in which yard.
+pub fn copy_flows_reason(depot: &str, yard: &str) -> String {
+    match depot.is_empty() {
+        true => format!("copy repository flows into {yard}"),
+        false => format!("copy the repository flows of {depot} into {yard}"),
+    }
+}
+
 /// Whether the system offers the gate: macOS with a policy the person
 /// can pass, Linux with polkit answering and footplate's action
 /// installed, nothing elsewhere. Asked where a weighty card is drawn, and
@@ -366,6 +385,24 @@ mod tests {
             "approve the setup in plantime"
         );
         assert_eq!(give_reason(&[], "plantime"), "give the secret in plantime");
+        // A stage file's change and a repository flow's copy are named the
+        // same way, and are never empty either.
+        assert_eq!(
+            stage_file_reason("review", "plantime"),
+            "change the stage file of review in plantime"
+        );
+        assert_eq!(
+            stage_file_reason("", "plantime"),
+            "change a stage file in plantime"
+        );
+        assert_eq!(
+            copy_flows_reason("yardr", "plantime"),
+            "copy the repository flows of yardr into plantime"
+        );
+        assert_eq!(
+            copy_flows_reason("", "plantime"),
+            "copy repository flows into plantime"
+        );
     }
 
     #[test]

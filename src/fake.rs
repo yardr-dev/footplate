@@ -1512,20 +1512,224 @@ fn call_reply(shared: &Shared, method: &str, body: &[u8], listener: bool) -> Opt
     let held = (method == "Conversation")
         .then(|| conversation(&state, &args))
         .flatten();
-    Some(
-        refused
-            .or(once)
-            .or(by_arg)
-            .or(held)
-            .or_else(|| state.answers.get(method).cloned())
-            .unwrap_or_else(|| Reply {
-                status: 200,
-                body: format!(
-                    r#"{{"error":{{"code":"error","message":"no such method {method}"}}}}"#
-                ),
-                chunk: None,
-            }),
-    )
+    let scripted = refused
+        .or(once)
+        .or(by_arg)
+        .or(held)
+        .or_else(|| state.answers.get(method).cloned());
+    // A write to the line a test left unscripted is the yard's own to
+    // answer, from the line the test scripted.
+    let written = match scripted {
+        Some(_) => None,
+        None => line_write(&mut state, method, &args),
+    };
+    Some(scripted.or(written).unwrap_or_else(|| Reply {
+        status: 200,
+        body: format!(r#"{{"error":{{"code":"error","message":"no such method {method}"}}}}"#),
+        chunk: None,
+    }))
+}
+
+/// The digest the yard holds a stage file under: its text's sha256, in
+/// 64 lowercase hex digits. What a test names a file by in the line it
+/// scripts, and what `PutStageFile` answers for the text it wrote.
+pub fn digest(text: &str) -> String {
+    crate::fetch::sha256(text.as_bytes())
+}
+
+/// The refusal the yard says to a call that is weighty and was not made
+/// by a person who passed the gate.
+const NOT_WEIGHED: &str =
+    "this change is weighty: the call says it was weighed, and this one did not";
+
+/// What the yard answers to `PutStageFile` and `CopyRepoFlows` where a
+/// test scripted no answer to them: the answers to `Line` it did script
+/// are the yard's flows and stage files, and the write changes those, so
+/// that the next read of the line shows what was written, as a yard's
+/// does. None where the call is neither, or no scripted line has what it
+/// names: a yard from before the calls, which says there is no such
+/// method. The yard's checks are the ones the window must meet — `weighed`,
+/// the file's digest as it was read, a store flow and not a repository's —
+/// and its warning is its own rule for the `## Ask` heading, nothing of
+/// the yard's real grammar.
+fn line_write(state: &mut State, method: &str, args: &Value) -> Option<Reply> {
+    let mut lines: Vec<(&mut Reply, Value)> = state
+        .answers_for
+        .iter_mut()
+        .filter(|((method, ..), _)| method == "Line")
+        .map(|(_, reply)| reply)
+        .chain(state.answers.get_mut("Line"))
+        .filter_map(|reply| {
+            let line = serde_json::from_str(&reply.body).ok()?;
+            Some((reply, line))
+        })
+        .collect();
+    let refusal = |why: &str| Reply {
+        status: 200,
+        body: serde_json::json!({"error": {"code": "error", "message": why}}).to_string(),
+        chunk: None,
+    };
+    let answer = |result: Value| Reply {
+        status: 200,
+        body: serde_json::json!({"result": result}).to_string(),
+        chunk: None,
+    };
+    match method {
+        "PutStageFile" => {
+            let (flow, stage) = (args["flow"].as_str()?, args["stage"].as_str()?);
+            let at = lines
+                .iter_mut()
+                .position(|(_, line)| stage_in(line, flow, stage).is_some())?;
+            if args["weighed"] != true {
+                return Some(refusal(NOT_WEIGHED));
+            }
+            let (source, standing) = {
+                let (source, stage) = stage_in(&mut lines[at].1, flow, stage)?;
+                (source, stage["stage_file"].clone())
+            };
+            if source.starts_with("repo") {
+                return Some(refusal(&format!(
+                    "flow {flow} is a repository flow: copy it into the yard before editing its stages"
+                )));
+            }
+            let text = args["text"].as_str().unwrap_or_default();
+            let now = standing["text"].as_str().map(|text| {
+                match standing["digest"]
+                    .as_str()
+                    .filter(|digest| !digest.is_empty())
+                {
+                    Some(digest) => digest.to_string(),
+                    None => digest(text),
+                }
+            });
+            // The digest the call names: none where no file stands, empty
+            // for the file that stands, whatever it is.
+            let over = args["expect_digest"].as_str().unwrap_or_default();
+            let moved = match (over, &now) {
+                ("", _) => false,
+                ("none", now) => now.is_some(),
+                (over, now) => now.as_deref() != Some(over),
+            };
+            if moved {
+                let short = |digest: &str| digest.get(..12).unwrap_or(digest).to_string();
+                return Some(refusal(&format!(
+                    "stage file {flow}/{stage} changed since it was read: it is now {}, not {}. Nothing was written.",
+                    now.as_deref().map_or("none".to_string(), short),
+                    short(over)
+                )));
+            }
+            let path = standing["path"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("/home/jo/.yardr/flows/{flow}/{stage}.md"));
+            let mut file = serde_json::json!({"path": path, "text": text, "digest": digest(text)});
+            if let (Some(prior), Some(prior_digest)) = (standing["text"].as_str(), &now) {
+                file["prior_text"] = prior.into();
+                file["prior_digest"] = prior_digest.as_str().into();
+            }
+            if let Some(why) = ask_warning(text) {
+                file["warning"] = format!("{path}: {why}").into();
+            }
+            for (reply, line) in &mut lines {
+                if let Some((source, stage)) = stage_in(line, flow, stage)
+                    && !source.starts_with("repo")
+                {
+                    stage["stage_file"] = file.clone();
+                    reply.body = line.to_string();
+                }
+            }
+            Some(answer(file))
+        }
+        "CopyRepoFlows" => {
+            let depot = args["depot"].as_str()?;
+            let at = lines
+                .iter()
+                .position(|(_, line)| line["result"]["depot"] == depot)?;
+            if args["weighed"] != true {
+                return Some(refusal(NOT_WEIGHED));
+            }
+            let (reply, line) = &mut lines[at];
+            let mut copied = Vec::new();
+            let mut from = String::new();
+            for flow in line["result"]["flows"].as_array_mut()? {
+                let source = flow["source"].as_str().unwrap_or_default().to_string();
+                if !source.starts_with("repo@") && source != "repo (directory)" {
+                    continue;
+                }
+                let name = flow["name"].as_str().unwrap_or_default().to_string();
+                let flow_type = flow["type"].as_str().unwrap_or_default().to_string();
+                // The depot's own flow takes the depot's name, a typed one
+                // `.local` after its own.
+                let (to, back) = match flow_type.is_empty() {
+                    true => (
+                        format!("{depot}.{name}"),
+                        format!("yardr depot source {depot} flow depot"),
+                    ),
+                    false => (
+                        format!("{name}.local"),
+                        format!("yardr depot source {depot} flow type/{flow_type}"),
+                    ),
+                };
+                let mut stage_files = 0;
+                for stage in flow["stages"].as_array_mut().into_iter().flatten() {
+                    if let Some(file) = stage.get_mut("stage_file").filter(|file| file.is_object())
+                    {
+                        stage_files += 1;
+                        let text = file["text"].as_str().unwrap_or_default().to_string();
+                        file["digest"] = digest(&text).into();
+                    }
+                }
+                copied.push(serde_json::json!({
+                    "type": flow_type, "from": format!(".yardr/flows/{name}.flow"),
+                    "flow": to, "stage_files": stage_files, "replaced": false, "back": back,
+                }));
+                flow["name"] = to.into();
+                flow["source"] = "store".into();
+                if let Some(flow) = flow.as_object_mut() {
+                    flow.remove("directory");
+                }
+                if from.is_empty() {
+                    from = source;
+                }
+            }
+            if copied.is_empty() {
+                return Some(refusal(&format!(
+                    "depot {depot} has no repository flows to copy"
+                )));
+            }
+            reply.body = line.to_string();
+            Some(answer(serde_json::json!({
+                "depot": depot, "source": from, "flows": copied, "kept": [],
+            })))
+        }
+        _ => None,
+    }
+}
+
+/// The stage `stage` of the flow `flow` in a scripted answer to `Line`,
+/// with the source its flow is read from.
+fn stage_in<'a>(line: &'a mut Value, flow: &str, stage: &str) -> Option<(String, &'a mut Value)> {
+    let flow = line["result"]["flows"]
+        .as_array_mut()?
+        .iter_mut()
+        .find(|read| read["name"] == flow)?;
+    let source = flow["source"].as_str().unwrap_or_default().to_string();
+    let stage = flow["stages"]
+        .as_array_mut()?
+        .iter_mut()
+        .find(|read| read["stage"] == stage)?;
+    Some((source, stage))
+}
+
+/// What the stand-in yard finds wrong with a stage file's `## Ask`: the
+/// heading with nothing under it before the next one.
+fn ask_warning(text: &str) -> Option<&'static str> {
+    let mut lines = text.lines();
+    lines.find(|line| line.trim_end() == "## Ask")?;
+    let filled = lines
+        .take_while(|line| !line.starts_with("## "))
+        .any(|line| !line.trim().is_empty());
+    (!filled).then_some("the ## Ask section is empty")
 }
 
 /// The answer to `Conversation` from a conversation the yard holds, none

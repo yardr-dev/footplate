@@ -495,12 +495,16 @@ group, its next stages, and the open beads in the stage. An exec
 stage shows its `cmd` whole; a manual stage shows its members; a
 terminal stage says entering it closes the bead. The stage file and
 each herdr group's prompt stand behind Read, and the crew's prompts
-stand below the flows the same way. A stage file has no Edit, and says
-it changes with its flow. A group with no prompt says so on the stage,
+stand below the flows the same way. A stage file's section says where
+its text comes from and offers the edit that follows from it
+([Editing a stage file](#editing-a-stage-file)); the context drawer's
+Stage tab draws the same section. A group with no prompt says so on the stage,
 whether a script, people or another yard serves it or the group's config
 names none. It reads through `Line` when the window opens or
-its depot changes, and at no other time: the window says to reopen it
-after an edit lands rather than pretending to be live. A yard from
+its depot changes, and at no other time but the two writes of its own
+(a stage file saved, a repository flow copied), which read it again once
+the yard has answered: the window says to reopen it after a prompt's edit
+lands rather than pretending to be live. A yard from
 before the call says in its pane, in no red, that its yardr is older
 than the Line window, and the window is not offered again.
 
@@ -559,6 +563,83 @@ means the prompt changed since it was read, and the window says what
 changed. A card over the old text is stale, and the yard refuses to
 approve it. Edit then opens over the text that stands now. One hand-off
 stands at a time, and it goes when the yard is switched.
+
+### Editing a stage file
+
+A stage file is the text a session in the stage reads when it starts. Where
+its flow is the yard's own (`store`, or `pack <name>` for a flow a pack
+brought) the file is the yard's copy, and you change it here, in place:
+no mail, no card and no yardmaster between. Both the Line window's stage
+detail and the context drawer's Stage tab draw the same section under the
+file's head:
+
+- where the text comes from, in one quiet line: `store flow`, or `from
+  pack starter: you change the yard's copy, applying the pack again keeps
+  it`;
+- the yard's warning, in red, where the file's `## Ask` is broken. The
+  yard saves such a file all the same, and says so on every read until
+  it is fixed;
+- Edit, or Add stage file where the stage has none, and Restore prior
+  text… where the yard kept the text the file stood as before its last
+  save.
+
+Edit opens an editor over the text that stands, with the focus in it, as a
+prompt's does: Enter breaks a line, Esc leaves the field and keeps the
+text, Cancel drops it, and Edit elsewhere, while the open editor holds
+typed text, says to finish or cancel that one first. Save… is held while
+the text is blank or is what stands. It opens the review, which writes
+nothing:
+
+- the change line by line, a `-` before each line taken out in red and a
+  `+` before each line put in in green, three unchanged lines either side
+  of a change, and a longer run counted (`12 unchanged lines`). A last
+  line with no break at the end is said so, since it is not the line with
+  one;
+- the weight, in the words of a card's: `WEIGHTY · code: changes what
+  every future session in this stage reads`;
+- Cancel, Back to edit, which keeps what was typed, and Confirm save.
+
+Confirm save passes the weighty gate before anything is written: the
+system's unlock where it offers one (Touch ID or the login password on a
+Mac, polkit on Linux), and where it offers none the stage's name typed
+back into the review's field, with anything else sending nothing. An
+unlock that is cancelled writes nothing, and the review stands as it was.
+Passed, the window writes the text whole through `PutStageFile`, over the
+digest the file was read at, with `weighed`. The yard answers the file as
+it now stands, the editor closes and the line is read again. A line under
+the file says it was saved, or, where the yard found its `## Ask` broken,
+says so in red with the yard's words.
+
+The save is refused where the file moved since it was read: a line read
+again that says the file is another holds Save and Confirm save, with a
+line saying so and the typed text kept, and a yard that refuses the call
+for the same reason, or because it is older than the call, says so in its
+words in red, in the editor, with the review and the text as they were.
+Copy the text out if you want it, cancel, and edit again over the text
+that stands. A yard that did not answer may or may not have written the
+file, and says so; the editor stays.
+
+Restore prior text… opens the same review from the text that stands to the
+text the file stood as before its last save, passes the same gate and
+writes it over the digest that stands now. It keeps one step back and no
+more: the text the restore replaces becomes the new prior text.
+
+A stage file of a repository flow (`repo@<commit>` for a git depot, `repo
+(directory)` for a dir depot's) is the repository's, which is edited there.
+The section says so (`from repository (repo@abcdef0): copy this flow into
+the yard before editing its stages`) and offers Copy flow into yard…, which
+opens its confirmation under it: what it copies (the depot's repository
+flows, with their stage files, into the yard's store), that the yard holds
+them from then on and a later change in the repository no longer governs
+them until the depot's flows are switched back, and the weight. Confirm
+copy passes the same gate, with the depot's name typed back where no unlock
+is offered, and asks the yard through `CopyRepoFlows` with `weighed`. The
+yard answers each flow it copied by the bead type it governs and the store
+flow it is now (the depot's own `default` becomes `<depot>.default`, a
+typed flow `<name>.local`): the window follows the flow you stood on to
+its copy in the Line window and in the drawer, reads the line again, and
+the stage edits in place. A line under the stage names each copy with the
+command that goes back to the repository's.
 
 ### Choosing what serves a stage
 

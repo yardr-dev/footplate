@@ -294,6 +294,44 @@ before it with the note of what an edit does, and the Line window's
 editor and hand-off stand under the prompt, the foot going while the
 editor stands.
 
+The Stage tab, and the Line window's stage file under its own head, share
+one section for where the text comes from and what can be done with it
+(`stagefile.rs`). Each line is quiet in the meta role (the Line window's
+small text) except the yard's warning of a broken `## Ask`, which stands
+first, right under the file line, in `warn`: its words are the yard's.
+Then one line says where the text comes from (`store flow`, `from pack X:
+you change the yard's copy, applying the pack again keeps it`, `from
+repository (repo@abcdef0): copy this flow into the yard before editing its
+stages`), then the controls as small buttons, 32 high with the strong
+edge: Edit, or Add stage file where none stands, and Restore prior text…
+where the yard kept the text before the last save; Copy flow into yard…
+in place of them on a repository's stage. While the editor stands over
+the stage the controls give way to it, and the file's rendered text with
+them.
+
+The editor is the prompt editor's field (the `side` ground, a hairline,
+8 rems high at the least) with one quiet line of what Save… does, and
+Cancel and Save…, the button held (outlined, in the disabled text) while
+there is nothing to save. Save… opens the review in its place: `Review change` in the label
+role semibold, a quiet count (`1 line taken out, 2 lines put in`), the
+change in a box on the `raised` ground with a hairline and a 6px radius,
+and under it the weight in the accent text colour, as a card's head
+says it (`WEIGHTY · code: …`), never in red. The change is set in the
+code role, one row a line with a 10-wide marker before it: `-` and the
+line in `warn` for what is taken out, `+` and the line in `ok` for what is
+put in, and what stands round them in quiet text, three lines either
+side of a change and a longer run as one quiet row (`12 unchanged
+lines`). Where the system offers no unlock, the stage's name is typed
+back in a field under the weight, with the words that ask for it above
+it. Cancel, Back to edit and Confirm save stand under it, the last the
+filled button. A refusal and a name that was not typed back stand over
+the buttons in `warn`; a file that moved says so in quiet text.
+What the last save or copy left stands under the section as one quiet
+line, or in `warn` where the yard warned of the saved file's `## Ask`.
+Copy flow into yard… opens its confirmation the same way: what it copies,
+the weight, the depot's name where no unlock is offered, and Cancel and
+Confirm copy.
+
 ## Crew
 
 A crew member's conversation head carries a Context button beside its

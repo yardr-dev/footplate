@@ -738,12 +738,71 @@ pub struct LinePrompt {
     pub error: String,
 }
 
-/// A stage's file: its path as `flow show` names it, and its text whole.
+/// A stage's file: its path as `flow show` names it, and its text whole,
+/// with the digest the yard holds it under, the text it stood as before
+/// its last save where the yard kept one, and what the yard found wrong
+/// with it. `PutStageFile` answers the same shape for the file it wrote.
+/// Every field past the text is absent from a yard from before stage
+/// files were edited, and reads as empty there.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct LineStageFile {
     pub path: String,
     #[serde(default)]
     pub text: String,
+    /// The text's sha256 as 64 lowercase hex digits: what a save names as
+    /// the file it was written over (`expect_digest`).
+    #[serde(default)]
+    pub digest: String,
+    /// The digest of the text the file stood as before its last save;
+    /// empty where the yard kept none, as for a file never replaced.
+    #[serde(default)]
+    pub prior_digest: String,
+    /// That text whole: what Restore prior text puts back.
+    #[serde(default)]
+    pub prior_text: String,
+    /// `<path>: <why>` where the file's `## Ask` is broken. The yard saves
+    /// such a file all the same, and says so on every read until it is
+    /// fixed; empty where nothing is wrong.
+    #[serde(default)]
+    pub warning: String,
+}
+
+/// What `CopyRepoFlows` answers: the depot, the repository commit its
+/// flows were copied from, each flow copied into the yard's store, and
+/// the flow files it left in the repository (`kept`).
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct CopiedFlows {
+    pub depot: String,
+    /// `repo@<commit>` of the checkout the flows were read at.
+    #[serde(default)]
+    pub source: String,
+    #[serde(default, deserialize_with = "or_default")]
+    pub flows: Vec<CopiedFlow>,
+    #[serde(default, deserialize_with = "or_default")]
+    pub kept: Vec<String>,
+}
+
+/// One flow `CopyRepoFlows` copied into the store: the bead type it
+/// governs, the repository file it came from, the store flow it is now
+/// (the depot's own `default` is `<depot>.default`, a typed flow gets
+/// `.local` after its name), how many stage files came with it, whether
+/// it replaced a flow already there, and the command that goes back to
+/// the repository's.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct CopiedFlow {
+    /// The bead type, `""` for the depot's own: what the flow read before
+    /// the copy is matched to this one by.
+    #[serde(default, rename = "type")]
+    pub flow_type: String,
+    #[serde(default)]
+    pub from: String,
+    pub flow: String,
+    #[serde(default)]
+    pub stage_files: usize,
+    #[serde(default)]
+    pub replaced: bool,
+    #[serde(default)]
+    pub back: String,
 }
 
 /// One crew member of the line, with its prompt where its config
@@ -4698,6 +4757,53 @@ impl Client {
     /// Line window opens or its depot changes.
     pub fn line(&self, depot: &str) -> Result<Line> {
         self.answer("Line", json!({ "depot": depot }))
+    }
+
+    /// Writes a store flow's stage file: `text` whole, over the file the
+    /// read named by `expect_digest` (its digest, `none` where no file
+    /// stands, or empty to take whatever stands), and answers the file as
+    /// it now stands, with the text it replaced as its prior and a
+    /// `warning` where its `## Ask` is broken: the yard saves such a file
+    /// all the same. A file that moved since the read is refused, in the
+    /// yard's words. `weighed` is the client's word that its person saw
+    /// the change's weight and passed its gate: the yard refuses a write
+    /// without it. It goes only where it is said, as for every weighty
+    /// call. Not a read: a timeout on it may have written the file.
+    pub fn put_stage_file(
+        &self,
+        flow: &str,
+        stage: &str,
+        text: &str,
+        expect_digest: &str,
+        actor: &str,
+        weighed: bool,
+    ) -> Result<LineStageFile> {
+        let mut args = json!({
+            "flow": flow,
+            "stage": stage,
+            "text": text,
+            "expect_digest": expect_digest,
+            "actor": actor,
+        });
+        if weighed {
+            args["weighed"] = json!(true);
+        }
+        self.answer("PutStageFile", args)
+    }
+
+    /// Copies the depot's repository flows into the yard's store, whole
+    /// with their stage files, so that they edit in place as store flows
+    /// do; the repository's own are kept, and the yard says the command
+    /// that goes back to them. `weighed` is the client's word that its
+    /// person saw the change's weight and passed its gate: the yard
+    /// refuses the call without it. It goes only where it is said. Not a
+    /// read: a timeout on it may have copied them.
+    pub fn copy_repo_flows(&self, depot: &str, actor: &str, weighed: bool) -> Result<CopiedFlows> {
+        let mut args = json!({ "depot": depot, "actor": actor });
+        if weighed {
+            args["weighed"] = json!(true);
+        }
+        self.answer("CopyRepoFlows", args)
     }
 
     /// Every grant of the yard's sources: who may make which calls of
@@ -10179,13 +10285,18 @@ mod tests {
                  "other_routes": [{"id": "r-2", "scope": "yard-wide",
                    "filters": {"type": "task", "labels": ["eyes"], "priority": "P0-P1", "originator": "any"},
                    "group": "reviewers"}],
-                 "open": 2, "stage_file": {"path": ".yardr/flows/default/new.md", "text": "Start here.\n"}},
+                 "open": 2, "stage_file": {"path": ".yardr/flows/default/new.md", "text": "Start here.\n",
+                   "digest": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+                   "prior_digest": "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+                   "prior_text": "Begin here.\n",
+                   "warning": ".yardr/flows/default/new.md: the ## Ask section is empty"}},
                 {"stage": "run", "next": [], "terminal": false,
                  "route": {"id": "r-3", "scope": "this depot's own",
                    "filters": {"type": "", "labels": [], "priority": "", "originator": "any"},
                    "chain": [{"name": "assembly", "when": "Weekly<80", "runner": "exec", "cmd": "scripts/merge-local --fast"}],
                    "limit": 1},
-                 "other_routes": [], "open": 0},
+                 "other_routes": [], "open": 0,
+                 "stage_file": {"path": ".yardr/flows/default/run.md", "text": "Run it.\n"}},
                 {"stage": "merged", "next": [], "terminal": true, "other_routes": [], "open": 0}
               ]}],
             "crew": [{"name": "yardmaster", "prompt": {"path": "/home/jo/.yardr/roles/yardmaster.md", "source": "file", "found": "/home/jo/.yardr/roles/yardmaster.md", "text": "Mind the yard.\n", "carriable": true}},
@@ -10210,7 +10321,35 @@ mod tests {
                 .text,
             "Build it.\n"
         );
-        assert_eq!(stage.stage_file.as_ref().unwrap().text, "Start here.\n");
+        let file = stage.stage_file.as_ref().unwrap();
+        assert_eq!(file.text, "Start here.\n");
+        // What a save needs of the file as read: its digest, the text it
+        // replaced, and what the yard found wrong with it.
+        assert_eq!(file.digest, "d1".repeat(32));
+        assert_eq!(file.prior_digest, "e2".repeat(32));
+        assert_eq!(file.prior_text, "Begin here.\n");
+        assert_eq!(
+            file.warning,
+            ".yardr/flows/default/new.md: the ## Ask section is empty"
+        );
+        // A yard from before stage files were edited sends the path and
+        // the text alone, which read as no digest, no prior and no warning.
+        let bare = line.flows[0].stages[1].stage_file.as_ref().unwrap();
+        assert_eq!(bare.text, "Run it.\n");
+        assert_eq!(
+            (
+                &bare.digest,
+                &bare.prior_digest,
+                &bare.prior_text,
+                &bare.warning
+            ),
+            (
+                &String::new(),
+                &String::new(),
+                &String::new(),
+                &String::new()
+            )
+        );
         assert_eq!(
             line.flows[0].stages[1].route.as_ref().unwrap().chain[0].cmd,
             "scripts/merge-local --fast"
@@ -10225,6 +10364,170 @@ mod tests {
             "Mind the yard.\n"
         );
         assert!(line.crew[1].prompt.is_none());
+    }
+
+    /// A stage file is written in its own call, by name on the socket and
+    /// at an address alike (the yard has no positional form of it): the
+    /// flow, the stage, the text whole, the file it was read over and the
+    /// operator, with the client's word that its person passed the gate
+    /// only where it is said. The yard answers the file as it now stands,
+    /// the text it replaced and any warning of its `## Ask`, and says no in
+    /// its own words, whole.
+    #[test]
+    fn a_stage_file_is_put_by_name_over_the_digest_it_was_read_at() {
+        let digest = "d1".repeat(32);
+        for yard in [Yard::start(), Yard::start_tcp()] {
+            let client = yard.client();
+            let way = client.place();
+            let put = |over: &str, weighed: bool| {
+                client.put_stage_file("default", "new", "Go.\n", over, "jo", weighed)
+            };
+            // A yard from before the call says so, as of any method.
+            let err = put(&digest, true).unwrap_err();
+            assert_eq!(err.to_string(), "no such method PutStageFile", "{way}");
+            yard.answer(
+                "PutStageFile",
+                &json!({"result": {
+                    "path": "/home/jo/.yardr/flows/default/new.md", "text": "Go.\n",
+                    "digest": "a3".repeat(32), "prior_digest": digest,
+                    "prior_text": "Start here.\n",
+                    "warning": "/home/jo/.yardr/flows/default/new.md: the ## Ask section is empty"}})
+                .to_string(),
+            );
+            let file = put(&digest, true).unwrap();
+            assert_eq!(
+                yard.asked("PutStageFile").last(),
+                Some(&json!({"flow": "default", "stage": "new", "text": "Go.\n",
+                    "expect_digest": digest, "actor": "jo", "weighed": true})),
+                "{way}"
+            );
+            assert_eq!(file.path, "/home/jo/.yardr/flows/default/new.md", "{way}");
+            assert_eq!(file.digest, "a3".repeat(32), "{way}");
+            assert_eq!(file.prior_digest, digest, "{way}");
+            assert_eq!(file.prior_text, "Start here.\n", "{way}");
+            assert!(
+                file.warning.ends_with("the ## Ask section is empty"),
+                "{way}"
+            );
+            // A file that is not there yet is named `none`, and the
+            // client's word is left out where it is not said.
+            put("none", false).unwrap();
+            assert_eq!(
+                yard.asked("PutStageFile").last(),
+                Some(&json!({"flow": "default", "stage": "new", "text": "Go.\n",
+                    "expect_digest": "none", "actor": "jo"})),
+                "{way}"
+            );
+            // A write is no read: a timeout on it may have written the file.
+            assert!(!reads("PutStageFile"), "{way}");
+            // The yard says no, in its words, whole.
+            let refusal = "stage file default/new changed since it was read: it is now 7c9e41d2b0a8, not d1d1d1d1d1d1. Nothing was written.";
+            yard.answer(
+                "PutStageFile",
+                &json!({"error": {"code": "error", "message": refusal}}).to_string(),
+            );
+            assert_eq!(
+                put(&digest, true).unwrap_err().to_string(),
+                refusal,
+                "{way}"
+            );
+            // The yard went away over the call: no reply, and no word on
+            // whether it wrote.
+            yard.answer_nothing("PutStageFile");
+            let err = put(&digest, true).unwrap_err();
+            assert!(matches!(err, Error::Down(_)), "{way}: {err:?}");
+        }
+    }
+
+    /// A depot's repository flows are copied into the store in their own
+    /// call, which names the depot and the operator, with the client's
+    /// word that its person passed the gate where it is said. The yard
+    /// answers each flow it copied by the bead type it governs, the store
+    /// flow it is now and the command that goes back, and any it left.
+    #[test]
+    fn a_depots_repository_flows_are_copied_by_name_and_answered_by_type() {
+        for yard in [Yard::start(), Yard::start_tcp()] {
+            let client = yard.client();
+            let way = client.place();
+            // A yard from before the call says so, as of any method.
+            let err = client.copy_repo_flows("yardr", "jo", true).unwrap_err();
+            assert_eq!(err.to_string(), "no such method CopyRepoFlows", "{way}");
+            yard.answer(
+                "CopyRepoFlows",
+                r#"{"result": {"depot": "yardr", "source": "repo@abcdef0", "flows": [
+                    {"type": "", "from": ".yardr/flows/default.flow", "flow": "yardr.default",
+                     "stage_files": 5, "replaced": false, "back": "yardr depot source yardr flow depot"},
+                    {"type": "train", "from": ".yardr/flows/train.flow", "flow": "yardr.train.local",
+                     "stage_files": 0, "replaced": true, "back": "yardr depot source yardr flow train"}],
+                  "kept": ["type/design"]}}"#,
+            );
+            let copied = client.copy_repo_flows("yardr", "jo", true).unwrap();
+            assert_eq!(
+                yard.asked("CopyRepoFlows").last(),
+                Some(&json!({"depot": "yardr", "actor": "jo", "weighed": true})),
+                "{way}"
+            );
+            assert_eq!(
+                (copied.depot.as_str(), copied.source.as_str()),
+                ("yardr", "repo@abcdef0")
+            );
+            assert_eq!(copied.flows.len(), 2, "{way}");
+            let (own, typed) = (&copied.flows[0], &copied.flows[1]);
+            assert_eq!(
+                (
+                    own.flow_type.as_str(),
+                    own.flow.as_str(),
+                    own.stage_files,
+                    own.replaced
+                ),
+                ("", "yardr.default", 5, false),
+                "{way}"
+            );
+            assert_eq!(own.back, "yardr depot source yardr flow depot", "{way}");
+            assert_eq!(
+                (
+                    typed.flow_type.as_str(),
+                    typed.flow.as_str(),
+                    typed.replaced
+                ),
+                ("train", "yardr.train.local", true),
+                "{way}"
+            );
+            assert_eq!(copied.kept, ["type/design"], "{way}");
+            // Fields the yard leaves out read as empty, and the client's
+            // word is left out where it is not said.
+            yard.answer(
+                "CopyRepoFlows",
+                r#"{"result": {"depot": "yardr", "flows": [{"flow": "yardr.default"}]}}"#,
+            );
+            let bare = client.copy_repo_flows("yardr", "jo", false).unwrap();
+            assert_eq!(
+                yard.asked("CopyRepoFlows").last(),
+                Some(&json!({"depot": "yardr", "actor": "jo"})),
+                "{way}"
+            );
+            assert_eq!(bare.flows[0].flow_type, "", "{way}");
+            assert!(
+                bare.flows[0].back.is_empty() && bare.kept.is_empty(),
+                "{way}"
+            );
+            // A write is no read: a timeout on it may have copied them.
+            assert!(!reads("CopyRepoFlows"), "{way}");
+            // The yard says no, in its words, whole.
+            let refusal = "depot yardr has no repository flows to copy";
+            yard.answer(
+                "CopyRepoFlows",
+                &json!({"error": {"code": "error", "message": refusal}}).to_string(),
+            );
+            assert_eq!(
+                client
+                    .copy_repo_flows("yardr", "jo", true)
+                    .unwrap_err()
+                    .to_string(),
+                refusal,
+                "{way}"
+            );
+        }
     }
 
     #[test]

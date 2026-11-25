@@ -17,6 +17,7 @@ use gpui::{
 use super::Footplate;
 use super::expanded_text_key;
 use super::metrics::{CONTEXT_WIDTH, context_beside, grown};
+use super::stagefile::StageAt;
 use super::ui::{file_glyph, small_button};
 use crate::api::{
     Line, LineFlow, LineGroup, LinePrompt, LineStage, PrimeDepot, PrimeFile, PrimeInputs,
@@ -1137,7 +1138,11 @@ impl Footplate {
     }
 
     /// The Stage tab: the stage file rendered as the window's Markdown,
-    /// read-only until a later bead proposes edits to it.
+    /// with where its text comes from and what can be done with it under
+    /// its path — the Line window's section, drawn here — and the stage
+    /// file editor in place of the rendered text while one stands open over
+    /// the stage. A stage with no file says so, and a store flow's or a
+    /// pack's offers Add stage file.
     fn context_stage_tab(
         &self,
         open: &ContextOpen,
@@ -1149,35 +1154,63 @@ impl Footplate {
         let ContextSubject::Stage { depot, flow, .. } = &open.subject else {
             return div();
         };
-        let Some(file) = stage.stage_file.as_ref() else {
-            return div().p_4().child(
-                div()
-                    .debug_selector(|| "context stage none".to_string())
-                    .text_color(palette.faint)
-                    .child("No stage file."),
-            );
+        let Some(read) = Self::context_flow(open, model) else {
+            return div();
         };
-        let read = Self::context_flow(open, model);
-        let mut meta = format!("depot {depot}");
-        if let Some(source) = read
-            .map(|flow| flow.source.as_str())
-            .filter(|source| !source.is_empty())
-        {
-            meta.push_str(&format!(" · {source}"));
+        let at = StageAt::of(depot, read, &stage.stage);
+        let section = self.stage_file_source(&at, read, stage, "context stage", true, palette, cx);
+        let editor = self.stage_file_editor(&at, "context stage", true, palette, cx);
+        let mut tab = div().flex().flex_col();
+        match stage.stage_file.as_ref() {
+            None => {
+                tab = tab.child(
+                    div().px_4().pt_4().pb_2().child(
+                        div()
+                            .debug_selector(|| "context stage none".to_string())
+                            .text_color(palette.faint)
+                            .child("No stage file."),
+                    ),
+                );
+            }
+            Some(file) => {
+                let mut meta = format!("depot {depot}");
+                if !read.source.is_empty() {
+                    meta.push_str(&format!(" · {}", read.source));
+                }
+                tab = tab.child(self.context_file_meta(
+                    "context stage file",
+                    &file.path,
+                    &meta,
+                    palette,
+                    cx,
+                ));
+            }
         }
-        let key = select::key(("context stage", depot, flow, &stage.stage));
-        div()
-            .flex()
-            .flex_col()
-            .child(self.context_file_meta("context stage file", &file.path, &meta, palette, cx))
-            .child(self.context_file(
+        if let Some(section) = section {
+            tab = tab.child(
+                div()
+                    .px_4()
+                    .py_2p5()
+                    .border_b_1()
+                    .border_color(palette.line)
+                    .child(section),
+            );
+        }
+        if let (Some(file), None) = (stage.stage_file.as_ref(), editor.as_ref()) {
+            let key = select::key(("context stage", depot, flow, &stage.stage));
+            tab = tab.child(self.context_file(
                 key,
                 "context stage",
                 &file.text,
                 open.stage_whole,
                 palette,
                 cx,
-            ))
+            ));
+        }
+        if let Some(editor) = editor {
+            tab = tab.child(div().px_4().py_3().child(editor));
+        }
+        tab
     }
 
     /// The Group tab: the route's chain — the serving group's runner,

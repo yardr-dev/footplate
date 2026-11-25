@@ -42,6 +42,7 @@ mod metrics;
 mod panel;
 mod rail;
 mod screen;
+mod stagefile;
 mod state;
 mod ui;
 mod waiting;
@@ -400,6 +401,17 @@ pub struct Footplate {
     /// The Line window's prompt editor, while one is open: its prompt, the
     /// text typed over the one that stands, and whether a send is on its way.
     line_edit: Option<line::LineEdit>,
+    /// The stage file editor of the Line window and the context drawer,
+    /// while one is open: its stage, the file as the read named it, and
+    /// the text typed over it. It saves straight to the yard, after the
+    /// weighty gate, and holds no mail or card.
+    stage_edit: Option<stagefile::StageEdit>,
+    /// The confirmation of copying a depot's repository flows into the
+    /// yard, while one stands open under the stage it was asked from.
+    stage_copy: Option<stagefile::StageCopy>,
+    /// What the last stage file save or flow copy left under its stage,
+    /// until another is made or the yard is left.
+    stage_saved: Option<stagefile::StageSaved>,
     /// The last prompt edit the Line window sent, with the yardmaster's
     /// answer once one has come: the window says its card will stand in
     /// Decide, and reads where it stands whenever the line is read again.
@@ -1026,6 +1038,9 @@ impl Footplate {
             line_stage: String::new(),
             line_reads: HashSet::new(),
             line_edit: None,
+            stage_edit: None,
+            stage_copy: None,
+            stage_saved: None,
             line_sent: None,
             line_filing: false,
             line_filed: None,
@@ -1249,6 +1264,9 @@ impl Render for Footplate {
             {
                 CONTEXT
             }
+            // Nor with the focus in the stage file editor's field or the
+            // name it takes back, which take any letter a card's keys are.
+            _ if self.stage_field_focused(window, cx) => CONTEXT,
             // Nor with the focus in the Line window's Add stage or New
             // group fields, whose names take any letter a card's keys
             // are.
@@ -16942,8 +16960,10 @@ yardr.dev
                 "r-2 · yard-wide · type task · labels eyes · priority P0-P1 · for any originator"
             );
         });
-        // The stage file and the prompt stand behind Read, and the
-        // stage file has no Edit anywhere.
+        // The stage file and the prompt stand behind Read. A store flow's
+        // stage file says where it comes from and has an Edit of its own
+        // (stagefile.rs): it is the yard's copy, and no reason is given
+        // for an edit that is not offered.
         assert!(!drawn(cx, "line stagefile new text"));
         assert!(!drawn(cx, "line prompt new builders text"));
         click_on(cx, "line stagefile new read");
@@ -16951,13 +16971,16 @@ yardr.dev
         cx.run_until_parked();
         assert!(drawn(cx, "line stagefile new text"));
         assert!(drawn(cx, "line prompt new builders text"));
-        assert!(!drawn(cx, "line stagefile new edit"));
+        assert!(drawn(cx, "line stagefile new source"));
+        assert!(drawn(cx, "line stagefile new edit"));
+        assert!(!drawn(cx, "line stagefile new add"));
+        assert!(!drawn(cx, "line stagefile new copy"));
+        assert!(!drawn(cx, "line stagefile new edit why"));
         // Edit stands only where the read answers a prompt carriable,
         // group and crew alike, and on nothing else: a prompt a card
         // cannot carry (for its length, its text, or being a depot's own
         // relative file) shows Read and the read's reason where Edit would
-        // stand, a group with no prompt says so on the stage, and a stage
-        // file says why it has none.
+        // stand, and a group with no prompt says so on the stage.
         for selector in [
             "line prompt new builders edit",
             "line crew prompt yardmaster edit",
@@ -16981,7 +17004,6 @@ yardr.dev
         assert!(drawn(cx, "line crew prompt reader edit why"));
         assert!(!drawn(cx, "line crew prompt reader edit"));
         assert!(drawn(cx, "line prompt new bare none"));
-        assert!(drawn(cx, "line stagefile new edit why"));
         // The exec stage shows its group, whose words carry the cmd, and
         // says it has no prompt, as does a manual stage of a pack's flow.
         click_on(cx, "line stage default review");
@@ -16995,6 +17017,34 @@ yardr.dev
             drawn(cx, "line prompt new people none")
         });
         assert!(!drawn(cx, "line prompt new people edit"));
+        // A pack's flow is the yard's copy too: its stage with no file
+        // says where its text would come from and offers to add one. A
+        // repository's flow, and a directory's, do not edit here: they say
+        // so, and offer to be copied into the yard, with no Edit or Add.
+        assert!(drawn(cx, "line stagefile new source"));
+        assert!(drawn(cx, "line stagefile new add"));
+        assert!(!drawn(cx, "line stagefile new copy"));
+        // (What was drawn stays drawn to the tests, so only the directory
+        // flow's own stage, which no other flow has, says what it lacks.)
+        for (flow, stage) in [
+            ("line flow repo repo@abcdef0", "new"),
+            ("line flow dirflow repo (directory)", "inbox"),
+        ] {
+            click_on(cx, flow);
+            wait(cx, "the repository flow's stage", |cx| {
+                drawn(cx, &format!("line stagefile {stage} copy"))
+            });
+            assert!(
+                drawn(cx, &format!("line stagefile {stage} source")),
+                "{flow}"
+            );
+        }
+        for part in ["edit", "add", "restore"] {
+            assert!(
+                !drawn(cx, &format!("line stagefile inbox {part}")),
+                "{part}"
+            );
+        }
         click_on(cx, "line flow default store");
         click_on(cx, "line stage default review");
         view.read_with(cx, |v, _| {
@@ -17346,6 +17396,863 @@ yardr.dev
             "{:?}",
             yard.calls()
         );
+    }
+
+    /// The Flows answer of the stage file tests: one depot, one flow, one
+    /// stage on the board, which is all the Line window needs to open from.
+    fn stage_file_flows() -> String {
+        json!({"result": {"travelling": 1, "depots": [
+            {"name": "yardr", "kind": "git", "travelling": 1, "flows": [
+                {"name": "default", "type": "", "source": "store", "stages": [
+                    {"stage": "new", "group": "builders", "human": false, "lamp": "none",
+                     "beads": []}]}], "elsewhere": []}], "unassigned": []}})
+        .to_string()
+    }
+
+    /// A stage file as the line reads it: the text, the digest the yard
+    /// holds it under, the text it stood as before its last save where it
+    /// kept one, and what it found wrong with the `## Ask`.
+    fn stage_file_read(path: &str, text: &str, prior: &str, warning: &str) -> Value {
+        let mut file = json!({"path": path, "text": text, "digest": crate::fake::digest(text)});
+        if !prior.is_empty() {
+            file["prior_text"] = prior.into();
+            file["prior_digest"] = crate::fake::digest(prior).into();
+        }
+        if !warning.is_empty() {
+            file["warning"] = warning.into();
+        }
+        file
+    }
+
+    /// One flow of a Line answer: its stages, each named with its stage
+    /// file where it has one, and no route, so that the detail is the
+    /// stage file's alone.
+    fn stage_flow(
+        name: &str,
+        flow_type: &str,
+        source: &str,
+        stages: &[(&str, Option<Value>)],
+    ) -> Value {
+        let stages: Vec<Value> = stages
+            .iter()
+            .map(|(stage, file)| {
+                let mut stage = json!({"stage": stage, "next": [], "terminal": false,
+                    "other_routes": [], "open": 0});
+                if let Some(file) = file {
+                    stage["stage_file"] = file.clone();
+                }
+                stage
+            })
+            .collect();
+        json!({"name": name, "type": flow_type, "source": source, "stages": stages})
+    }
+
+    /// The text typed in the open stage file editor.
+    fn stage_typed(view: &Entity<Footplate>, cx: &mut VisualTestContext) -> Option<String> {
+        view.read_with(cx, |v, cx| {
+            v.stage_edit
+                .as_ref()
+                .map(|edit| edit.field.read(cx).text().to_string())
+        })
+    }
+
+    /// Replaces what is typed in the open stage file editor.
+    fn stage_type(view: &Entity<Footplate>, cx: &mut VisualTestContext, text: &str) {
+        view.update(cx, |v, cx| {
+            let field = v.stage_edit.as_ref().unwrap().field.clone();
+            field.update(cx, |line, cx| line.set_text(text, cx));
+        });
+    }
+
+    /// Which half of the open stage file editor stands.
+    fn stage_step(
+        view: &Entity<Footplate>,
+        cx: &mut VisualTestContext,
+    ) -> Option<stagefile::StageStep> {
+        view.read_with(cx, |v, _| v.stage_edit.as_ref().map(|edit| edit.step))
+    }
+
+    /// A stage file of a store flow is edited in place in the Line window:
+    /// Edit opens the editor over the file as read, Save… shows the change
+    /// line by line (what is put in and taken out, the unchanged lines
+    /// between counted), and Confirm save passes the weighty gate, and then
+    /// and not before writes it over the digest the file was read at, with
+    /// `weighed`. An unlock that is cancelled writes nothing. What the yard
+    /// holds is read again, and Restore prior text… puts back the text it
+    /// replaced through the same review and gate. A file saved with a
+    /// broken `## Ask` is kept, and the yard's warning of it stands in warn
+    /// beside the line that says so.
+    #[gpui::test]
+    fn a_stage_file_is_saved_in_place_after_a_review_and_the_gate(cx: &mut TestAppContext) {
+        use stagefile::StageStep::{Edit, Review};
+        let path = "/home/jo/.yardr/flows/default/new.md";
+        let lines = |extra: &str| format!("Start here.\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n{extra}");
+        let (first, second) = (lines(""), lines("Then test.\n"));
+        let warning = "/home/jo/.yardr/flows/default/review.md: the ## Ask section is empty";
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Flows", &stage_file_flows());
+        // The yard keeps the line the test scripts, and a write changes it:
+        // the next read shows what was saved.
+        yard.answer_for(
+            "Line",
+            "depot",
+            "yardr",
+            &json!({"result": {"depot": "yardr", "kind": "git", "flows": [
+                stage_flow("default", "", "store", &[
+                    ("new", Some(stage_file_read(path, &first, "", ""))),
+                    ("review", Some(stage_file_read("/home/jo/.yardr/flows/default/review.md",
+                        "Review it.\n## Ask\n", "", warning))),
+                    ("merged", None)])],
+              "crew": []}})
+            .to_string(),
+        );
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(2400.)));
+        to_timetable(&view, cx);
+        view.update_in(cx, |v, window, cx| {
+            v.select(Selected::Line("yardr".into()), window, cx)
+        });
+        wait(cx, "the depot's line", |cx| drawn(cx, "flow head yardr"));
+        click_on(cx, "line window open yardr");
+        wait(cx, "the stage file", |cx| {
+            drawn(cx, "line stagefile new source")
+        });
+
+        // The store flow's stage file says where it comes from and offers
+        // Edit; with no earlier text there is no Restore, and nothing is
+        // wrong with it. A stage with no file offers Add stage file, and
+        // one the yard warns of says so in its own words.
+        assert!(drawn(cx, "line stagefile new edit"));
+        assert!(!drawn(cx, "line stagefile new restore"));
+        assert!(!drawn(cx, "line stagefile new warning"));
+        click_on(cx, "line stage default merged");
+        wait(cx, "the stage with none", |cx| {
+            drawn(cx, "line stagefile merged add")
+        });
+        assert!(drawn(cx, "line stagefile merged source"));
+        click_on(cx, "line stage default review");
+        wait(cx, "the warned stage", |cx| {
+            drawn(cx, "line stagefile review warning")
+        });
+        click_on(cx, "line stage default new");
+        wait(cx, "the first stage", |cx| {
+            drawn(cx, "line stagefile new edit")
+        });
+
+        // Edit opens the editor over the text that stands, with the focus
+        // in it. Save… is held while nothing is changed or all is blank.
+        click_on(cx, "line stagefile new edit");
+        assert!(drawn(cx, "line stagefile new editor"));
+        assert!(drawn(cx, "line stagefile new editor words"));
+        assert_eq!(stage_typed(&view, cx).as_deref(), Some(first.as_str()));
+        click_on(cx, "line stagefile new editor");
+        cx.simulate_keystrokes("secondary-a");
+        cx.simulate_input("Typed in the field.");
+        assert_eq!(
+            stage_typed(&view, cx).as_deref(),
+            Some("Typed in the field.")
+        );
+        stage_type(&view, cx, &first);
+        click_on(cx, "line stagefile new editor save");
+        assert_eq!(stage_step(&view, cx), Some(Edit));
+        stage_type(&view, cx, " \n");
+        click_on(cx, "line stagefile new editor save");
+        assert_eq!(stage_step(&view, cx), Some(Edit));
+        assert_eq!(yard.asked("PutStageFile"), Vec::<Value>::new());
+
+        // The editor holds typed text: Edit on another stage's file says
+        // to finish or cancel this one first, and drops nothing.
+        stage_type(&view, cx, &second);
+        click_on(cx, "line stage default review");
+        wait(cx, "the warned stage again", |cx| {
+            drawn(cx, "line stagefile review edit")
+        });
+        click_on(cx, "line stagefile review edit");
+        assert_eq!(
+            notice(&view, cx),
+            "finish or cancel the open edit of the stage file of new in yardr first"
+        );
+        assert_eq!(stage_typed(&view, cx).as_deref(), Some(second.as_str()));
+        view.read_with(cx, |v, _| {
+            assert_eq!(v.stage_edit.as_ref().unwrap().at.stage, "new")
+        });
+        click_on(cx, "line stage default new");
+        wait(cx, "the first stage's editor", |cx| {
+            drawn(cx, "line stagefile new editor save")
+        });
+
+        // Save… shows the change before anything is written: the lines
+        // put in and taken out between the lines around them, a run of
+        // unchanged lines counted, and the weight, in the yard's words for
+        // a card's. Nothing is asked of the yard yet.
+        click_on(cx, "line stagefile new editor save");
+        assert_eq!(stage_step(&view, cx), Some(Review));
+        for part in [
+            "review",
+            "review count",
+            "review weight",
+            "review diff",
+            "review folded 0",
+            "review same 1",
+            "review same 3",
+            "review added 4",
+        ] {
+            assert!(
+                drawn(cx, &format!("line stagefile new editor {part}")),
+                "{part}"
+            );
+        }
+        assert_eq!(yard.asked("PutStageFile"), Vec::<Value>::new());
+
+        // A repository-flow copy changes every flow of this depot. It and
+        // a stage-file save must not be with the yard at once: the later
+        // write could otherwise replace what the first just wrote.
+        let repo = crate::api::LineFlow {
+            name: "repo".into(),
+            source: "repo@abcdef0".into(),
+            ..Default::default()
+        };
+        view.update_in(cx, |v, window, cx| {
+            v.ask_copy_flow(
+                stagefile::StageAt::of("yardr", &repo, "new"),
+                model::line_flow_key(&repo),
+                true,
+                window,
+                cx,
+            );
+            v.stage_copy.as_mut().unwrap().sending = true;
+            v.confirm_stage_edit(cx);
+        });
+        assert_eq!(yard.asked("PutStageFile"), Vec::<Value>::new());
+        assert_eq!(
+            view.read_with(cx, |v, _| v
+                .stage_edit
+                .as_ref()
+                .and_then(|edit| edit.said.clone())),
+            Some(
+                "wait for the repository flow copy in yardr to finish before saving this stage file"
+                    .to_string()
+            )
+        );
+        view.update_in(cx, |v, _, cx| {
+            v.stage_copy.as_mut().unwrap().sending = false;
+            v.stage_edit.as_mut().unwrap().sending = true;
+            v.confirm_copy_flow(cx);
+        });
+        assert_eq!(yard.asked("CopyRepoFlows"), Vec::<Value>::new());
+        assert_eq!(
+            view.read_with(cx, |v, _| v
+                .stage_copy
+                .as_ref()
+                .and_then(|copy| copy.said.clone())),
+            Some(
+                "wait for the stage file save of new in yardr to finish before copying repository flows"
+                    .to_string()
+            )
+        );
+        view.update_in(cx, |v, _, _| {
+            v.stage_edit.as_mut().unwrap().sending = false;
+            v.stage_edit.as_mut().unwrap().said = None;
+            v.stage_copy = None;
+        });
+
+        // Back to edit keeps what was typed, and Save… comes to the same
+        // review again.
+        click_on(cx, "line stagefile new editor back");
+        assert_eq!(stage_step(&view, cx), Some(Edit));
+        assert_eq!(stage_typed(&view, cx).as_deref(), Some(second.as_str()));
+        click_on(cx, "line stagefile new editor save");
+        assert_eq!(stage_step(&view, cx), Some(Review));
+
+        // An unlock that is cancelled writes nothing, and the review
+        // stands as it was.
+        unlock_as(&view, cx, true, false);
+        click_on(cx, "line stagefile new editor confirm");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("PutStageFile"), Vec::<Value>::new());
+        assert_eq!(stage_step(&view, cx), Some(Review));
+        view.read_with(cx, |v, _| assert!(!v.stage_edit.as_ref().unwrap().sending));
+        // Passed, it writes once, whole, over the digest the file was read
+        // at, with the word that the gate was passed.
+        unlock_as(&view, cx, true, true);
+        click_on(cx, "line stagefile new editor confirm");
+        wait(cx, "the save", |_| yard.asked("PutStageFile").len() == 1);
+        assert_eq!(
+            yard.asked("PutStageFile"),
+            vec![json!({"flow": "default", "stage": "new", "text": second,
+                "expect_digest": crate::fake::digest(&first), "actor": "jo", "weighed": true})]
+        );
+        // The line is read again and shows what the yard holds: the new
+        // text, the old as its prior with Restore, and the line that says
+        // it was saved. The editor is gone.
+        wait(cx, "the line again", |_| yard.asked("Line").len() == 2);
+        wait(cx, "the saved line", |cx| {
+            drawn(cx, "line stagefile new saved")
+        });
+        view.read_with(cx, |v, _| {
+            assert!(v.stage_edit.is_none());
+            let line = v.model.as_ref().unwrap().line_read_for("yardr").unwrap();
+            let file = line.flows[0].stages[0].stage_file.as_ref().unwrap();
+            assert_eq!(
+                (file.text.as_str(), file.prior_text.as_str()),
+                (second.as_str(), first.as_str())
+            );
+            let saved = v.stage_saved.as_ref().unwrap();
+            assert!(saved.words.starts_with("Saved."), "{}", saved.words);
+            assert!(saved.warning.is_empty());
+        });
+        assert!(drawn(cx, "line stagefile new restore"));
+        assert_eq!(yard.asked("ApproveAsk"), Vec::<Value>::new());
+
+        // Restore prior text… is the same review, from the standing text to
+        // the prior, through the same gate, written over the digest that
+        // stands now.
+        click_on(cx, "line stagefile new restore");
+        assert_eq!(stage_step(&view, cx), Some(Review));
+        assert_eq!(stage_typed(&view, cx).as_deref(), Some(first.as_str()));
+        for part in ["review removed 4", "review folded 0"] {
+            assert!(
+                drawn(cx, &format!("line stagefile new editor {part}")),
+                "{part}"
+            );
+        }
+        click_on(cx, "line stagefile new editor confirm");
+        wait(cx, "the restore", |_| yard.asked("PutStageFile").len() == 2);
+        assert_eq!(
+            yard.asked("PutStageFile")[1],
+            json!({"flow": "default", "stage": "new", "text": first,
+                "expect_digest": crate::fake::digest(&second), "actor": "jo", "weighed": true})
+        );
+        wait(cx, "the line after the restore", |_| {
+            yard.asked("Line").len() == 3
+        });
+        wait(cx, "no editor", |cx| {
+            view.read_with(cx, |v, _| v.stage_edit.is_none())
+        });
+
+        // A file saved with a broken `## Ask` is saved all the same: the
+        // line says so in the yard's words, and once the saved line is
+        // gone the line read again says it still, until it is fixed.
+        click_on(cx, "line stagefile new edit");
+        stage_type(&view, cx, "Start here.\n## Ask\n");
+        click_on(cx, "line stagefile new editor save");
+        click_on(cx, "line stagefile new editor confirm");
+        wait(cx, "the broken save", |_| {
+            yard.asked("PutStageFile").len() == 3
+        });
+        wait(cx, "the line after it", |_| yard.asked("Line").len() == 4);
+        wait(cx, "the saved line", |cx| {
+            view.read_with(cx, |v, _| {
+                v.stage_saved
+                    .as_ref()
+                    .is_some_and(|s| !s.warning.is_empty())
+            }) && drawn(cx, "line stagefile new saved")
+        });
+        let broken = format!("{path}: the ## Ask section is empty");
+        view.read_with(cx, |v, _| {
+            let saved = v.stage_saved.as_ref().unwrap();
+            assert_eq!(saved.warning, broken);
+            assert!(
+                saved.words.starts_with("Saved with a broken ## Ask"),
+                "{}",
+                saved.words
+            );
+            let line = v.model.as_ref().unwrap().line_read_for("yardr").unwrap();
+            let file = line.flows[0].stages[0].stage_file.as_ref().unwrap();
+            assert_eq!(file.text, "Start here.\n## Ask\n");
+            assert_eq!(file.warning, broken);
+        });
+        // Another edit takes the saved line away, and the warning of the
+        // line stands in its place.
+        click_on(cx, "line stagefile new edit");
+        view.read_with(cx, |v, _| assert!(v.stage_saved.is_none()));
+        click_on(cx, "line stagefile new editor cancel");
+        wait(cx, "the warning", |cx| {
+            drawn(cx, "line stagefile new warning")
+        });
+        assert_eq!(yard.asked("ApproveAsk"), Vec::<Value>::new());
+    }
+
+    /// Where the system offers no unlock, the stage's name typed back is
+    /// the gate: with anything else the review says nothing was saved and
+    /// sends nothing. A save the yard refuses (a digest that moved, or a
+    /// yard from before the call) leaves the editor, its review and the
+    /// text typed as they were, with the yard's words; and a file the line
+    /// read again says is another holds the save, whatever is typed.
+    #[gpui::test]
+    fn a_stage_file_save_the_yard_refuses_or_that_moved_keeps_what_was_typed(
+        cx: &mut TestAppContext,
+    ) {
+        use stagefile::StageStep::{Edit, Review};
+        let path = "/home/jo/.yardr/flows/default/new.md";
+        let line = |text: &str| {
+            json!({"result": {"depot": "yardr", "kind": "git", "flows": [
+                stage_flow("default", "", "store", &[
+                    ("new", Some(stage_file_read(path, text, "", "")))])],
+              "crew": []}})
+            .to_string()
+        };
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Flows", &stage_file_flows());
+        yard.answer_for("Line", "depot", "yardr", &line("Start here.\n"));
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(2400.)));
+        to_timetable(&view, cx);
+        view.update_in(cx, |v, window, cx| {
+            v.select(Selected::Line("yardr".into()), window, cx)
+        });
+        wait(cx, "the depot's line", |cx| drawn(cx, "flow head yardr"));
+        click_on(cx, "line window open yardr");
+        wait(cx, "the stage file", |cx| {
+            drawn(cx, "line stagefile new edit")
+        });
+        click_on(cx, "line stagefile new edit");
+        stage_type(&view, cx, "Start here, then test.\n");
+        click_on(cx, "line stagefile new editor save");
+        assert_eq!(stage_step(&view, cx), Some(Review));
+
+        // No unlock is offered: the review takes the stage's name. With
+        // none typed, nothing is saved and nothing is asked.
+        assert!(!view.read_with(cx, |v, _| v.unlock_available()));
+        for part in ["review typeback", "review typeback words"] {
+            assert!(
+                drawn(cx, &format!("line stagefile new editor {part}")),
+                "{part}"
+            );
+        }
+        click_on(cx, "line stagefile new editor confirm");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("PutStageFile"), Vec::<Value>::new());
+        let said = |view: &Entity<Footplate>, cx: &mut VisualTestContext| {
+            view.read_with(cx, |v, _| {
+                v.stage_edit.as_ref().and_then(|edit| edit.said.clone())
+            })
+        };
+        assert_eq!(
+            said(&view, cx).as_deref(),
+            Some("the stage's name, new, was not typed back, so nothing was saved")
+        );
+        assert!(drawn(cx, "line stagefile new editor said"));
+        // The wrong name is no name.
+        click_on(cx, "line stagefile new editor review typeback");
+        cx.simulate_input("review");
+        click_on(cx, "line stagefile new editor confirm");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("PutStageFile"), Vec::<Value>::new());
+
+        // A save the yard refuses because the file moved says so in the
+        // yard's words, and the review and the text stay.
+        let moved = "stage file default/new changed since it was read: it is now 7c9e41d2b0a8, not 3b1d90e4a6c2. Nothing was written.";
+        yard.answer(
+            "PutStageFile",
+            &json!({"error": {"code": "error", "message": moved}}).to_string(),
+        );
+        click_on(cx, "line stagefile new editor review typeback");
+        cx.simulate_keystrokes("secondary-a");
+        cx.simulate_input("new");
+        click_on(cx, "line stagefile new editor confirm");
+        wait(cx, "the refusal", |_| yard.asked("PutStageFile").len() == 1);
+        wait(cx, "its words", |cx| {
+            said(&view, cx).is_some_and(|said| said.starts_with("not saved: "))
+        });
+        assert_eq!(said(&view, cx), Some(format!("not saved: {moved}")));
+        assert_eq!(stage_step(&view, cx), Some(Review));
+        assert_eq!(
+            stage_typed(&view, cx).as_deref(),
+            Some("Start here, then test.\n")
+        );
+        view.read_with(cx, |v, _| assert!(!v.stage_edit.as_ref().unwrap().sending));
+        // The name is used up by a try, as the system's unlock is: it is
+        // typed again for the next.
+        click_on(cx, "line stagefile new editor confirm");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("PutStageFile").len(), 1);
+
+        // A yard from before the call refuses it as it does any method
+        // it does not have, and the editor stays the same way.
+        yard.answer(
+            "PutStageFile",
+            r#"{"error": {"code": "error", "message": "no such method PutStageFile"}}"#,
+        );
+        click_on(cx, "line stagefile new editor review typeback");
+        cx.simulate_input("new");
+        click_on(cx, "line stagefile new editor confirm");
+        wait(cx, "the old yard", |_| {
+            yard.asked("PutStageFile").len() == 2
+        });
+        wait(cx, "its words", |cx| {
+            said(&view, cx).is_some_and(|said| said.ends_with("no such method PutStageFile"))
+        });
+        assert_eq!(
+            said(&view, cx).as_deref(),
+            Some("not saved: no such method PutStageFile")
+        );
+        assert_eq!(
+            stage_typed(&view, cx).as_deref(),
+            Some("Start here, then test.\n")
+        );
+        assert_eq!(stage_step(&view, cx), Some(Review));
+
+        // A line read again that says the file is another holds the save:
+        // the editor says so, Confirm save and Save… send nothing, and the
+        // text typed stays for the person to copy.
+        yard.answer_for(
+            "Line",
+            "depot",
+            "yardr",
+            &line("Start here.\nSomeone else was here.\n"),
+        );
+        click_on(cx, "line depot yardr");
+        wait(cx, "the line again", |_| yard.asked("Line").len() == 2);
+        wait(cx, "the moved file", |cx| {
+            drawn(cx, "line stagefile new editor moved")
+        });
+        click_on(cx, "line stagefile new editor review typeback");
+        cx.simulate_input("new");
+        click_on(cx, "line stagefile new editor confirm");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("PutStageFile").len(), 2);
+        click_on(cx, "line stagefile new editor back");
+        assert_eq!(stage_step(&view, cx), Some(Edit));
+        click_on(cx, "line stagefile new editor save");
+        assert_eq!(stage_step(&view, cx), Some(Edit));
+        assert_eq!(
+            stage_typed(&view, cx).as_deref(),
+            Some("Start here, then test.\n")
+        );
+        // Cancel drops it, and Edit opens over the text that stands now.
+        click_on(cx, "line stagefile new editor cancel");
+        view.read_with(cx, |v, _| assert!(v.stage_edit.is_none()));
+        click_on(cx, "line stagefile new edit");
+        assert_eq!(
+            stage_typed(&view, cx).as_deref(),
+            Some("Start here.\nSomeone else was here.\n")
+        );
+        assert_eq!(yard.asked("ApproveAsk"), Vec::<Value>::new());
+    }
+
+    /// A stage file of a repository flow is the repository's: the Line
+    /// window says so and offers no Edit, and Copy flow into yard… opens
+    /// its confirmation, which says what moves. Confirm copy passes the
+    /// weighty gate (the depot's name typed back where no unlock is
+    /// offered) and only then asks the yard, with `weighed`. The yard's
+    /// answer names the store flow each flow became by its bead type: the
+    /// window's pick follows the flow it stood on, the line is read again,
+    /// and the stage edits in place, with the command back said under it.
+    #[gpui::test]
+    fn a_repository_flow_is_copied_into_the_yard_and_then_edits_in_place(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Flows", &stage_file_flows());
+        yard.answer_for(
+            "Line",
+            "depot",
+            "yardr",
+            &json!({"result": {"depot": "yardr", "kind": "git", "flows": [
+                stage_flow("default", "", "repo@abcdef0", &[
+                    ("inbox", Some(stage_file_read(".yardr/flows/default/inbox.md", "Sort it.\n", "", "")))]),
+                stage_flow("default", "task", "repo@abcdef0", &[
+                    ("todo", Some(stage_file_read(".yardr/flows/task/todo.md", "Do it.\n", "", "")))]),
+                stage_flow("store", "", "store", &[("shelf", None)])],
+              "crew": []}})
+            .to_string(),
+        );
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(2400.)));
+        to_timetable(&view, cx);
+        view.update_in(cx, |v, window, cx| {
+            v.select(Selected::Line("yardr".into()), window, cx)
+        });
+        wait(cx, "the depot's line", |cx| drawn(cx, "flow head yardr"));
+        click_on(cx, "line window open yardr");
+        wait(cx, "the line", |cx| drawn(cx, "line stagefile inbox copy"));
+
+        // The repository's stage file says where it comes from, and offers
+        // no Edit, Add or Restore: it is copied into the yard first.
+        assert!(drawn(cx, "line stagefile inbox source"));
+        for part in ["edit", "add", "restore"] {
+            assert!(
+                !drawn(cx, &format!("line stagefile inbox {part}")),
+                "{part}"
+            );
+        }
+        // The typed flow's stage, and the confirmation Copy opens.
+        click_on(cx, "line flow task default repo@abcdef0");
+        wait(cx, "the typed flow", |cx| {
+            drawn(cx, "line stagefile todo copy")
+        });
+        click_on(cx, "line stagefile todo copy");
+        for part in [
+            "words",
+            "weight",
+            "typeback words",
+            "typeback",
+            "confirm",
+            "cancel",
+        ] {
+            assert!(
+                drawn(cx, &format!("line stagefile todo copy {part}")),
+                "{part}"
+            );
+        }
+        // Cancel shuts it and asks nothing.
+        click_on(cx, "line stagefile todo copy cancel");
+        view.read_with(cx, |v, _| assert!(v.stage_copy.is_none()));
+        click_on(cx, "line stagefile todo copy");
+        assert_eq!(yard.asked("CopyRepoFlows"), Vec::<Value>::new());
+
+        // No unlock is offered: the depot's name is typed back, and with
+        // anything else nothing is asked.
+        click_on(cx, "line stagefile todo copy confirm");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("CopyRepoFlows"), Vec::<Value>::new());
+        assert_eq!(
+            view.read_with(cx, |v, _| v
+                .stage_copy
+                .as_ref()
+                .and_then(|copy| copy.said.clone()))
+                .as_deref(),
+            Some("the depot's name, yardr, was not typed back, so nothing was copied")
+        );
+        assert!(drawn(cx, "line stagefile todo copy said"));
+        // An unlock that is cancelled copies nothing either.
+        unlock_as(&view, cx, true, false);
+        click_on(cx, "line stagefile todo copy confirm");
+        cx.run_until_parked();
+        assert_eq!(yard.asked("CopyRepoFlows"), Vec::<Value>::new());
+        view.read_with(cx, |v, _| assert!(!v.stage_copy.as_ref().unwrap().sending));
+
+        // A yard that refuses the copy says why, in its words, whole, on
+        // the confirmation, which stands for another try.
+        yard.answer_once_status(
+            "CopyRepoFlows",
+            200,
+            r#"{"error": {"code": "error", "message": "the depot's flows are being changed, try again"}}"#,
+        );
+        unlock_as(&view, cx, true, true);
+        click_on(cx, "line stagefile todo copy confirm");
+        wait(cx, "the refusal", |_| {
+            yard.asked("CopyRepoFlows").len() == 1
+        });
+        wait(cx, "its words", |cx| {
+            view.read_with(cx, |v, _| {
+                v.stage_copy
+                    .as_ref()
+                    .is_some_and(|copy| copy.said.is_some())
+            })
+        });
+        assert_eq!(
+            view.read_with(cx, |v, _| v
+                .stage_copy
+                .as_ref()
+                .and_then(|copy| copy.said.clone()))
+                .as_deref(),
+            Some("not copied: the depot's flows are being changed, try again")
+        );
+        view.read_with(cx, |v, _| assert!(!v.stage_copy.as_ref().unwrap().sending));
+        // Passed, it asks again, with the word that the gate was passed.
+        click_on(cx, "line stagefile todo copy confirm");
+        wait(cx, "the copy", |_| yard.asked("CopyRepoFlows").len() == 2);
+        assert_eq!(
+            yard.asked("CopyRepoFlows")[1],
+            json!({"depot": "yardr", "actor": "jo", "weighed": true})
+        );
+        // The pick follows the typed flow to the flow it became, by its
+        // bead type and not by its name: the depot's own `default` became
+        // `yardr.default`, and this one `default.local`.
+        wait(cx, "the line again", |_| yard.asked("Line").len() == 2);
+        wait(cx, "the copied flow's stage", |cx| {
+            drawn(cx, "line stagefile todo edit")
+        });
+        view.read_with(cx, |v, _| {
+            assert!(v.stage_copy.is_none());
+            let line = v.model.as_ref().unwrap().line_read_for("yardr").unwrap();
+            let names: Vec<(&str, &str, &str)> = line
+                .flows
+                .iter()
+                .map(|flow| {
+                    (
+                        flow.flow_type.as_str(),
+                        flow.name.as_str(),
+                        flow.source.as_str(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    ("", "yardr.default", "store"),
+                    ("task", "default.local", "store"),
+                    ("", "store", "store"),
+                ]
+            );
+            let picked = line
+                .flows
+                .iter()
+                .find(|flow| model::line_flow_key(flow) == v.line_flow)
+                .unwrap();
+            assert_eq!(
+                (picked.flow_type.as_str(), picked.name.as_str()),
+                ("task", "default.local")
+            );
+            let saved = v.stage_saved.as_ref().unwrap();
+            assert_eq!(saved.at.flow, "default.local");
+            assert!(
+                saved
+                    .words
+                    .contains("default.local (back: yardr depot source yardr flow type/task)"),
+                "{}",
+                saved.words
+            );
+        });
+        // Its stage edits in place now, and the line says so.
+        assert!(drawn(cx, "line stagefile todo source"));
+        assert!(drawn(cx, "line stagefile todo saved"));
+        click_on(cx, "line stagefile todo edit");
+        assert_eq!(stage_typed(&view, cx).as_deref(), Some("Do it.\n"));
+        assert_eq!(yard.asked("PutStageFile"), Vec::<Value>::new());
+    }
+
+    /// The context drawer's Stage tab draws the same section and editor
+    /// over the stage it stands on. A pack's stage file says where it comes
+    /// from, edits in place through the review and the gate (here the
+    /// stage's name typed back) and saves with `weighed`, and Restore prior
+    /// text… puts back the text it replaced. A repository's flow is copied
+    /// into the yard from the drawer, which then stands on the store flow
+    /// it became, so that its stage edits in place.
+    #[gpui::test]
+    fn the_context_drawer_s_stage_tab_edits_a_packs_stage_file_and_copies_a_repository_flow(
+        cx: &mut TestAppContext,
+    ) {
+        use stagefile::StageStep::Review;
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Flows", &stage_file_flows());
+        yard.answer_for(
+            "Line",
+            "depot",
+            "yardr",
+            &json!({"result": {"depot": "yardr", "kind": "git", "flows": [
+                stage_flow("managed", "", "pack starter", &[
+                    ("new", Some(stage_file_read(
+                        "/home/jo/.yardr/flows/managed/new.md", "Begin.\n", "Start.\n", "")))])],
+              "crew": []}})
+            .to_string(),
+        );
+        yard.answer_for(
+            "Line",
+            "depot",
+            "notes",
+            &json!({"result": {"depot": "notes", "kind": "dir", "flows": [
+                stage_flow("main", "", "repo (directory)", &[
+                    ("inbox", Some(stage_file_read("inbox.md", "Sort.\n", "", "")))])],
+              "crew": []}})
+            .to_string(),
+        );
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1440.), px(1600.)));
+        to_timetable(&view, cx);
+        view.update(cx, |v, cx| {
+            v.open_context(
+                "yardr".into(),
+                "managed".into(),
+                String::new(),
+                "new".into(),
+                cx,
+            )
+        });
+        wait(cx, "the drawer", |cx| drawn(cx, "context stage source"));
+
+        // The pack's stage file says where it comes from, and offers Edit
+        // and, the yard having kept the text before the last save, Restore.
+        assert!(drawn(cx, "context stage file"));
+        assert!(drawn(cx, "context stage edit"));
+        assert!(drawn(cx, "context stage restore"));
+        click_on(cx, "context stage edit");
+        assert!(drawn(cx, "context stage editor"));
+        assert_eq!(stage_typed(&view, cx).as_deref(), Some("Begin.\n"));
+        stage_type(&view, cx, "Begin.\nThen test.\n");
+        click_on(cx, "context stage editor save");
+        assert_eq!(stage_step(&view, cx), Some(Review));
+        for part in [
+            "review diff",
+            "review same 0",
+            "review added 1",
+            "review weight",
+        ] {
+            assert!(drawn(cx, &format!("context stage editor {part}")), "{part}");
+        }
+        // No unlock: the stage's name is typed back, and then it writes.
+        click_on(cx, "context stage editor review typeback");
+        cx.simulate_input("new");
+        click_on(cx, "context stage editor confirm");
+        wait(cx, "the save", |_| yard.asked("PutStageFile").len() == 1);
+        assert_eq!(
+            yard.asked("PutStageFile"),
+            vec![
+                json!({"flow": "managed", "stage": "new", "text": "Begin.\nThen test.\n",
+                "expect_digest": crate::fake::digest("Begin.\n"), "actor": "jo", "weighed": true})
+            ]
+        );
+        wait(cx, "the drawer's line again", |_| {
+            yard.asked("Line").len() == 2
+        });
+        wait(cx, "the saved line", |cx| drawn(cx, "context stage saved"));
+        view.read_with(cx, |v, _| assert!(v.stage_edit.is_none()));
+        // Restore prior text… puts back the text that was replaced, over
+        // the digest that stands now.
+        click_on(cx, "context stage restore");
+        assert_eq!(stage_step(&view, cx), Some(Review));
+        assert_eq!(stage_typed(&view, cx).as_deref(), Some("Begin.\n"));
+        click_on(cx, "context stage editor review typeback");
+        cx.simulate_input("new");
+        click_on(cx, "context stage editor confirm");
+        wait(cx, "the restore", |_| yard.asked("PutStageFile").len() == 2);
+        assert_eq!(
+            yard.asked("PutStageFile")[1],
+            json!({"flow": "managed", "stage": "new", "text": "Begin.\n",
+                "expect_digest": crate::fake::digest("Begin.\nThen test.\n"),
+                "actor": "jo", "weighed": true})
+        );
+
+        // A repository's flow is copied from the drawer, and the drawer
+        // stands on the store flow the yard made of it.
+        view.update(cx, |v, cx| {
+            v.open_context(
+                "notes".into(),
+                "main".into(),
+                String::new(),
+                "inbox".into(),
+                cx,
+            )
+        });
+        wait(cx, "the repository's stage", |cx| {
+            drawn(cx, "context stage copy")
+        });
+        assert!(drawn(cx, "context stage source"));
+        click_on(cx, "context stage copy");
+        wait(cx, "the confirmation", |cx| {
+            drawn(cx, "context stage copy confirm")
+        });
+        unlock_as(&view, cx, true, true);
+        click_on(cx, "context stage copy confirm");
+        wait(cx, "the copy", |_| yard.asked("CopyRepoFlows").len() == 1);
+        assert_eq!(
+            yard.asked("CopyRepoFlows"),
+            vec![json!({"depot": "notes", "actor": "jo", "weighed": true})]
+        );
+        wait(cx, "the stage edits in place", |cx| {
+            drawn(cx, "context stage edit")
+        });
+        view.read_with(cx, |v, _| {
+            let open = v.context.as_ref().unwrap();
+            assert!(matches!(&open.subject,
+                model::ContextSubject::Stage { flow, .. } if flow == "notes.main"));
+            assert_eq!(v.model.as_ref().unwrap().context(), Some(&open.subject));
+        });
+        assert!(drawn(cx, "context stage saved"));
     }
 
     /// A press on a station opens the stage's context drawer; a press

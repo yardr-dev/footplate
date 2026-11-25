@@ -616,7 +616,7 @@ impl Footplate {
     /// the card back where they do not, sending nothing. The approval is
     /// the yard's of `session`: what came of it is that yard's, and is
     /// said there, wherever the window is by then.
-    fn unlock_then(
+    pub(crate) fn unlock_then(
         &mut self,
         session: u64,
         reason: String,

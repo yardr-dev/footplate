@@ -29890,40 +29890,202 @@ yardr.dev
         );
     }
 
-    /// A fetch is a Mac road from yardr's data. Even if a doctor answer
-    /// includes one on Linux, the row stays a list with the vendor's page.
+    /// The maker's site, for a fetch of the first run: a port of this
+    /// machine that answers every request with `bytes`. Its base address.
+    #[cfg(unix)]
+    fn site_serving(bytes: &[u8]) -> String {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let mut reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            bytes.len()
+        )
+        .into_bytes();
+        reply.extend_from_slice(bytes);
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                let mut asked = [0u8; 1024];
+                let _ = conn.read(&mut asked);
+                let _ = conn.write_all(&reply);
+            }
+        });
+        base
+    }
+
+    /// yardr pins a file for herdr on a Linux box as on a Mac, and where
+    /// doctor gives a `fetch` the row has the same "install": one click puts
+    /// the file in `~/.local/bin`, and the machine is looked at again. git
+    /// has no file and no Apple installer there, so its row is the text and
+    /// the maker's page. herdr, fetched, stands where a terminal does not
+    /// look, and `reach` has the step on the startup file alone: the login
+    /// shell, which says the directory is on its PATH, is not asked.
     #[cfg(unix)]
     #[gpui::test]
-    fn linux_keeps_a_doctor_fetch_as_a_page_and_never_offers_install(cx: &mut TestAppContext) {
+    fn linux_installs_herdr_from_a_doctor_fetch(cx: &mut TestAppContext) {
+        use crate::setup::standin;
+        use firstrun::Step;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut means, program, _) = stand_in_means(dir.path(), false);
+        let home = dir.path().join("home");
+        let bin = home.join(".local/bin");
+        means.machine.shell = Some(login_shell(
+            dir.path(),
+            "zsh",
+            &format!("/usr/bin:{}", bin.display()),
+        ));
+        means.machine.within = Duration::from_secs(60);
+        // herdr as yardr says it on a Linux box, its file served by a
+        // stand-in for the maker's site; git missing, with no file to fetch.
+        let file = b"#!/bin/sh\necho herdr\n";
+        let mut doctor = standin::doctor_bare(&home);
+        doctor["machine"][0]["get"] =
+            json!("curl -fsSL https://herdr.dev/install.sh | sh (more: https://herdr.dev)");
+        doctor["machine"][0]["command"] = json!("curl -fsSL https://herdr.dev/install.sh | sh");
+        doctor["machine"][0]["fetch"]["url"] =
+            json!(format!("{}/herdr-linux-x86_64", site_serving(file)));
+        doctor["machine"][0]["fetch"]["sha256"] = json!(fetch::sha256(file));
+        doctor["machine"][0]["fetch"]["size"] = json!(file.len());
+        doctor["machine"][1] = json!({
+            "program": "git", "for": "a depot is a git repository", "found": false,
+            "get": "https://git-scm.com/downloads (on macOS: xcode-select --install)"});
+        standin::answers(&program, "doctor", 1, &doctor);
+        let (view, cx) = no_yard(dir.path(), cx);
+        view.update(cx, |v, _| v.means = means);
+
+        click_on(cx, "way here");
+        at_step(&view, cx, Step::Needs);
+        // herdr installs, and its row has no line of how by hand, so no
+        // copy; git is text and the page.
+        assert!(drawn(cx, "setup install herdr") && drawn(cx, "setup page herdr"));
+        assert!(!drawn(cx, "setup get herdr") && !drawn(cx, "setup copy herdr"));
+        assert!(drawn(cx, "setup row git") && drawn(cx, "setup get git"));
+        assert!(drawn(cx, "setup page git") && !drawn(cx, "setup install git"));
+        assert!(!bin.join("herdr").exists());
+
+        // Once it is there the machine is read again: herdr, found in the
+        // directory where fetching puts it.
+        let mut found = standin::doctor_ready();
+        found["machine"][0]["path"] = json!(bin.join("herdr"));
+        standin::answers(&program, "doctor", 0, &found);
+        click_on(cx, "setup install herdr");
+        wait(cx, "herdr fetched and the machine read again", |cx| {
+            setup_reach(&view, cx).is_some()
+        });
+        at_step(&view, cx, Step::Needs);
+        assert_eq!(std::fs::read(bin.join("herdr")).unwrap(), file);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(bin.join("herdr"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_ne!(mode & 0o111, 0, "{mode:o}");
+        }
+        // The terminal does not look there, and nothing in ~/.zshrc says it
+        // does: the step is the next after "go on", though the login shell
+        // would have said it is found.
+        let reach = setup_reach(&view, cx).unwrap();
+        assert_eq!(reach.named(), "herdr");
+        assert_eq!(reach.shown().as_deref(), Some("~/.zshrc"));
+        assert_eq!(shell_asked(dir.path(), "zsh"), 0);
+        click_on(cx, "setup go on");
+        assert_eq!(step_of(&view, cx), Some(Step::Terminal));
+    }
+
+    /// "Check again" is for a machine that lacks something: where git,
+    /// herdr and a harness are all found there is nothing to look at again,
+    /// and the foot is "go on" alone, with no countdown to a look. A window
+    /// has one case each, since it keeps the selectors of what it has drawn.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn check_again_is_offered_only_while_something_is_missing(cx: &mut TestAppContext) {
+        use crate::setup::standin;
+        use firstrun::Step;
+
+        for ready in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let (means, program, _) = stand_in_means(dir.path(), false);
+            let doctor = match ready {
+                true => standin::doctor_ready(),
+                false => standin::doctor_bare(&dir.path().join("home")),
+            };
+            standin::answers(&program, "doctor", i32::from(!ready), &doctor);
+            let (view, cx) = no_yard(dir.path(), cx);
+            view.update(cx, |v, _| v.means = means);
+
+            click_on(cx, "way here");
+            at_step(&view, cx, Step::Needs);
+            assert!(drawn(cx, "setup go on"), "ready: {ready}");
+            assert_eq!(drawn(cx, "setup check"), !ready, "ready: {ready}");
+            assert_eq!(drawn(cx, "setup again"), !ready, "ready: {ready}");
+        }
+    }
+
+    /// A row that says how to install it by hand and names the command to
+    /// paste has a "copy" button beside the line: it puts that command
+    /// alone on the clipboard, and says so. A row that names none (a page,
+    /// or a yardr from before it said) has no button.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_row_with_a_command_to_paste_has_a_copy_button_that_copies_it_alone(
+        cx: &mut TestAppContext,
+    ) {
         use crate::setup::standin;
         use firstrun::Step;
 
         let dir = tempfile::tempdir().unwrap();
         let (means, program, _) = stand_in_means(dir.path(), false);
         let home = dir.path().join("home");
-        standin::answers(&program, "doctor", 1, &standin::doctor_bare(&home));
+        // herdr as yardr says it where it pins no file for the machine: the
+        // hint, and the command in it alone. claude has the hint and no
+        // command.
+        let command = "curl -fsSL https://herdr.dev/install.sh | sh";
+        let mut doctor = standin::doctor_bare(&home);
+        doctor["machine"][0]["get"] = json!(format!("{command} (more: https://herdr.dev)"));
+        doctor["machine"][0]["command"] = json!(command);
+        doctor["machine"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("fetch");
+        standin::answers(&program, "doctor", 1, &doctor);
         let (view, cx) = no_yard(dir.path(), cx);
         view.update(cx, |v, _| v.means = means);
 
         click_on(cx, "way here");
         at_step(&view, cx, Step::Needs);
-
+        assert!(drawn(cx, "setup get herdr") && drawn(cx, "setup copy herdr"));
+        assert!(drawn(cx, "setup get claude") && !drawn(cx, "setup copy claude"));
         assert!(!drawn(cx, "setup install herdr"));
-        assert!(drawn(cx, "setup page herdr"));
-        assert!(drawn(cx, "setup get herdr"));
-        assert!(!home.join(".local/bin/herdr").exists());
+        // The button stands beside the line where there is room for it and
+        // under the line where there is none, in the column either way, and
+        // the row below starts under both.
+        let (line, copy) = (
+            bounds_of(cx, "setup get herdr"),
+            bounds_of(cx, "setup copy herdr"),
+        );
+        let (column, next) = (
+            bounds_of(cx, "setup column"),
+            bounds_of(cx, "setup row claude"),
+        );
+        assert!(
+            copy.left() + px(1.) >= line.right() || copy.top() + px(1.) >= line.bottom(),
+            "{copy:?} over {line:?}"
+        );
+        assert!(
+            copy.right() <= column.right() + px(1.),
+            "{copy:?} {column:?}"
+        );
+        assert!(next.top() + px(1.) >= line.bottom().max(copy.bottom()));
 
-        // A file at the place a fetch would use is not read there either,
-        // since nothing is fetched: the row names the program that answers
-        // as claude and says nothing of a fetch that stands. (The pane
-        // remembers what it drew, so these two were never drawn above.)
-        standin::answers(&program, "doctor", 1, &standin::doctor_other(&home));
-        keep_runnable(&home.join(".local/bin/claude"));
-        click_on(cx, "setup check");
-        wait(cx, "the program that answers as claude", |cx| {
-            drawn(cx, "setup other claude")
-        });
-        assert!(!drawn(cx, "setup install claude") && !drawn(cx, "setup shadow claude"));
+        cx.write_to_clipboard(ClipboardItem::new_string("before".to_string()));
+        click_on(cx, "setup copy herdr");
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(command.to_string())
+        );
+        assert_eq!(setup_said(&view, cx), "Copied.");
     }
 
     /// The Needs step looks again by itself: the countdown stands at the
@@ -30138,10 +30300,26 @@ yardr.dev
         files
     }
 
-    /// The first run on a Mac where herdr and claude were fetched to
-    /// `~/.local/bin` and the person's shell is `shell`, whose PATH does not
-    /// name it: the window with no yard and the means to set one up, herdr
-    /// and claude found where fetching puts them.
+    /// A login shell for a test of the first run: a script called `name`
+    /// that says `path` is its PATH, and keeps what it was asked beside it,
+    /// where `shell_asked` counts.
+    #[cfg(unix)]
+    fn login_shell(dir: &std::path::Path, name: &str, path: &str) -> PathBuf {
+        let script = format!("#!/bin/sh\nprintf '%s|' \"$@\" >> \"$0.asked\"\necho {path}\n");
+        crate::fetch::keep(&dir.join("shell"), name, script.as_bytes()).unwrap()
+    }
+
+    /// How many times a test's login shell `name` was asked for its PATH.
+    #[cfg(unix)]
+    fn shell_asked(dir: &std::path::Path, name: &str) -> usize {
+        let asked = std::fs::read_to_string(dir.join("shell").join(format!("{name}.asked")));
+        asked.unwrap_or_default().matches("-l|-c|").count()
+    }
+
+    /// The first run where herdr and claude were fetched to `~/.local/bin`
+    /// and the person's shell is `shell`, whose PATH does not name it: the
+    /// window with no yard and the means to set one up, herdr and claude
+    /// found where fetching puts them.
     #[cfg(unix)]
     fn at_terminal<'a>(
         dir: &tempfile::TempDir,
@@ -30159,14 +30337,7 @@ yardr.dev
         standin::answers(&program, "doctor", 0, &doctor);
         // A login shell that is asked for its PATH, which has no
         // `.local/bin` in it.
-        means.machine.shell = Some(
-            crate::fetch::keep(
-                &dir.path().join("shell"),
-                shell,
-                b"#!/bin/sh\necho /usr/bin:/bin\n",
-            )
-            .unwrap(),
-        );
+        means.machine.shell = Some(login_shell(dir.path(), shell, "/usr/bin:/bin"));
         means.machine.within = std::time::Duration::from_secs(60);
         let (view, cx) = no_yard(dir.path(), cx);
         view.update(cx, |v, _| v.means = means);
@@ -30265,19 +30436,42 @@ yardr.dev
         );
     }
 
-    /// Only a Mac has programs fetched to `~/.local/bin`: the same machine
-    /// on Linux goes from what it needs to the yard's form, and the login
-    /// shell is not asked.
+    /// Programs are fetched to `~/.local/bin` on Linux as on a Mac, and a
+    /// terminal does not look there: the same machine is given the step,
+    /// and the file the shell reads alone decides whether. The login
+    /// shell, whose PATH names the directory (a Debian `~/.profile` makes a
+    /// login shell's do, where a terminal opened now has no such entry), is
+    /// not asked, so that it does not say "found" and hide the step. A line
+    /// added to the file ends it.
     #[cfg(unix)]
     #[gpui::test]
-    fn linux_is_given_no_terminal_step(cx: &mut TestAppContext) {
+    fn linux_is_given_the_terminal_step_by_the_startup_file_alone(cx: &mut TestAppContext) {
         use firstrun::Step;
 
         let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
         let (view, cx) = at_terminal(&dir, "zsh", false, cx);
+        let named = format!("/usr/bin:{}", home.join(".local/bin").display());
+        login_shell(dir.path(), "zsh", &named);
+        go_on_from_needs(&view, cx);
+        assert_eq!(step_of(&view, cx), Some(Step::Terminal));
+        let reach = setup_reach(&view, cx).unwrap();
+        assert_eq!(reach.named(), "herdr and claude");
+        assert_eq!(reach.shown().as_deref(), Some("~/.zshrc"));
+        assert!(drawn(cx, "setup path add") && drawn(cx, "setup path later"));
+        assert_eq!(shell_asked(dir.path(), "zsh"), 0);
+
+        // Yes: the line is in the file, and the next run has no step.
+        click_on(cx, "setup path add");
+        assert_eq!(step_of(&view, cx), Some(Step::Yard));
+        assert_eq!(
+            std::fs::read_to_string(home.join(".zshrc")).unwrap(),
+            "export PATH=\"$HOME/.local/bin:$PATH\"\n"
+        );
+        click_on(cx, "setup leave");
         go_on_from_needs(&view, cx);
         assert_eq!(step_of(&view, cx), Some(Step::Yard));
-        assert!(!dir.path().join("shell/zsh.asked").exists());
+        assert_eq!(shell_asked(dir.path(), "zsh"), 0);
     }
 
     /// Everything the person has and the settings keep, as files with what

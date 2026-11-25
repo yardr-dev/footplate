@@ -387,7 +387,10 @@ whether the line that puts `~/.local/bin` on the PATH goes in the shell's
 startup file, posed on zsh with yardr, herdr and claude in that
 directory), `setup-other` (the step that lists what the machine has, posed
 with a claude on PATH that is not Claude Code, what it printed, and the
-claude fetched to `~/.local/bin` standing behind it), `hosted` (the first screen with
+claude fetched to `~/.local/bin` standing behind it), `setup-linux` (that
+step on a Linux box: herdr with its one-click install, git and a harness by
+hand), `setup-copy` (that step where yardr pins no file for herdr: its line
+of how to install it by hand, with "copy" beside it, pressed), `hosted` (the first screen with
 the hosted way's fields open and filled), `signedout` (the away
 screen of a hosted yard that is signed out), `away` (the away
 screen of a yard at an address that no longer lets the device in,
@@ -605,7 +608,7 @@ options have no icon, so the program sees to it when it starts
 |---|---|
 | `src/api.rs` | the client: the calls, the stream, their JSON, by the socket or at an address over TCP and TLS; a pairing code redeemed, a Kratos account signed in at a hosted edge, the legacy member-pairing request kept for API tests; a file read from a site, and a JSON post to one, that is no yard |
 | `src/feedback.rs` | what the Feedback form sends, and where: one survey answer to yardr's PostHog (EU), made as plain functions (the payload, a fresh id for each send, the words of a refusal) and sent by `api::post_json`; the write key and the survey's id are two constants, and with either empty there is no project to offer |
-| `src/fetch.rs` | the yardr on this machine, as plain functions over a `Machine`: found in order by whole path, the one an older footplate kept moved, the installer fetched from yardr.dev and run; what `yardr doctor` names for a Mac, fetched and checked by checksum; and the yardr asked its version for the About card |
+| `src/fetch.rs` | the yardr on this machine, as plain functions over a `Machine`: found in order by whole path, the one an older footplate kept moved, the installer fetched from yardr.dev and run; what `yardr doctor` names for a Mac or a Linux box, fetched and checked by checksum; and the yardr asked its version for the About card |
 | `src/setup.rs` | the first run as yardr's commands, with no window: each run with its arguments and its JSON read, the PATH made from doctor's data, the import's questions answered, a login led by what yardr prints |
 | `src/yard.rs` | which yard is opened, as plain functions: the environment's one yard or the open one of the settings, each yard's token file and its mode, a hosted yard's session file beside it |
 | `src/session.rs` | following a yard on a thread, one for each yard of the settings: who the window is for, the state it starts from, trying again, or not when the device is not let in |

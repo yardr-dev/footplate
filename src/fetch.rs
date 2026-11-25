@@ -12,8 +12,8 @@
 //! is by anyone who pipes the same script to a shell. What it installs it
 //! checks itself.
 //!
-//! What `yardr doctor --json` names for a program fetched on a Mac
-//! (docs/doctor.md of the yardr repository) goes another way, by
+//! What `yardr doctor --json` names for a program fetched, on a Mac or a
+//! Linux box (docs/doctor.md of the yardr repository) goes another way, by
 //! [`program`]: its [`sha256`] is compared, the one [`member`] of a gzipped
 //! tar taken, and the program [`keep`]-ed. It comes from its maker's address,
 //! which may send on to another, and is trusted for its checksum alone,
@@ -864,10 +864,11 @@ fn keep_as(dir: &Path, name: &str, bytes: &[u8], mode: u32) -> io::Result<PathBu
     Ok(path)
 }
 
-/// A program `yardr doctor --json` names for a Mac where it is missing
-/// (its `fetch`; docs/doctor.md of the yardr repository, "A program
-/// fetched on a Mac"): one file at its maker's address, of the size and
-/// the SHA-256 yardr wrote down when the way was verified.
+/// A program `yardr doctor --json` names where it is missing and yardr
+/// pins a file for this machine, a Mac or a Linux box (its `fetch`;
+/// docs/doctor.md of the yardr repository, "A program fetched"): one file
+/// at its maker's address, of the size and the SHA-256 yardr wrote down
+/// when the way was verified.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Wanted {
     pub version: String,

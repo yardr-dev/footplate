@@ -71,7 +71,10 @@
 # with yardr, herdr and claude in that directory),
 # `setup-other` (the step that lists what the machine has, posed with a
 # claude on PATH that is not Claude Code, what it printed, and the claude
-# fetched to `~/.local/bin` standing behind it),
+# fetched to `~/.local/bin` standing behind it), `setup-linux` (that step on
+# a Linux box: herdr with its one-click install, git and a harness by hand),
+# `setup-copy` (that step where yardr pins no file for herdr: its line of how
+# to install it by hand, with "copy" beside it, pressed),
 # `hosted` (the first screen with the hosted way's fields open and
 # filled), `signedout` (the away screen of a hosted yard that is
 # signed out), `away` (the away screen of a yard at an address that
@@ -185,7 +188,7 @@ set -e
 caller=$PWD
 # The states src/shot.rs serves, kept as that file's own list has them: a
 # state added there is added here, and refused here until it is.
-states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run frame decide teammates teammates-list weighty weighty-mapping weighty-trojan stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-connection-edge settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page page-unset page-unset-many mail image image-menu mail-refused mail-edge refusal undelivered answered setup setup-terminal setup-other hosted signedout away arrivals departures arrival flow line-window line-edit line-sent line-picker line-refused line-pack old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused secret-harness secret-harness-empty setup-host switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open old-waiting lines-waiting lines-waiting-end lines-help lines-panel lines-departures lines-arrivals lines-flow lines-board lines-context lines-served crew-context crew-prime keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
+states="yardmaster crew thread column column-hover column-copy column-top older-unread plain plain-select lines run frame decide teammates teammates-list weighty weighty-mapping weighty-trojan stopped far settings settings-appearance settings-yards settings-yards-rename settings-agents settings-notifications settings-connection settings-connection-edge settings-voice settings-voice-list settings-voice-microphone settings-telemetry settings-telemetry-off voice voice-ready voice-draft reconnecting page page-unset page-unset-many mail image image-menu mail-refused mail-edge refusal undelivered answered setup setup-terminal setup-other setup-linux setup-copy hosted signedout away arrivals departures arrival flow line-window line-edit line-sent line-picker line-refused line-pack old-lines grants pairing pair-ask pair-qr pair-ended secret secret-shown secret-refused secret-harness secret-harness-empty setup-host switcher switcher-shut switcher-member member-pair refs decisions decisions-filtered decisions-more waiting waiting-folded waiting-end waiting-many waiting-many-open old-waiting lines-waiting lines-waiting-end lines-help lines-panel lines-departures lines-arrivals lines-flow lines-board lines-context lines-served crew-context crew-prime keys about about-missing feedback reactions reactions-hover reactions-zoom reply notice drawer delivery screen screen-hosted screen-refused screen-wide"
 is_state() {
     case " $states " in
         *" $1 "*) return 0 ;;

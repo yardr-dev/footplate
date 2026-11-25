@@ -22,9 +22,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
-    Focusable, FontWeight, MouseButton, PathPromptOptions, SharedString, Stateful, Task, Window,
-    div, prelude::*, rems,
+    AnyElement, AnyWindowHandle, App, ClickEvent, ClipboardItem, Context, Div, Entity,
+    EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, PathPromptOptions, SharedString,
+    Stateful, Task, Window, div, prelude::*, rems,
 };
 
 use super::ask::card_button;
@@ -94,7 +94,8 @@ pub struct Means {
     /// goes: the person's home, and footplate's own directory for programs.
     pub machine: Machine,
     pub open: Opens,
-    /// This is a Mac: git comes with Apple's own installer.
+    /// This is a Mac: git comes with Apple's own installer, and a terminal
+    /// opens a login shell, which is asked for its PATH.
     pub apple: bool,
     /// Where the window's content reaches up into its title bar, as on a
     /// Mac, what the window does for a gesture on its top strip. None where
@@ -395,27 +396,27 @@ impl FirstRun {
         this
     }
 
-    /// The step that lists what the machine has, posed for a screenshot: a
-    /// claude on PATH that is not Claude Code, with the one fetched to
-    /// `~/.local/bin` read as standing behind it, and a codex still to
-    /// fetch. A debug build's alone, and a unix one's: nothing is fetched or
-    /// read, and no command runs.
+    /// The step that lists what the machine has, posed for a screenshot with
+    /// the answer `doctor` (the shot's own: a claude on PATH that is not
+    /// Claude Code with the one fetched to `~/.local/bin` standing behind
+    /// it, or a Linux box's herdr), after a check that left `said`, with the
+    /// next look counting down. A debug build's alone, and a unix one's:
+    /// nothing is fetched or read, and no command runs, and no timer ticks.
     #[cfg(all(debug_assertions, unix))]
     pub fn shot_needs(
         means: Means,
         socket: &Path,
         name: &str,
         handle: AnyWindowHandle,
+        doctor: Doctor,
+        said: Option<&str>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut this = Self::build(means, socket, name, handle, cx);
-        let doctor = crate::shot::other_doctor();
         this.shadowed = doctor.shadowed(|_| true);
         this.doctor = Some(doctor);
         this.step = Step::Needs;
-        // Posed as a check that found herdr new, with the next look counting
-        // down: no command runs, and no timer ticks.
-        this.said = Some("herdr is installed.".to_string());
+        this.said = said.map(str::to_string);
         this.again_in = Some(7);
         this
     }
@@ -572,18 +573,19 @@ impl FirstRun {
         };
         self.step = Step::Needs;
         self.stop_looking();
-        // Only a Mac fetches programs to `~/.local/bin`. The login shell
-        // is asked here, beside doctor, and not when "go on" is pressed;
-        // so is the file a fetch left, which the rows would otherwise read
-        // as they are drawn.
+        // A Mac and a Linux box both fetch programs to `~/.local/bin`. What
+        // `reach` asks (the shell's file, and a Mac's login shell) is asked
+        // here, beside doctor, and not when "go on" is pressed; so is the
+        // file a fetch left, which the rows would otherwise read as they are
+        // drawn.
         let (machine, apple) = (self.means.machine.clone(), self.means.apple);
         self.work(
             "looking at what this machine has…",
             move || {
                 let doctor = yardr.needs();
-                let (reach, shadowed) = match doctor.as_ref().ok().filter(|_| apple) {
+                let (reach, shadowed) = match doctor.as_ref().ok() {
                     Some(doctor) => (
-                        setup::reach(&machine, &yardr.program, doctor),
+                        setup::reach(&machine, &yardr.program, doctor, apple),
                         doctor.shadowed(fetch::stands),
                     ),
                     None => (None, Vec::new()),
@@ -678,12 +680,6 @@ impl FirstRun {
                 Err(why) => why,
             });
             cx.notify();
-            return;
-        }
-        // Doctor's fetch data is a Mac installer road. Linux must stay a
-        // list with the maker's page and yardr's instructions, even if a
-        // later yardr release accidentally includes that data there.
-        if !self.means.apple {
             return;
         }
         let wanted = doctor
@@ -1230,15 +1226,18 @@ impl FirstRun {
     /// A row of what the yard needs: the program, whether it is there,
     /// and where it is missing how it comes: installed from here where
     /// yardr names a way, and else from its maker's page, with the words
-    /// yardr has for it. A harness that another program answers for says
-    /// so, with what that printed; where the one fetched stands behind it,
-    /// the row offers nothing and says what keeps it from running. A
-    /// harness whose version flag failed or hung is installed, with a
-    /// warning.
+    /// yardr has for it and, where it names the command to paste, a button
+    /// that copies that command alone. A harness that another program
+    /// answers for says so, with what that printed; where the one fetched
+    /// stands behind it, the row offers nothing and says what keeps it from
+    /// running. A harness whose version flag failed or hung is installed,
+    /// with a warning.
     fn row(&self, item: &Item, palette: Palette, cx: &mut Context<Self>) -> AnyElement {
         let program = item.program.clone();
-        let can_fetch = self.means.apple
-            && item.fetch.is_some()
+        // Where doctor gives a file to fetch, on any system: yardr pins one
+        // for the machine it runs on, and a machine it pins none for gets
+        // none, so that the row is the list it was.
+        let can_fetch = item.fetch.is_some()
             && self.means.machine.home.is_some()
             && self.means.machine.own.is_some();
         let shadowed = self.shadowed.contains(&program);
@@ -1313,17 +1312,45 @@ impl FirstRun {
                     .child(words)
             }));
         }
-        // Installed by hand: how, as yardr says it.
+        // Installed by hand: how, as yardr says it, and where it names the
+        // command to paste, a button that copies that command alone. The
+        // line is not squeezed for the button, which would break herdr's
+        // address in two: it stands beside the line where there is room,
+        // and under it where there is none.
         if let Some(get) = item.get.as_ref().filter(|_| to_get && !installs) {
-            let program = program.clone();
+            let copy = item
+                .command
+                .clone()
+                .filter(|command| !command.trim().is_empty())
+                .map(|command| {
+                    self.button(format!("setup copy {program}"), "copy", palette)
+                        .on_click(cx.listener(move |this, _, _, cx| this.copy(&command, cx)))
+                });
+            let selector = format!("setup get {program}");
             row = row.child(
                 div()
-                    .debug_selector(move || format!("setup get {program}"))
-                    .text_sm()
-                    .child(format!("To install it: {get}")),
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .debug_selector(move || selector.clone())
+                            .text_sm()
+                            .child(format!("To install it: {get}")),
+                    )
+                    .children(copy),
             );
         }
         row.into_any_element()
+    }
+
+    /// "copy": puts the command alone on the clipboard, for a person to
+    /// paste in a terminal, and says so.
+    fn copy(&mut self, command: &str, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
+        self.said = Some("Copied.".to_string());
+        cx.notify();
     }
 
     /// A button of the first run, drawn pale while something is underway.
@@ -1450,15 +1477,18 @@ impl FirstRun {
                     );
                 }
                 let ready = doctor.ready();
+                // Once all is found there is nothing to look at again: the
+                // foot is "go on" alone. (The button of a check that got no
+                // answer, above, stays.)
                 body.push(
                     div()
                         .flex()
                         .flex_wrap()
                         .gap_2()
-                        .child(
+                        .children((!ready).then(|| {
                             self.button("setup check".to_string(), "check again", palette)
-                                .on_click(cx.listener(|this, _, _, cx| this.check_again(cx))),
-                        )
+                                .on_click(cx.listener(|this, _, _, cx| this.check_again(cx)))
+                        }))
                         .child(
                             self.onward(
                                 "setup go on".to_string(),

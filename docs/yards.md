@@ -725,8 +725,8 @@ in, which every command is told (`--home`).
 | Step | What is shown | What is run |
 |---|---|---|
 | yardr itself | that it is found; where it is not, "install yardr", what the installer prints, and "try again" where it failed | the lookup and the installer [above](#yardr-a-dependency) |
-| What this needs | a row for git, herdr and each harness: installed or not, what it is for, and how it comes. "check again" asks once more. A herdr whose server is down is said to wait, and keeps nothing back. A program that answers a harness's version flag as another (a `claude` that is not Claude Code) is said not to be it, with what it printed, and does not count; a harness whose version flag failed or did not answer is installed, with a warning, and keeps nothing back. "go on" needs git, herdr and one harness | `yardr doctor --json` |
-| Your terminal | shown only on a Mac, and only when a program is in `~/.local/bin` and a terminal does not look there: which programs, the line that makes it look, and the shell's file it goes to. "add it to ~/.zshrc" adds that one line, and "not now" writes nothing. [Below](#your-terminal) | `$SHELL -l -c 'printenv PATH'`; on the yes, one line appended to the shell's startup file |
+| What this needs | a row for git, herdr and each harness: installed or not, what it is for, and how it comes. "check again" asks once more, while something is missing; once git, herdr and a harness are all found it is gone, and "go on" stands alone. A herdr whose server is down is said to wait, and keeps nothing back. A program that answers a harness's version flag as another (a `claude` that is not Claude Code) is said not to be it, with what it printed, and does not count; a harness whose version flag failed or did not answer is installed, with a warning, and keeps nothing back. "go on" needs git, herdr and one harness | `yardr doctor --json` |
+| Your terminal | shown on a Mac and on Linux, and only when a program is in `~/.local/bin` and a terminal does not look there: which programs, the line that makes it look, and the shell's file it goes to. "add it to ~/.zshrc" adds that one line, and "not now" writes nothing. [Below](#your-terminal) | on a Mac, `$SHELL -l -c 'printenv PATH'`; on the yes, one line appended to the shell's startup file |
 | Your yard | your name (the login name to begin with), the harness (the installed ones; one yardr cannot log in for you is marked "needs a terminal once to log in"), the yardmaster's name, a model, how agents work with you (the four styles, "Guide me" to begin with), a line about you | `yardr init --harness … --operator … --yardmaster … --style … [--model …] [--about …]`: it creates the yard and starts nothing |
 | Logging in | "log in", or "it is logged in already". Then what yardr asks for: the ways to log in as buttons, the page as a button, the code in a field, and the question before the one call that proves the login, which costs a model call | `yardr harness login <kind> --json`, answered on its input |
 | Start the yard | "start the yard"; what could not be started, each with the one thing to do, in yardr's words | `yardr up` |
@@ -748,9 +748,11 @@ belong to.
 
 **How a missing program comes.** yardr says, per program, in doctor's JSON:
 
-- On a Mac, `fetch`: one file at its maker's own address, of one version,
-  with the size and the SHA-256 it had when yardr's makers verified the way
-  (`docs/doctor.md` of the yardr repository, "A program fetched on a Mac").
+- `fetch`, where yardr pins a file for this machine: one file at its
+  maker's own address, of one version, with the size and the SHA-256 it had
+  when yardr's makers verified the way (`docs/doctor.md` of the yardr
+  repository, "A program fetched"). On a Mac that is herdr and the
+  harnesses yardr has a Mac file for; on Linux it is herdr, and no harness.
   The row has "install", which follows that page's six steps: a program
   that is at its place already is not fetched; the file is read over https,
   to its named size at the most; it is kept or run only when its size and
@@ -765,8 +767,11 @@ belong to.
   window, which footplate does not wait for.
 - Everywhere else, and for a program yardr names no way for: the row says
   how it is installed by hand, in yardr's words, with a button for its
-  maker's page where the words name one. On Linux that is every program:
-  there is no one way to install without a terminal there.
+  maker's page where the words name one. On Linux that is every program
+  but herdr: there is no one way to install without a terminal there.
+  Where yardr names the command to paste (`command`: herdr's, on a machine
+  it pins no file for), "copy" stands beside the words and puts that command
+  alone on the clipboard, and the step says "Copied."
 - A program on PATH under a harness's name that answers its version flag as
   another program (`docs/doctor.md`, "A program that answers as another"):
   doctor reports the harness not found, with `path` the program that
@@ -778,7 +783,7 @@ belong to.
   runs: where the file at the fetch's place stands already (a file that
   runs, or a link to one), the row offers no second fetch, which would find
   it there and do nothing, and says that the other program is first on PATH.
-  That file is looked at with each check, on a Mac. A harness whose version
+  That file is looked at with each check. A harness whose version
   flag failed or did not answer (`fails`, `hangs`) stops nothing: it is
   installed, with a warning, and a session started on it shows what is
   wrong. A state footplate does not know is read as a harness that answers.
@@ -817,7 +822,7 @@ through a shell:
 | a maker's installer that yardr names, on a Mac (Claude Code's `install <version>`) | "install" on a harness's row |
 | yardr's installer, `https://yardr.dev/install.sh` | "install yardr" where there is none |
 | your login shell, `$SHELL -l -c 'command -v yardr'`, under a timeout | [looking for yardr](#yardr-a-dependency), where the first three steps found none |
-| your login shell, `$SHELL -l -c 'printenv PATH'`, under a timeout | [your terminal](#your-terminal), on a Mac, once a program is in `~/.local/bin` and the shell's file does not name it |
+| your login shell, `$SHELL -l -c 'printenv PATH'`, under a timeout | [your terminal](#your-terminal), on a Mac, once a program is in `~/.local/bin` and the shell's file does not name it; off a Mac the file alone decides and no shell is started for it |
 | `/usr/bin/xcode-select --install`, on a Mac | "install" on git's row |
 | `git`, to read: `rev-parse --is-inside-work-tree`, `branch --show-current` | the branch offered for a folder |
 | `notify-send`, on Linux | a [notification](window.md#notifications) |
@@ -834,20 +839,27 @@ in [A hosted yard](#a-hosted-yard); it starts no process.
 ### Your terminal
 
 A program fetched to `~/.local/bin` is found by footplate and not by a
-terminal, which on a Mac as it comes does not look there. After "go on", a
-step is shown when a program of setup's (the yardr that is run, or one that
-doctor found there) is in that directory, the PATH your login shell reports
+terminal, which as it comes, on a Mac or a Linux desktop, does not look there.
+After "go on", a step is shown when a program of setup's (the yardr that is
+run, or one that doctor found there) is in that directory and the shell's
+file does not name it, and, on a Mac, the PATH your login shell reports
 (`$SHELL -l -c 'printenv PATH'`, under the timeout of the question that looks
-for yardr) does not name it, and the shell's file does not either. It shows
-the line and the file, and writes only on "add it to …": one line at the end
-of the file, on a line of its own, and never twice. "not now" writes nothing,
-creates nothing and marks nothing, so the step comes again in the next run.
-It is on a Mac alone.
+for yardr) does not either. It shows the line and the file, and writes only
+on "add it to …": one line at the end of the file, on a line of its own, and
+never twice. "not now" writes nothing, creates nothing and marks nothing, so
+the step comes again in the next run.
+
+It is on a Mac and on Linux. Off a Mac only the startup file is read: a Linux
+desktop's terminal is no login shell, and Debian's stock `~/.profile` puts
+`~/.local/bin` on a login shell's PATH as soon as the directory exists, so a
+login shell would say the directory is there where a terminal opened now does
+not find it. Someone whose PATH has it some other way is offered the step
+once, and the line does no harm there.
 
 | Shell, by `$SHELL` | The file | The line |
 |---|---|---|
 | zsh | `$ZDOTDIR/.zshrc` where footplate was started with `ZDOTDIR` set, else `~/.zshrc` | `export PATH="$HOME/.local/bin:$PATH"` |
-| bash | the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists, as a login bash reads that one alone; `~/.bash_profile` where none does | `export PATH="$HOME/.local/bin:$PATH"` |
+| bash | on a Mac, the first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` that exists, as a login bash reads that one alone, and `~/.bash_profile` where none does; off a Mac, `~/.bashrc`, which a terminal's bash reads | `export PATH="$HOME/.local/bin:$PATH"` |
 | fish | `~/.config/fish/config.fish` | `set -gx PATH $HOME/.local/bin $PATH` |
 | any other, or none named | none: the line is shown with the words that footplate does not know where that shell keeps its file, and nothing is written | `export PATH="$HOME/.local/bin:$PATH"` |
 

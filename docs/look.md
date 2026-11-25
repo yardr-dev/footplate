@@ -186,6 +186,17 @@ with Copy as a link word beside it, returning the plain command; a
 setup ask's taken account is outlined, as a lever is, and its Approve
 is the card's one fill likewise.
 
+The first run's step of what the machine needs keeps the rule: its one fill
+is "go on", and "install", "open its page", "check again" and the rest are
+secondary buttons (`raised` with the `strong` edge, 32 high). Where a row
+says how to install by hand ("To install it: …", in yardr's words) and
+yardr names the command to paste, "copy" is one more of them: it puts that
+command alone on the clipboard, and the step says "Copied." under its rows.
+It stands beside the words where there is room and under them where there
+is none, so that an address in the words is not broken to make room for it.
+"check again" is there while something is missing; once git, herdr and a
+harness are all found it goes, and "go on" stands alone.
+
 ## Lines
 
 The timetable's list is the depot tree. The Arrivals row carries the

@@ -228,6 +228,8 @@ pub const STATES: &[&str] = &[
     "setup",
     "setup-terminal",
     "setup-other",
+    "setup-linux",
+    "setup-copy",
     "hosted",
     "signedout",
     "away",
@@ -580,13 +582,16 @@ fn stand_voice() -> Talking {
 
 /// The run for `state`: the fake yard serves it, and the run's socket
 /// points there. For `stopped`, `refusal`, `setup`, `setup-terminal`,
-/// `setup-other` and `hosted` no yard listens: the socket names a directory
-/// that holds none, so the window opens on a yard that is down, and the
-/// switch says the stopped one is stopped. The refusal shot is the first
-/// screen, with the pairing's fields open on it; the setup shot is the first
-/// run posed at step 2, the setup-terminal shot at the step that asks about
-/// the PATH line, and the setup-other shot at the step that lists what the
-/// machine has, with a claude that is not Claude Code; the hosted shot is
+/// `setup-other`, `setup-linux`, `setup-copy` and `hosted` no yard listens:
+/// the socket names a directory that holds none, so the window opens on a
+/// yard that is down, and the switch says the stopped one is stopped. The
+/// refusal shot is the first screen, with the pairing's fields open on it;
+/// the setup shot is the first run posed at step 2, the setup-terminal shot
+/// at the step that asks about the PATH line, and the setup-other shot at
+/// the step that lists what the machine has, with a claude that is not
+/// Claude Code; the setup-linux and setup-copy shots are that step on a
+/// Linux box, with herdr to install in one click and with herdr's command
+/// to copy; the hosted shot is
 /// the first screen with the hosted way's fields open on it. The signedout
 /// shot opens the hosted yard south through an edge that no longer knows its
 /// session, so the window opens on the away screen of a yard that is signed
@@ -606,7 +611,14 @@ fn stand_voice() -> Talking {
 fn start_for_state(env: Env, state: &str) -> (Env, Option<ShotYard>) {
     if matches!(
         state,
-        "stopped" | "refusal" | "setup" | "setup-terminal" | "setup-other" | "hosted"
+        "stopped"
+            | "refusal"
+            | "setup"
+            | "setup-terminal"
+            | "setup-other"
+            | "setup-linux"
+            | "setup-copy"
+            | "hosted"
     ) {
         let mut env = env;
         env.socket = std::env::temp_dir().join(format!(
@@ -1242,6 +1254,44 @@ pub(crate) fn other_doctor() -> crate::setup::Doctor {
         "faults": ["a harness: not on PATH"]
     }))
     .expect("the setup-other shot's doctor")
+}
+
+/// Doctor's answer for the `setup-linux` and `setup-copy` shots, as yardr
+/// gives it on a Linux box that has nothing but the system's own programs:
+/// herdr missing, with the command to paste and, where yardr pins a file for
+/// the machine (`pinned`), the file too; git missing, which has a page and
+/// no file; and no harness, which on Linux has no file either. The first
+/// run stands at the step that lists them, having fetched and run nothing
+/// (`FirstRun::shot_needs`).
+pub(crate) fn linux_doctor(pinned: bool) -> crate::setup::Doctor {
+    let mut herdr = json!({
+        "program": "herdr",
+        "for": "it starts every agent in a pane of its own, the yardmaster first: without it nothing runs",
+        "found": false,
+        "get": "curl -fsSL https://herdr.dev/install.sh | sh (more: https://herdr.dev)",
+        "command": "curl -fsSL https://herdr.dev/install.sh | sh"
+    });
+    if pinned {
+        herdr["fetch"] = json!({
+            "version": "0.9.4",
+            "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.4/herdr-linux-x86_64",
+            "sha256": "00", "size": 1, "path": "/home/jo/.local/bin/herdr",
+            "verified": {"from": "https://herdr.dev/docs/install/", "on": "2026-11-05"}});
+    }
+    serde_json::from_value(json!({
+        "yard": false,
+        "machine": [
+            herdr,
+            {"program": "git",
+             "for": "a depot is a git repository: beads are worked on branches, in worktrees",
+             "found": false,
+             "get": "https://git-scm.com/downloads (on macOS: xcode-select --install)"},
+            {"program": "a harness", "for": "the agent yardr starts: a yard is created on one",
+             "found": false, "get": "install one of the agents herdr starts (claude, codex, ...)"}
+        ],
+        "faults": ["herdr: not on PATH"]
+    }))
+    .expect("the setup-linux shot's doctor")
 }
 
 /// Serves `state` from `yard`: the yard of the window's tests, with the
@@ -4179,14 +4229,22 @@ mod tests {
     /// of the yard, so the window is for its operator, jo, and the state
     /// opens where the shot says. A state added to [`STATES`] lands in the
     /// unreachable arm until it is covered here. `stopped`, `refusal`,
-    /// `setup`, `setup-terminal`, `setup-other` and `hosted` listen nowhere:
+    /// `setup`, `setup-terminal`, `setup-other`, `setup-linux`, `setup-copy`
+    /// and `hosted` listen nowhere:
     /// their run's socket names a yard that is down.
     #[test]
     fn every_state_loads_as_the_window_reads_it() {
         for state in STATES {
             if matches!(
                 *state,
-                "stopped" | "refusal" | "setup" | "setup-terminal" | "setup-other" | "hosted"
+                "stopped"
+                    | "refusal"
+                    | "setup"
+                    | "setup-terminal"
+                    | "setup-other"
+                    | "setup-linux"
+                    | "setup-copy"
+                    | "hosted"
             ) {
                 let env = Env {
                     socket: PathBuf::from("/none"),
@@ -4226,6 +4284,28 @@ mod tests {
                     assert!(rows[2].answers_as_another(), "{state}");
                     assert!(rows[2].another_said().is_some(), "{state}");
                     assert_eq!(doctor.shadowed(|_| true), ["claude"], "{state}");
+                }
+                if matches!(*state, "setup-linux" | "setup-copy") {
+                    // The canned doctor of a Linux box: herdr to install in
+                    // one click where yardr pins its file (setup-linux), and
+                    // where it does not, the line to install it by hand with
+                    // the command alone to copy (setup-copy); git has a
+                    // page and nothing to copy, and no harness is there.
+                    let doctor = linux_doctor(*state == "setup-linux");
+                    assert!(!doctor.ready(), "{state}");
+                    let rows = doctor.rows();
+                    let programs: Vec<_> = rows.iter().map(|item| item.program.as_str()).collect();
+                    assert_eq!(programs, ["git", "herdr", "a harness"], "{state}");
+                    assert_eq!(rows[1].fetch.is_some(), *state == "setup-linux", "{state}");
+                    assert_eq!(
+                        rows[1].command.as_deref(),
+                        Some("curl -fsSL https://herdr.dev/install.sh | sh"),
+                        "{state}"
+                    );
+                    assert!(
+                        rows[0].command.is_none() && rows[0].page().is_some(),
+                        "{state}"
+                    );
                 }
                 continue;
             }

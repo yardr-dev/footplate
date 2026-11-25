@@ -288,16 +288,28 @@ impl Footplate {
         }
         // The setup-other shot is the step that lists what the machine has,
         // posed with a claude on PATH that is not Claude Code and the fetched
-        // one standing behind it, with nothing read or fetched. A debug
-        // build's alone, and with a socket, as above.
+        // one standing behind it, with nothing read or fetched. The
+        // setup-linux and setup-copy shots are the same step on a Linux box:
+        // herdr with its one-click install, and herdr where yardr pins no
+        // file for the machine, with its command to copy, after a click on
+        // "copy". A debug build's alone, and with a socket, as above.
         #[cfg(all(debug_assertions, unix))]
-        if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("setup-other") {
+        if let Ok(state @ ("setup-other" | "setup-linux" | "setup-copy")) =
+            std::env::var("FOOTPLATE_SHOT").as_deref()
+        {
+            let (doctor, said) = match state {
+                "setup-linux" => (crate::shot::linux_doctor(true), None),
+                "setup-copy" => (crate::shot::linux_doctor(false), Some("Copied.")),
+                _ => (crate::shot::other_doctor(), Some("herdr is installed.")),
+            };
             let first_run = cx.new(|cx| {
                 FirstRun::shot_needs(
                     this.means.clone(),
                     &this.env.socket,
                     &this.name,
                     this.handle,
+                    doctor,
+                    said,
                     cx,
                 )
             });

@@ -463,10 +463,16 @@ pub struct Item {
     /// command with one.
     #[serde(default)]
     pub get: Option<String>,
+    /// The command alone that `get` names, where it starts with one a
+    /// person pastes into a terminal (herdr's): what the window copies
+    /// whole. Absent from an older yardr, and from a program whose `get`
+    /// is a page.
+    #[serde(default)]
+    pub command: Option<String>,
     /// Where the login shell finds it, when the PATH does not.
     #[serde(default)]
     pub login_shell_path: Option<PathBuf>,
-    /// On a Mac: how a program fetches it.
+    /// Where yardr pins a file for this machine: how a program fetches it.
     #[serde(default)]
     pub fetch: Option<Wanted>,
     /// On the item that says no harness is installed: the ones that can be
@@ -949,11 +955,18 @@ impl Reach {
 /// What setup can do so that a terminal finds the programs setup knows
 /// that are in `~/.local/bin`: where fetching puts them, and where a
 /// terminal does not look. None where there is nothing to do: no such
-/// program is there, or the shell's file or the PATH of its login shell
-/// names the directory already. The file is asked first, which costs no
-/// shell; a login shell started to read its PATH does not read zsh's
-/// `.zshrc`, so only the file knows of a line that was added.
-pub fn reach(machine: &Machine, yardr: &Path, doctor: &Doctor) -> Option<Reach> {
+/// program is there, or the shell's file names the directory already, or,
+/// on a Mac (`apple`), the PATH of its login shell does. The file is asked
+/// first, which costs no shell; a login shell started to read its PATH does
+/// not read zsh's `.zshrc`, so only the file knows of a line that was added.
+/// Off a Mac the login shell is not asked and the file alone decides: a
+/// Linux desktop's terminal is no login shell, and Debian's stock
+/// `~/.profile` puts `~/.local/bin` on a login shell's PATH as soon as the
+/// directory exists, so that shell says "found" where a terminal opened now
+/// does not find it. The cost is that a person whose PATH carries the
+/// directory some other way is offered the step once, and the line it
+/// writes does no harm there.
+pub fn reach(machine: &Machine, yardr: &Path, doctor: &Doctor, apple: bool) -> Option<Reach> {
     let home = machine.home.as_deref()?;
     let dir = home.join(".local/bin");
     let programs = programs_in(&dir, yardr, doctor);
@@ -966,9 +979,10 @@ pub fn reach(machine: &Machine, yardr: &Path, doctor: &Doctor) -> Option<Reach> 
     if text.is_some_and(|text| names_local_bin(&String::from_utf8_lossy(&text))) {
         return None;
     }
-    if machine
-        .login_path()
-        .is_some_and(|path| on_path(&path, &dir))
+    if apple
+        && machine
+            .login_path()
+            .is_some_and(|path| on_path(&path, &dir))
     {
         return None;
     }
@@ -3102,7 +3116,7 @@ mod tests {
         };
 
         let tcsh = login_shell(dir.path(), "tcsh", "echo /usr/bin:/bin");
-        let reach_tcsh = reach(&machine(&tcsh), &yardr, &doctor).unwrap();
+        let reach_tcsh = reach(&machine(&tcsh), &yardr, &doctor, true).unwrap();
         assert_eq!(reach_tcsh.file, None);
         assert_eq!(reach_tcsh.shell.as_deref(), Some("tcsh"));
         assert_eq!(reach_tcsh.line, r#"export PATH="$HOME/.local/bin:$PATH""#);
@@ -3121,6 +3135,7 @@ mod tests {
             },
             &yardr,
             &doctor,
+            true,
         )
         .unwrap();
         assert_eq!((none.file.clone(), none.shell.clone()), (None, None));
@@ -3140,7 +3155,8 @@ mod tests {
     /// PATH its login shell reports names the directory. The file is asked
     /// first, and is what stops a second step after a yes: a login shell
     /// started to answer `-l -c` does not read zsh's `.zshrc`, so it says
-    /// what it said before.
+    /// what it said before. Off a Mac the login shell is not asked and the
+    /// file alone decides.
     #[test]
     fn a_terminal_is_given_a_step_only_where_nothing_names_the_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -3159,7 +3175,7 @@ mod tests {
 
         // yardr, herdr and claude are there, and a terminal does not look
         // in the directory: the step, with the file and the line.
-        let step = reach(&machine(&zsh), &yardr, &doctor).unwrap();
+        let step = reach(&machine(&zsh), &yardr, &doctor, true).unwrap();
         assert_eq!(step.programs, ["yardr", "herdr", "claude"]);
         assert_eq!(step.named(), "yardr, herdr and claude");
         assert_eq!(step.file, Some(zshrc.clone()));
@@ -3171,7 +3187,7 @@ mod tests {
         // Yes. A second run has no step, though the login shell still says
         // what it said: the file does, and the shell is not even asked.
         assert_eq!(step.add(), Ok(Added::Written));
-        assert_eq!(reach(&machine(&zsh), &yardr, &doctor), None);
+        assert_eq!(reach(&machine(&zsh), &yardr, &doctor, true), None);
         assert_eq!(asks(dir.path(), "zsh"), 1);
         assert_eq!(
             fs::read_to_string(&zshrc).unwrap(),
@@ -3185,16 +3201,16 @@ mod tests {
             "zsh",
             &format!("echo /usr/bin:{}", bin.display()),
         );
-        assert_eq!(reach(&machine(&on), &yardr, &doctor), None);
+        assert_eq!(reach(&machine(&on), &yardr, &doctor, true), None);
         assert!(!zshrc.exists());
 
         // A shell that fails or takes too long has not said it is there.
         let failing = login_shell(dir.path(), "zsh", "exit 1");
-        assert!(reach(&machine(&failing), &yardr, &doctor).is_some());
+        assert!(reach(&machine(&failing), &yardr, &doctor, true).is_some());
 
         // A comment is no entry.
         fs::write(&zshrc, "# export PATH=$HOME/bin:$HOME/.local/bin:$PATH\n").unwrap();
-        assert!(reach(&machine(&zsh), &yardr, &doctor).is_some());
+        assert!(reach(&machine(&zsh), &yardr, &doctor, true).is_some());
         fs::remove_file(&zshrc).unwrap();
 
         // No program of setup's is in the directory: nothing to do, and the
@@ -3210,13 +3226,14 @@ mod tests {
             reach(
                 &machine(&zsh),
                 Path::new("/opt/yardr/bin/yardr"),
-                &elsewhere
+                &elsewhere,
+                true
             ),
             None
         );
         assert_eq!(asks(dir.path(), "zsh"), before);
         // Only the yardr is: it is the step's one program.
-        let alone = reach(&machine(&zsh), &yardr, &elsewhere).unwrap();
+        let alone = reach(&machine(&zsh), &yardr, &elsewhere, true).unwrap();
         assert_eq!(alone.named(), "yardr");
 
         // Doctor can name a found harness under its "a harness" item.
@@ -3228,7 +3245,7 @@ mod tests {
             ]}
         ]}))
         .unwrap();
-        let nested = reach(&machine(&zsh), &yardr, &nested).unwrap();
+        let nested = reach(&machine(&zsh), &yardr, &nested, true).unwrap();
         assert_eq!(nested.programs, ["yardr", "codex"]);
 
         // bash writes the file its terminal reads: on a Mac the first of a
@@ -3242,14 +3259,14 @@ mod tests {
             ".bashrc"
         });
         fs::write(&bash_file, "export PATH=\"$HOME/.local/bin:$PATH\"\n").unwrap();
-        assert_eq!(reach(&machine(&bash), &yardr, &doctor), None);
+        assert_eq!(reach(&machine(&bash), &yardr, &doctor, true), None);
         assert!(!home.join(".bash_profile").exists());
         fs::write(&bash_file, "alias ll='ls -l'\n").unwrap();
-        let step = reach(&machine(&bash), &yardr, &doctor).unwrap();
+        let step = reach(&machine(&bash), &yardr, &doctor, true).unwrap();
         assert_eq!(step.file, Some(bash_file));
         assert_eq!(step.add(), Ok(Added::Written));
         assert!(!home.join(".bash_profile").exists());
-        assert_eq!(reach(&machine(&bash), &yardr, &doctor), None);
+        assert_eq!(reach(&machine(&bash), &yardr, &doctor, true), None);
 
         // zsh keeps its files in ZDOTDIR where the environment says so.
         let moved = dir.path().join("dotfiles/zsh");
@@ -3260,11 +3277,35 @@ mod tests {
             },
             &yardr,
             &doctor,
+            true,
         )
         .unwrap();
         assert_eq!(step.file, Some(moved.join(".zshrc")));
         assert_eq!(step.add(), Ok(Added::Written));
         assert!(moved.join(".zshrc").exists() && !zshrc.exists());
+
+        // Off a Mac the login shell is not asked, and the file alone
+        // decides. Its PATH names the directory, as Debian's `~/.profile`
+        // makes a login shell's do while a terminal opened now has no such
+        // entry: the step is there, and nothing asked the shell. A line in
+        // the file ends it, as it does on a Mac. The shell has a folder of
+        // its own, since a shell's name is its kind and every zsh of this
+        // test would otherwise be the one script. (zsh, too: bash's file
+        // follows the system the test is built for, which it cannot change.)
+        let debian = dir.path().join("debian");
+        let named = login_shell(&debian, "zsh", &format!("echo /usr/bin:{}", bin.display()));
+        let step = reach(&machine(&named), &yardr, &doctor, false).unwrap();
+        assert_eq!(step.programs, ["yardr", "herdr", "claude"]);
+        assert_eq!(step.file, Some(zshrc.clone()));
+        assert_eq!(asks(&debian, "zsh"), 0);
+        assert_eq!(step.add(), Ok(Added::Written));
+        assert_eq!(reach(&machine(&named), &yardr, &doctor, false), None);
+        assert_eq!(asks(&debian, "zsh"), 0);
+        // On a Mac the same shell is believed: where the file names
+        // nothing there is no step either, and the shell was asked.
+        fs::remove_file(&zshrc).unwrap();
+        assert_eq!(reach(&machine(&named), &yardr, &doctor, true), None);
+        assert_eq!(asks(&debian, "zsh"), 1);
     }
 
     /// Only a page on the web is handed to the system's opener.

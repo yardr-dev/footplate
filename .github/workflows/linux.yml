@@ -9,6 +9,12 @@ name: linux
 
 on:
   workflow_dispatch:
+  # THROWAWAY (footplate-s6f1), taken out by the commit after the run.
+  # Dispatch needs the file on main, which this file has not reached, so the
+  # push itself runs it; the branch scope keeps it off every push but this
+  # bead's.
+  push:
+    branches: [yard/footplate-s6f1]
 
 permissions:
   contents: read

@@ -30997,7 +30997,9 @@ yardr.dev
 
     /// The Needs step looks again by itself: the countdown stands at the
     /// foot while something is missing, the check runs with no click, and
-    /// what arrived is said in words. herdr missing, then found.
+    /// what arrived is said in words. herdr missing, then found. Once all
+    /// is found nothing is scheduled, and a check that then fails looks
+    /// again all the same.
     #[cfg(unix)]
     #[gpui::test]
     fn the_needs_step_looks_again_by_itself_and_says_what_arrived(cx: &mut TestAppContext) {
@@ -31037,15 +31039,34 @@ yardr.dev
             setup_said(&view, cx) == "herdr is installed."
         });
 
-        // A failed re-check after the requirements were met leaves the last
-        // Doctor on screen, but it must still look again: that answer was
-        // unknown, not ready.
-        let mut ready = standin::doctor_other(&home);
-        ready["machine"][3]["any_of"][0]["found"] = json!(true);
+        // A check that fails while a ready doctor stands on screen leaves
+        // that doctor there, but it must still look again: the answer that
+        // failed was unknown, not ready. A ready doctor has no "check again"
+        // to click, so the failed check is run by the step, as the end of a
+        // fetch runs one.
+        let ready = standin::doctor_ready();
+        assert!(
+            serde_json::from_value::<setup::Doctor>(ready.clone())
+                .unwrap()
+                .ready(),
+            "the stand-in's ready answer must be ready for this part to mean anything"
+        );
         standin::answers(&program, "doctor", 0, &ready);
         click_on(cx, "setup check");
         at_step(&view, cx, Step::Needs);
+        // What arrived is what stands, and with all found nothing is
+        // scheduled: the ten seconds a first look waits pass and doctor is
+        // not asked. (`!drawn` cannot say the buttons are gone: this window
+        // drew them, and gpui keeps the bounds.)
+        assert_eq!(setup_said(&view, cx), "claude and codex are installed.");
         assert!(drawn(cx, "setup go on"));
+        let asked = standin::calls(&program).len();
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+        }
+        at_step(&view, cx, Step::Needs);
+        assert_eq!(standin::calls(&program).len(), asked);
 
         standin::answers(
             &program,
@@ -31053,11 +31074,18 @@ yardr.dev
             1,
             &json!({"error": "yardr doctor failed temporarily."}),
         );
-        let asked = standin::calls(&program).len();
-        click_on(cx, "setup check");
+        view.update(cx, |v, cx| {
+            v.first_run
+                .as_ref()
+                .unwrap()
+                .update(cx, |f, cx| f.check(cx))
+        });
         wait(cx, "the failed check and its countdown", |cx| {
             !setup_said(&view, cx).is_empty() && drawn(cx, "setup again")
         });
+        // Counted once the failure is said, so that the failed check's own
+        // call is not taken for the look that must follow it.
+        let asked = standin::calls(&program).len();
         for _ in 0..10 {
             cx.executor().advance_clock(Duration::from_secs(1));
             cx.run_until_parked();

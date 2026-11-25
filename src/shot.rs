@@ -5780,22 +5780,35 @@ mod tests {
         }
     }
 
-    /// Each shot script keeps the list of states served here, as
-    /// docs/building.md has it: a state that is not in a script's list is
-    /// refused there, as `weighty-mapping` was on the Mac.
+    /// The shot scripts take the states served here from `STATES` and keep
+    /// no list of their own: scripts/shot-states.sh reads each name of it,
+    /// so that a state is refused by neither script once it is added here,
+    /// as `weighty-mapping` was on the Mac while each kept a copy. A line of
+    /// the list that the read does not take, a trailing comment on it for
+    /// one, leaves its state out and fails this.
     #[test]
-    fn the_shot_scripts_list_the_states_served_here() {
+    fn the_shot_scripts_read_the_states_served_here() {
+        let read = std::process::Command::new("sh")
+            .args(["-c", r#". scripts/shot-states.sh; printf %s "$states""#])
+            .env("shot_rs", "src/shot.rs")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("sh runs");
+        assert!(
+            read.status.success(),
+            "{}",
+            String::from_utf8_lossy(&read.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&read.stdout), STATES.join(" "));
+
         for (name, script) in [
             ("shot-linux.sh", include_str!("../scripts/shot-linux.sh")),
             ("shot-mac.sh", include_str!("../scripts/shot-mac.sh")),
         ] {
-            let listed: Vec<&str> = script
-                .lines()
-                .find_map(|line| line.strip_prefix("states=\"")?.strip_suffix('"'))
-                .unwrap_or_else(|| panic!("{name} keeps no states list"))
-                .split(' ')
-                .collect();
-            assert_eq!(listed, STATES, "{name}");
+            assert!(
+                !script.lines().any(|line| line.starts_with("states=\"")),
+                "{name} keeps a list of states of its own"
+            );
         }
     }
 

@@ -507,9 +507,9 @@ that variable.
 
 To add one, serve it in `src/shot.rs` (`STATES` and `populate`, or a
 canned answer where no yard listens), cover it
-in that file's test, add its name to each shot script's list beside
-this one (`shot-linux.sh` and `shot-mac.sh` keep the same list),
-and shoot it: the picture is the proof.
+in that file's test, and shoot it: the picture is the proof. The shot
+scripts read the names from `STATES` (`scripts/shot-states.sh`), so they
+need no edit.
 
 Attach it to a note that names the short SHA of the commit it was shot from,
 passing the PNG path after `--file`, in the same shell command as the

@@ -649,11 +649,18 @@ impl Item {
         self.offers.iter().find(|offer| offer.for_yardmaster())
     }
 
-    /// The page its maker has for it, where doctor's hint names one: the
-    /// first `https://` address of it.
+    /// The page its maker has for it, where doctor's hint names one. A hint
+    /// that starts with a command ends in the page, as `(more: <page>)`
+    /// (herdr's `curl … | sh (more: https://herdr.dev)`), and the command's
+    /// own address is the installer script, which is no page to open: the
+    /// page is the first `https://` address from that tail on, and none if
+    /// the tail names none. Any other hint's page is the first `https://`
+    /// address in it. Either ends at whitespace, `)`, `,` or a quote.
     pub fn page(&self) -> Option<&str> {
+        const MORE: &str = "(more: ";
         let get = self.get.as_deref()?;
-        let page = &get[get.find("https://")?..];
+        let hint = get.find(MORE).map_or(get, |at| &get[at + MORE.len()..]);
+        let page = &hint[hint.find("https://")?..];
         let end = page
             .find(|c: char| c.is_whitespace() || matches!(c, ')' | ',' | '"' | '\''))
             .unwrap_or(page.len());
@@ -1746,14 +1753,18 @@ exit 0
     }
 
     /// Doctor's answer on a Mac with git and nothing else: herdr and two
-    /// harnesses can be fetched to `home`, one harness is by hand.
+    /// harnesses can be fetched to `home`, one harness is by hand. herdr's
+    /// `get` and `command` are yardr's words for them (docs/doctor.md of the
+    /// yardr repository, "A program fetched"): the command first, then
+    /// herdr's page.
     pub fn doctor_bare(home: &Path) -> serde_json::Value {
         let bin = home.join(".local/bin");
         serde_json::json!({
             "home": home.join(".yardr"), "yard": false, "tried": false,
             "machine": [
                 {"program": "herdr", "for": "it starts every agent in a pane of its own", "found": false,
-                 "get": "https://herdr.dev",
+                 "get": "curl -fsSL https://herdr.dev/install.sh | sh (more: https://herdr.dev)",
+                 "command": "curl -fsSL https://herdr.dev/install.sh | sh",
                  "fetch": {"version": "0.9.4", "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.4/herdr-macos-aarch64",
                            "sha256": "00", "size": 1, "path": bin.join("herdr"),
                            "verified": {"from": "https://herdr.dev/docs/install/", "on": "2026-10-13"}}},
@@ -1960,6 +1971,33 @@ mod tests {
         let claude = doctor.item("claude").unwrap();
         assert_eq!(claude.page(), Some("https://claude.com/claude-code"));
         assert!(claude.harness_login);
+
+        // These hints name pages the same way as the rows above, or name
+        // none; keep the edge cases beside the real doctor answers.
+        for (get, page) in [
+            // git: its page, then a note.
+            (
+                Some("https://git-scm.com/downloads (on macOS: xcode-select --install)"),
+                Some("https://git-scm.com/downloads"),
+            ),
+            // The line that stands for the harnesses, and a hint that is none.
+            (
+                Some("install one of the agents herdr starts (claude, codex, ...)"),
+                None,
+            ),
+            (None, None),
+            // A tail with no address leaves none, not the installer's.
+            (
+                Some("curl -fsSL https://herdr.dev/install.sh | sh (more: its site)"),
+                None,
+            ),
+        ] {
+            let item = Item {
+                get: get.map(str::to_string),
+                ..Item::default()
+            };
+            assert_eq!(item.page(), page, "{get:?}");
+        }
 
         // A PATH that has them already is left as it is, and doctor asked
         // once. Nor does it lose what it has once doctor finds the

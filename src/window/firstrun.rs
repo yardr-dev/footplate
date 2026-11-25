@@ -566,8 +566,9 @@ impl FirstRun {
 
     /// Step 1: what the machine has, as doctor says it. The automatic
     /// re-check stops: this check looks now, and what follows it is
-    /// scheduled anew.
-    fn check(&mut self, cx: &mut Context<Self>) {
+    /// scheduled anew. The window's tests call it where no button does: a
+    /// ready doctor has no "check again".
+    pub(super) fn check(&mut self, cx: &mut Context<Self>) {
         let Some(mut yardr) = self.yardr.clone() else {
             return;
         };

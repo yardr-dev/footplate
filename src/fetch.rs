@@ -1670,6 +1670,29 @@ mod tests {
         assert_eq!(machine.login_path(), None);
     }
 
+    /// Whether the process `pid` is gone but not reaped: a zombie, which
+    /// `kill(pid, 0)` still finds. On Linux the state is the field of
+    /// `/proc/<pid>/stat` after the command's name, which stands in
+    /// parentheses and may hold spaces and `)`, so it is read after the last
+    /// one. A stat that cannot be read is a process that is gone.
+    #[cfg(target_os = "linux")]
+    fn zombie(pid: i32) -> bool {
+        let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return true;
+        };
+        let state = stat
+            .rfind(')')
+            .and_then(|end| stat[end + 1..].trim_start().chars().next());
+        matches!(state, Some('Z' | 'X'))
+    }
+
+    /// Elsewhere (macOS) what a killed group leaves is reaped at once, so
+    /// `kill(pid, 0)` says it all.
+    #[cfg(not(target_os = "linux"))]
+    fn zombie(_: i32) -> bool {
+        false
+    }
+
     /// A shell that hangs is stopped at the timeout with what it started,
     /// and the lookup goes on to say there is none.
     #[test]
@@ -1694,8 +1717,10 @@ mod tests {
         // before its echo line; what it had started died in its killed group.
         if let Ok(line) = fs::read_to_string(&pid) {
             let sleep: i32 = line.trim().parse().unwrap();
+            // In a container with no init the killed `sleep` stays a zombie
+            // under PID 1, and `kill(pid, 0)` still finds it.
             // SAFETY: signal 0 only asks whether the process is there.
-            let alive = || unsafe { libc::kill(sleep, 0) } == 0;
+            let alive = || unsafe { libc::kill(sleep, 0) } == 0 && !zombie(sleep);
             let stopped = Instant::now();
             while alive() && stopped.elapsed() < Duration::from_secs(10) {
                 thread::sleep(Duration::from_millis(10));

@@ -18255,6 +18255,105 @@ yardr.dev
         assert!(drawn(cx, "context stage saved"));
     }
 
+    /// Where the yard says a store flow reads other than the repository's
+    /// file it stands in front of, a stage's file section says so under its
+    /// source line, in the Line window and in the context drawer, which draw
+    /// the one section: on the stage whose file differs, and on a stage
+    /// whose own file does not, for the flow. A flow the yard sends no key
+    /// for has no such line. A window keeps the selector of what it has
+    /// drawn, so each check names a selector the window has not drawn
+    /// before: the Line window's stages have one each, and the drawer opens
+    /// on the flow with no key before the drawer has drawn any line.
+    #[gpui::test]
+    fn a_stage_file_says_where_its_store_flow_differs_from_the_repository(cx: &mut TestAppContext) {
+        let file = |dir: &str, stage: &str| {
+            stage_file_read(
+                &format!("/home/jo/.yardr/flows/{dir}/{stage}.md"),
+                "Do it.\n",
+                "",
+                "",
+            )
+        };
+        // The yard sends the key where something differs and no key where
+        // nothing does: here the flow and its first stage, whose file was
+        // edited after the copy, and no key on the second stage.
+        let mut drifted = stage_flow(
+            "default",
+            "",
+            "store",
+            &[
+                ("new", Some(file("default", "new"))),
+                ("review", Some(file("default", "review"))),
+            ],
+        );
+        drifted["differs_from_repo"] = true.into();
+        drifted["stages"][0]["differs_from_repo"] = true.into();
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Flows", &stage_file_flows());
+        yard.answer_for(
+            "Line",
+            "depot",
+            "yardr",
+            &json!({"result": {"depot": "yardr", "kind": "git", "flows": [drifted],
+              "crew": []}})
+            .to_string(),
+        );
+        yard.answer_for(
+            "Line",
+            "depot",
+            "notes",
+            &json!({"result": {"depot": "notes", "kind": "git", "flows": [
+                stage_flow("main", "", "store", &[("inbox", Some(file("main", "inbox")))])],
+              "crew": []}})
+            .to_string(),
+        );
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1440.), px(2400.)));
+        to_timetable(&view, cx);
+
+        // The Line window, a stage at a time: the one whose file differs
+        // and the one that stands in a flow that differs.
+        view.update_in(cx, |v, window, cx| {
+            v.select(Selected::Line("yardr".into()), window, cx)
+        });
+        wait(cx, "the depot's line", |cx| drawn(cx, "flow head yardr"));
+        click_on(cx, "line window open yardr");
+        wait(cx, "the first stage's line", |cx| {
+            drawn(cx, "line stagefile new drift")
+        });
+        click_on(cx, "line stage default review");
+        wait(cx, "the second stage's line", |cx| {
+            drawn(cx, "line stagefile review drift")
+        });
+
+        // The drawer on a flow with no key says where the text comes from
+        // and no more; on the drifted flow it says so.
+        view.update(cx, |v, cx| {
+            v.open_context(
+                "notes".into(),
+                "main".into(),
+                String::new(),
+                "inbox".into(),
+                cx,
+            )
+        });
+        wait(cx, "the drawer", |cx| drawn(cx, "context stage source"));
+        assert!(!drawn(cx, "context stage drift"));
+        view.update(cx, |v, cx| {
+            v.open_context(
+                "yardr".into(),
+                "default".into(),
+                String::new(),
+                "new".into(),
+                cx,
+            )
+        });
+        wait(cx, "the drawer's line", |cx| {
+            drawn(cx, "context stage drift")
+        });
+    }
+
     /// A press on a station opens the stage's context drawer; a press
     /// on Context opens a crew member's. Their Line reads, tabs, and
     /// hand-off are checked here. At 960 the drawer stands over the

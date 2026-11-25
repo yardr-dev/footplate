@@ -2232,7 +2232,11 @@ impl Footplate {
     /// drawer before any edit, with the file's words and controls);
     /// `line-stage-copy` stands on the repository's flow, where its stage
     /// file offers to be copied into the yard, and `line-stage-copying` has
-    /// that copy's confirmation open. Once; a debug build's alone.
+    /// that copy's confirmation open. The drift shots stand on a store flow
+    /// at the stage file's section: `line-stage-copied` as the copy left it,
+    /// `line-stage-drift` at the stage whose file was edited since, and
+    /// `line-stage-drift-flow` at the one whose file was not, which says the
+    /// flow differs. Once; a debug build's alone.
     pub(crate) fn shot_line_window(&mut self, cx: &mut Context<Self>) {
         let shot = std::env::var("FOOTPLATE_SHOT").unwrap_or_default();
         if !matches!(
@@ -2245,6 +2249,9 @@ impl Footplate {
                 | "line-stage-review"
                 | "line-stage-copy"
                 | "line-stage-copying"
+                | "line-stage-copied"
+                | "line-stage-drift"
+                | "line-stage-drift-flow"
         ) || self.line_edit.is_some()
             || self.line_sent.is_some()
             || self.stage_edit.is_some()
@@ -2318,6 +2325,19 @@ impl Footplate {
                         self.ask_copy_flow(at, key, true, window, cx);
                     }
                 }
+                self.decision.scroll_to_bottom();
+                cx.notify();
+                return;
+            }
+            "line-stage-copied" | "line-stage-drift" | "line-stage-drift-flow" => {
+                // The depot's one flow is the window's pick: only its stage
+                // is chosen, and the section stands at the foot of the
+                // detail.
+                self.line_stage = match shot {
+                    "line-stage-drift-flow" => "review",
+                    _ => "new",
+                }
+                .to_string();
                 self.decision.scroll_to_bottom();
                 cx.notify();
                 return;

@@ -316,12 +316,17 @@ editor stands.
 The Stage tab, and the Line window's stage file under its own head, share
 one section for where the text comes from and what can be done with it
 (`stagefile.rs`). Each line is quiet in the meta role (the Line window's
-small text) except the yard's warning of a broken `## Ask`, which stands
+small text) except two. The yard's warning of a broken `## Ask` stands
 first, right under the file line, in `warn`: its words are the yard's.
 Then one line says where the text comes from (`store flow`, `from pack X:
 you change the yard's copy, applying the pack again keeps it`, `from
 repository (repo@abcdef0): copy this flow into the yard before editing its
-stages`), then the controls as small buttons, 32 high with the strong
+stages`). Where the yard says the store flow differs from the
+repository's, one line more follows it, in the accent text colour and
+never in `warn`, since a difference is no error (`differs from the
+repository's file: …` on the stage whose file differs, `this flow
+differs from the repository's: …` on any other stage of the flow). Then
+the controls as small buttons, 32 high with the strong
 edge: Edit, or Add stage file where none stands, and Restore prior text…
 where the yard kept the text before the last save; Copy flow into yard…
 in place of them on a repository's stage. While the editor stands over

@@ -1477,6 +1477,27 @@ impl Footplate {
                         });
                         effects.extend(model.open_context("yardr", "managed", "", "new"));
                     }
+                    // The drift drawer's shot opens it on the store flow at
+                    // new, on its Stage tab, as above: the file there was
+                    // edited after the flow was copied from the repository.
+                    // A debug build's alone, as above.
+                    #[cfg(debug_assertions)]
+                    if std::env::var("FOOTPLATE_SHOT").as_deref() == Ok("line-stage-drift-drawer") {
+                        self.context = Some(super::context::ContextOpen {
+                            subject: crate::model::ContextSubject::Stage {
+                                depot: "yardr".into(),
+                                flow: "default".into(),
+                                flow_type: "".into(),
+                                stage: "new".into(),
+                            },
+                            tab: super::context::ContextTab::Stage,
+                            served_open: false,
+                            stage_whole: false,
+                            prompt_whole: false,
+                            role_whole: false,
+                        });
+                        effects.extend(model.open_context("yardr", "default", "", "new"));
+                    }
                     // The served shot opens the drawer on yardr's
                     // default flow at new, as above, on its Group tab
                     // with the serving picker open and a group marked,
@@ -7670,7 +7691,11 @@ fn shot_selected() -> Option<Selected> {
         | Ok("line-stage-edit")
         | Ok("line-stage-review")
         | Ok("line-stage-copy")
-        | Ok("line-stage-copying") => {
+        | Ok("line-stage-copying")
+        | Ok("line-stage-copied")
+        | Ok("line-stage-drift")
+        | Ok("line-stage-drift-flow")
+        | Ok("line-stage-drift-drawer") => {
             return Some(Selected::LineWindow("yardr".into()));
         }
         Ok("grants") => return Some(Selected::Grants),

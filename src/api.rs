@@ -584,6 +584,9 @@ pub struct LineFlow {
     /// empty on any other flow.
     #[serde(default)]
     pub directory: String,
+    /// The store flow reads other than the repository's, as both stand now.
+    #[serde(default)]
+    pub differs_from_repo: bool,
     /// Beads stranded in this flow at stages it no longer has.
     #[serde(default, deserialize_with = "or_default")]
     pub warnings: Vec<String>,
@@ -616,6 +619,9 @@ pub struct LineStage {
     pub warnings: Vec<String>,
     #[serde(default)]
     pub stage_file: Option<LineStageFile>,
+    /// The stage's file, or its lack of one, reads other than the repository's.
+    #[serde(default)]
+    pub differs_from_repo: bool,
 }
 
 /// How work in a stage can end, as the flow offers it.
@@ -10340,6 +10346,12 @@ mod tests {
                  "other_routes": [], "open": 0,
                  "stage_file": {"path": ".yardr/flows/default/run.md", "text": "Run it.\n"}},
                 {"stage": "merged", "next": [], "terminal": true, "other_routes": [], "open": 0}
+              ]},
+              {"name": "yardr.bug", "type": "bug", "source": "store", "differs_from_repo": true, "stages": [
+                {"stage": "triage", "next": ["fixed"], "terminal": false, "other_routes": [], "open": 0,
+                 "stage_file": {"path": "/home/jo/.yardr/flows/yardr.bug/triage.md", "text": "Find the cause.\n"},
+                 "differs_from_repo": true},
+                {"stage": "fixed", "next": [], "terminal": true, "other_routes": [], "open": 0}
               ]}],
             "crew": [{"name": "yardmaster", "prompt": {"path": "/home/jo/.yardr/roles/yardmaster.md", "source": "file", "found": "/home/jo/.yardr/roles/yardmaster.md", "text": "Mind the yard.\n", "carriable": true}},
                      {"name": "signalman"}]}}"#,
@@ -10401,6 +10413,17 @@ mod tests {
             "Weekly<80"
         );
         assert!(line.flows[0].stages[2].terminal);
+        // A store flow that reads other than the repository's file says so
+        // on the flow and on the stage whose file differs. Where the key is
+        // absent (a repository flow, a stage that does not differ, a yard
+        // from before the field) it reads false.
+        let drifted = &line.flows[1];
+        assert_eq!(drifted.source, "store");
+        assert!(drifted.differs_from_repo);
+        assert!(drifted.stages[0].differs_from_repo);
+        assert!(!drifted.stages[1].differs_from_repo);
+        assert!(!line.flows[0].differs_from_repo);
+        assert!(line.flows[0].stages.iter().all(|s| !s.differs_from_repo));
         assert_eq!(
             line.crew[0].prompt.as_ref().unwrap().text,
             "Mind the yard.\n"

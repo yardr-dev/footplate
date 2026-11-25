@@ -672,6 +672,14 @@ its copy in the Line window and in the drawer, reads the line again, and
 the stage edits in place. A line under the stage names each copy with the
 command that goes back to the repository's.
 
+Where the yard says a store flow differs from the repository's file, the
+section says so in the accent colour, under the line that says where the
+text comes from, for the stage whose file differs and, on the others, for
+the flow as a whole. It does not say which side changed, since the yard
+compares both as they stand now and keeps no record of what a copy was
+made from. Switching back or copying again is yours to do in the yard, and
+this window offers neither.
+
 ### Choosing what serves a stage
 
 Under the Rule line it edits, and under each rule of Other rules,

@@ -255,6 +255,10 @@ pub const STATES: &[&str] = &[
     "line-stage-review",
     "line-stage-copy",
     "line-stage-copying",
+    "line-stage-copied",
+    "line-stage-drift",
+    "line-stage-drift-flow",
+    "line-stage-drift-drawer",
     "old-lines",
     "grants",
     "pairing",
@@ -1551,6 +1555,23 @@ fn populate(yard: &Yard, state: &str) {
                 .to_string(),
             );
         }
+        // The drift shots read yardr's depot as one store flow whose
+        // stage files the repository holds too: just as `yardr flow
+        // copy-repo` leaves it, or after a stage's file was edited.
+        if matches!(
+            state,
+            "line-stage-copied"
+                | "line-stage-drift"
+                | "line-stage-drift-flow"
+                | "line-stage-drift-drawer"
+        ) {
+            yard.answer_for(
+                "Line",
+                "depot",
+                "yardr",
+                &line_drift(state != "line-stage-copied"),
+            );
+        }
         // The drawer's depot reads the same way: footplate's default
         // flow at new, with its stage file, its serving group and the
         // group's prompt, and review standing unserved.
@@ -1670,6 +1691,10 @@ fn populate(yard: &Yard, state: &str) {
         | "line-stage-review"
         | "line-stage-copy"
         | "line-stage-copying"
+        | "line-stage-copied"
+        | "line-stage-drift"
+        | "line-stage-drift-flow"
+        | "line-stage-drift-drawer"
         | "old-lines"
         | "switcher"
         | "switcher-shut"
@@ -3856,6 +3881,39 @@ fn crew_prime() -> String {
     .to_string()
 }
 
+/// The `Line` answer of the drift shots: yardr's depot as one store flow,
+/// `default`, whose stage files the repository's flow of that name holds
+/// too, in the shape the yard answers with. Right after `yardr flow
+/// copy-repo` (`edited` false) it carries no key, the files being the
+/// repository's as copied. After the first stage's file was edited
+/// (`edited`) the flow and that stage carry `differs_from_repo`, and its
+/// file has the text it was saved over beside the new one; `review` stays as
+/// the repository has it, so only the flow's key tells of it.
+fn line_drift(edited: bool) -> String {
+    let copied = "A new bead waits here until someone has read it and shaped it.\n\nOutcomes: `done` → review\n";
+    let saved = "A new bead waits here until someone has read it and shaped it.\n\nCheck that it names a depot and a goal before it moves on.\n\nOutcomes: `done` → review\n";
+    let review = "A reviewer reads the change against the bead's goal.\n\nOutcomes: `done` → merged · `changes` → new\n";
+    let mut flow = json!({"name": "default", "type": "", "source": "store", "stages": [
+        {"stage": "new", "next": ["review"], "outcomes": [{"name": "done", "to": "review"}],
+         "terminal": false, "other_routes": [], "open": 0,
+         "stage_file": {"path": "/home/jo/.yardr/flows/default/new.md",
+           "text": copied, "digest": crate::fake::digest(copied)}},
+        {"stage": "review", "next": ["merged"], "outcomes": [{"name": "done", "to": "merged"}],
+         "terminal": false, "other_routes": [], "open": 0,
+         "stage_file": {"path": "/home/jo/.yardr/flows/default/review.md",
+           "text": review, "digest": crate::fake::digest(review)}},
+        {"stage": "merged", "next": [], "terminal": true, "other_routes": [], "open": 0}]});
+    if edited {
+        flow["differs_from_repo"] = json!(true);
+        let new = &mut flow["stages"][0];
+        new["differs_from_repo"] = json!(true);
+        new["stage_file"] = json!({"path": "/home/jo/.yardr/flows/default/new.md",
+            "text": saved, "digest": crate::fake::digest(saved),
+            "prior_text": copied, "prior_digest": crate::fake::digest(copied)});
+    }
+    json!({"result": {"depot": "yardr", "kind": "git", "flows": [flow], "crew": []}}).to_string()
+}
+
 fn flows_frame() -> String {
     json!({"result": {
         "travelling": 1,
@@ -5789,6 +5847,42 @@ mod tests {
                     assert_eq!(
                         repo.stages[0].stage_file.as_ref().unwrap().path,
                         ".yardr/flows/default/new.md",
+                        "{state}"
+                    );
+                }
+                "line-stage-copied"
+                | "line-stage-drift"
+                | "line-stage-drift-flow"
+                | "line-stage-drift-drawer" => {
+                    // One store flow, read as the yard answers just after
+                    // `flow copy-repo` (no key anywhere) or after its first
+                    // stage's file was edited: the key stands on the flow and
+                    // on that stage alone, so the section says it of the
+                    // stage there and of the flow on `review`, and nothing on
+                    // the flow just copied.
+                    let line = yard.client().line("yardr").unwrap();
+                    assert_eq!(line.flows.len(), 1, "{state}");
+                    let flow = &line.flows[0];
+                    assert_eq!(flow.source, "store", "{state}");
+                    let edited = *state != "line-stage-copied";
+                    assert_eq!(flow.differs_from_repo, edited, "{state}");
+                    assert_eq!(flow.stages[0].differs_from_repo, edited, "{state}");
+                    assert!(!flow.stages[1].differs_from_repo, "{state}");
+                    for stage in &flow.stages[..2] {
+                        assert_eq!(
+                            crate::model::line_drift_words(flow, stage).is_some(),
+                            edited,
+                            "{state}"
+                        );
+                    }
+                    // Both files are the yard's own, so a card can edit
+                    // them; the edited one has the text it was saved over.
+                    let new = flow.stages[0].stage_file.as_ref().unwrap();
+                    assert_eq!(new.digest.len(), 64, "{state}");
+                    assert_eq!(!new.prior_text.is_empty(), edited, "{state}");
+                    assert_eq!(
+                        flow.stages[1].stage_file.as_ref().unwrap().digest.len(),
+                        64,
                         "{state}"
                     );
                 }

@@ -178,9 +178,11 @@ The window, its state and the yard:
   - `src/window/stagefile.rs`: a stage file edited in place, which the
     Line window's stage detail and the context drawer's Stage tab both
     draw: where its text comes from (`model::line_stage_source`), the
-    yard's warning of a broken `## Ask` in warn, and the controls that
-    follow (Edit or Add stage file, Restore prior text…, or Copy flow into
-    yard… on a repository flow, which is not edited here). The one
+    yard's warning of a broken `## Ask` in warn, where the yard says a
+    store flow differs from the repository's a line saying so in the
+    accent text (`model::line_drift_words`), and the controls that follow
+    (Edit or Add stage file, Restore prior text…, or Copy flow into yard…
+    on a repository flow, which is not edited here). The one
     `StageEdit` on `Footplate` is the editor with its two steps: the text
     typed, and the review (`model::line_diff`) where Confirm save passes
     the weighty gate (`Footplate::unlock_then`, or the stage's name typed
@@ -240,9 +242,11 @@ The window, its state and the yard:
   is judged by a stamp of its own (`Read::Decided`): a whole read takes
   seconds, and an open read made after it answers first. The rules of a
   stage file's section are plain functions here too: where a flow's stage
-  files come from and whether they edit in place (`StageSource`), whether
-  a file moved under an editor (`line_stage_file_moved`), and the line
-  diff the review shows (`line_diff`, `line_diff_rows`). So are the rules of
+  files come from and whether they edit in place (`StageSource`), where
+  the yard says the store flow differs from the repository's
+  (`line_drift_words`), whether a file moved under an editor
+  (`line_stage_file_moved`), and the line diff the review shows
+  (`line_diff`, `line_diff_rows`). So are the rules of
   a stranger's text the operator reads: a body's lines and text through
   `letters` (`message`), where it folds (`fold`), and which card or
   delivery is asked for when (`Model::held_wanted`, once for each `held`

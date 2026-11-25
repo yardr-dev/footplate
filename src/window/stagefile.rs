@@ -804,15 +804,17 @@ impl Footplate {
 
     /// Where a stage's text comes from and what can be done with it: the
     /// yard's warning of its `## Ask`, where it has one, in warn; the
-    /// provenance line, the controls that follow from it — Edit, or Add
-    /// stage file where none stands, and Restore prior text… where the yard
-    /// kept the text before the last save, on a flow of the yard's store or
-    /// a pack's; Copy flow into yard… on a repository's, which is not
-    /// edited here — with the copy's confirmation under them where it
-    /// stands, and what the last save or copy left. `selector` is where the
-    /// section's parts are found, and `drawer` the text size of the surface
-    /// it stands on. The Line window and the context drawer draw it alike,
-    /// each over its own head and text.
+    /// provenance line; where the yard says the store flow differs from the
+    /// repository's, a line saying so; the controls that follow from the
+    /// provenance — Edit, or Add stage file where none stands, and Restore
+    /// prior text… where the yard kept the text before the last save, on a
+    /// flow of the yard's store or a pack's; Copy flow into yard… on a
+    /// repository's, which is not edited here — with the copy's
+    /// confirmation under them where it stands, and what the last save or
+    /// copy left. `selector` is where the section's parts are found, and
+    /// `drawer` the text size of the surface it stands on. The Line window
+    /// and the context drawer draw it alike, each over its own head and
+    /// text.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn stage_file_source(
         &self,
@@ -855,6 +857,19 @@ impl Footplate {
             section.push(
                 Self::stage_words(words, format!("{selector} source"), palette.faint, drawer)
                     .into_any_element(),
+            );
+        }
+        // In the accent text and not in warn: a difference is no error, and
+        // the line offers nothing to do about it here.
+        if let Some(words) = model::line_drift_words(flow, stage) {
+            section.push(
+                Self::stage_words(
+                    words,
+                    format!("{selector} drift"),
+                    palette.text_accent,
+                    drawer,
+                )
+                .into_any_element(),
             );
         }
         let editing = self.stage_edit_at(at).is_some();

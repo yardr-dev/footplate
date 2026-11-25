@@ -9674,6 +9674,28 @@ impl StageSource {
     }
 }
 
+/// What a stage's file section says where the yard says the store flow
+/// reads other than the repository's file it stands in front of: the
+/// stage's own file differs, or the flow does for a reason this stage's file
+/// is not (its stages, its moves, another stage's file). The yard compares
+/// both as they stand now and keeps nothing of what a copy was made from, so
+/// neither line says which side changed. None where nothing differs.
+pub fn line_drift_words(flow: &LineFlow, stage: &LineStage) -> Option<String> {
+    if stage.differs_from_repo {
+        Some(
+            "differs from the repository's file: compared as both stand now, so this does not say which side changed"
+                .to_string(),
+        )
+    } else if flow.differs_from_repo {
+        Some(
+            "this flow differs from the repository's: its stages, its moves or another stage's file"
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
 /// Whether the stage file an editor was opened over is another now, or
 /// gone: `over` is the digest the read named when the editor opened
 /// (`none` where the stage had no file) and `now` the stage as the line
@@ -17699,7 +17721,9 @@ mod tests {
 
     /// A stage's file says where its text comes from in words of the
     /// flow's source, and offers an edit only where the yard's store holds
-    /// it; and an editor over a file knows when the file moved under it.
+    /// it; it says too where the yard finds the store flow other than the
+    /// repository's, of the stage or of the flow; and an editor over a file
+    /// knows when the file moved under it.
     #[test]
     fn a_stage_file_says_where_it_comes_from_and_whether_it_moved() {
         let flow = |source: &str| LineFlow {
@@ -17751,6 +17775,32 @@ mod tests {
             )
         );
         assert_eq!(source("somewhere else").words(), None);
+
+        // Where the yard says the store flow differs from the repository's,
+        // the stage's own words are the stage's, even where it has no file
+        // (the repository has one); a stage that does not differ says the
+        // flow does; and where nothing differs there are no words.
+        let drift = |flow_differs: bool, stage_differs: bool| {
+            line_drift_words(
+                &LineFlow {
+                    differs_from_repo: flow_differs,
+                    ..flow("store")
+                },
+                &LineStage {
+                    stage: "new".into(),
+                    differs_from_repo: stage_differs,
+                    ..Default::default()
+                },
+            )
+        };
+        let (stage_words, flow_words) = (
+            "differs from the repository's file: compared as both stand now, so this does not say which side changed",
+            "this flow differs from the repository's: its stages, its moves or another stage's file",
+        );
+        assert_eq!(drift(true, true).as_deref(), Some(stage_words));
+        assert_eq!(drift(false, true).as_deref(), Some(stage_words));
+        assert_eq!(drift(true, false).as_deref(), Some(flow_words));
+        assert_eq!(drift(false, false), None);
 
         // An editor over a digest: the stage as the line reads it now
         // says whether the file is that one still. `none` is no file.

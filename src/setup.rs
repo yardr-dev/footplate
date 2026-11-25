@@ -820,13 +820,15 @@ pub fn path_line(shell: Option<Shell>) -> &'static str {
 /// files that is there and no other, so a `.bash_profile` made beside a
 /// `.profile` would hide the `.profile`: the first that is there is the
 /// file, and `.bash_profile` where none is, the one Terminal's login shells
-/// read.
+/// read. Off macOS a terminal's bash is not a login shell and reads
+/// `.bashrc`.
 pub fn startup_file(shell: Shell, home: &Path, zdotdir: Option<&Path>) -> PathBuf {
     match shell {
         Shell::Zsh => zdotdir
             .filter(|dir| !dir.as_os_str().is_empty())
             .unwrap_or(home)
             .join(".zshrc"),
+        Shell::Bash if !cfg!(target_os = "macos") => home.join(".bashrc"),
         Shell::Bash => [".bash_profile", ".bash_login", ".profile"]
             .map(|name| home.join(name))
             .into_iter()
@@ -2845,9 +2847,9 @@ mod tests {
 
     /// A shell is known by its program's name, and has the file a terminal
     /// reads it from and the line its syntax wants. zsh's file follows
-    /// `ZDOTDIR`; a login bash reads the first of three files, so the
-    /// first that is there is its file; any other shell has none, and is
-    /// never given one by a guess.
+    /// `ZDOTDIR`; a Mac's login bash reads the first of three files, so the
+    /// first that is there is its file, and off a Mac bash's is `.bashrc`;
+    /// any other shell has none, and is never given one by a guess.
     #[test]
     fn a_shell_has_the_file_and_the_line_that_are_its_own() {
         let dir = tempfile::tempdir().unwrap();
@@ -2891,17 +2893,32 @@ mod tests {
             home.join(".config/fish/config.fish")
         );
 
-        assert_eq!(
-            startup_file(Shell::Bash, home, None),
-            home.join(".bash_profile")
-        );
-        for (made, file) in [
-            (".profile", ".profile"),
-            (".bash_login", ".bash_login"),
-            (".bash_profile", ".bash_profile"),
-        ] {
-            fs::write(home.join(made), "").unwrap();
-            assert_eq!(startup_file(Shell::Bash, home, None), home.join(file));
+        // A Mac's Terminal opens login shells: the first of three files that
+        // is there.
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                startup_file(Shell::Bash, home, None),
+                home.join(".bash_profile")
+            );
+            for (made, file) in [
+                (".profile", ".profile"),
+                (".bash_login", ".bash_login"),
+                (".bash_profile", ".bash_profile"),
+            ] {
+                fs::write(home.join(made), "").unwrap();
+                assert_eq!(startup_file(Shell::Bash, home, None), home.join(file));
+            }
+        }
+        // Any other terminal's bash is no login shell: it reads `.bashrc`,
+        // whether or not that file or the three a login bash reads are there.
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(startup_file(Shell::Bash, home, None), home.join(".bashrc"));
+            for made in [".profile", ".bash_login", ".bash_profile", ".bashrc"] {
+                fs::write(home.join(made), "").unwrap();
+                assert_eq!(startup_file(Shell::Bash, home, None), home.join(".bashrc"));
+            }
         }
     }
 
@@ -3214,19 +3231,22 @@ mod tests {
         let nested = reach(&machine(&zsh), &yardr, &nested).unwrap();
         assert_eq!(nested.programs, ["yardr", "codex"]);
 
-        // bash writes the file a login bash reads: a `.profile` that names
-        // it makes no step, and no `.bash_profile` is made to hide it.
+        // bash writes the file its terminal reads: on a Mac the first of a
+        // login bash's three that is there (`.profile`, here), anywhere else
+        // `.bashrc`. A line in it makes no step, and no `.bash_profile` is
+        // made to hide it.
         let bash = login_shell(dir.path(), "bash", "echo /usr/bin:/bin");
-        fs::write(
-            home.join(".profile"),
-            "export PATH=\"$HOME/.local/bin:$PATH\"\n",
-        )
-        .unwrap();
+        let bash_file = home.join(if cfg!(target_os = "macos") {
+            ".profile"
+        } else {
+            ".bashrc"
+        });
+        fs::write(&bash_file, "export PATH=\"$HOME/.local/bin:$PATH\"\n").unwrap();
         assert_eq!(reach(&machine(&bash), &yardr, &doctor), None);
         assert!(!home.join(".bash_profile").exists());
-        fs::write(home.join(".profile"), "alias ll='ls -l'\n").unwrap();
+        fs::write(&bash_file, "alias ll='ls -l'\n").unwrap();
         let step = reach(&machine(&bash), &yardr, &doctor).unwrap();
-        assert_eq!(step.file, Some(home.join(".profile")));
+        assert_eq!(step.file, Some(bash_file));
         assert_eq!(step.add(), Ok(Added::Written));
         assert!(!home.join(".bash_profile").exists());
         assert_eq!(reach(&machine(&bash), &yardr, &doctor), None);

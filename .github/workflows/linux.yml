@@ -23,9 +23,9 @@ env:
 
 defaults:
   run:
-    # Bash stops at the first command that fails, and with pipefail a curl
-    # that fails does not hand rustup's installer an empty script, which
-    # would end well and leave no cargo.
+    # Bash stops at the first command that fails, and pipefail makes a pipe
+    # count: a curl that fails fails the step, where rustup's installer would
+    # have read nothing, ended well and left no cargo.
     shell: bash
 
 jobs:
@@ -39,8 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The list of linux_provision in scripts/linux-container.sh, which it
-      # must match: a package the release needs is one this run needs.
+      # The packages of linux_provision in scripts/linux-container.sh. The
+      # two lists must match: a package the release build needs is one this
+      # run needs.
       - name: Packages
         run: |
           apt-get update -qq
@@ -49,8 +50,8 @@ jobs:
             libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libxcb1-dev libx11-dev libvulkan-dev libasound2-dev
 
-      # The edition is 2024, which wants a newer Rust than the image has: none.
-      # Rustup installs as linux_provision does, and the steps after this one
+      # The image has no Rust, and the edition is 2024: rustup installs the
+      # current stable as linux_provision does, and the steps after this one
       # find cargo through GITHUB_PATH.
       - name: Rust
         run: |

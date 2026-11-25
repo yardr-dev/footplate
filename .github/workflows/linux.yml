@@ -37,10 +37,17 @@ defaults:
 jobs:
   linux:
     runs-on: ubuntu-latest
-    # The release is built in debian:13 (linux_provision), so this is too. The
-    # image has no git: the checkout is then downloaded as an archive, which
-    # is all the build and the tests need of it.
-    container: debian:13
+    # The release is built in debian:13, in a container linux_provision starts
+    # with --init, so this is too. The runner's own has tail as PID 1, which
+    # reaps nothing: a process that is killed after its parent died stays a
+    # zombie, and kill(pid, 0) still finds it. fetch's test of a hung login
+    # shell failed on that.
+    #
+    # The image has no git: the checkout is downloaded as an archive, which is
+    # all the build and the tests need of it.
+    container:
+      image: debian:13
+      options: --init
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

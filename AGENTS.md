@@ -18,7 +18,8 @@ else), `scripts/` release, screenshot and shell-test helpers, `assets/`
 icons, the Linux polkit action and the Linux desktop entry, `docs/` the manual
 and `docs/design/` decision notes, `.yardr/` the yard's gate, `.github/` the
 Windows jobs (build and test, which the gate does not try, and the release's
-Windows zip), `spikes/` throwaway programs that try a provider or a dependency
+Windows zip) and the Linux job (build and test, which the gate does not try
+either), `spikes/` throwaway programs that try a provider or a dependency
 before the product takes it, each its own cargo package and its own workspace,
 so that neither the gate nor a release sees it: `spikes/voice-harness/` is the
 GPT-Live voice session of `docs/design/2026-10-31-footplate-vqze-voice.md`, run
@@ -492,7 +493,9 @@ Setup, release and tests:
   where what only debug builds and tests use is dead, `cargo test`,
   `cargo build`). Landing runs the base copy of that script, not yours. It
   runs on a Mac; `.github/workflows/windows.yml` runs `cargo build` and
-  `cargo test` on Windows, and builds the release's Windows zip there.
+  `cargo test` on Windows, and builds the release's Windows zip there;
+  `.github/workflows/linux.yml` runs the two on Debian 13. Neither runs on a
+  push: `docs/building.md` has the command that starts one.
 
 ## Do not touch
 

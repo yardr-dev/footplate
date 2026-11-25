@@ -20,7 +20,9 @@ Rust, stable (`rustup default stable`), and what gpui needs of the system:
   not start at all, voice on or off, and the archive does not carry it.
   The yard runs on a Mac and so does the gate: the Linux build is tried by
   hand, in a container (Debian 13, arm64) under Xvfb and under a headless
-  sway.
+  sway. `.github/workflows/linux.yml` runs `cargo build` and `cargo test` on
+  Debian 13, on a GitHub runner, by hand and on no push (the command is
+  below).
 - Windows: the MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`)
   and the Visual Studio Build Tools with the C++ workload, which bring the
   linker and the Windows SDK (gpui embeds a manifest with its resource
@@ -102,6 +104,14 @@ mount cannot be listed, and stops the release too. Nothing reaches out-dir
 until all seven pass (six with the switch off). yardr.dev's `scripts/sync-release` checks the members of
 a Linux archive and of the Windows zip against lists of its own, so a member
 added here is added there before the release is cut.
+
+A builder on a Linux bead starts a run of the build and the tests on its
+branch with `gh workflow run linux.yml --ref yard/<bead>`, then follows it with
+`gh run watch`. The job runs in a `debian:13` container on an `ubuntu-latest`
+runner: it installs the packages that `scripts/linux-container.sh` installs for
+the release, and rustup's stable toolchain, then runs `cargo build --locked`
+and `cargo test --locked`. Like the Windows run below, it runs on no push and
+builds gpui's whole tree each time. It leaves no artifact.
 
 The Windows zip is not built on the Mac. A release build of gpui compiles its
 shaders with `fxc.exe` of the Windows SDK, which a Mac does not have. The

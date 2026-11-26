@@ -36,8 +36,9 @@
 # behind one, with no Open), `mail-edge` (that mail, its page alone, on a far
 # yard whose web view is the browser's address at the edge: the row carries
 # Open), `run` (an
-# open card of a run ask), `teammates` (an open card of a teammate
-# invite), `teammates-list` (the teammates view open on its row),
+# open card of a run ask), `run-pack` (an open card of a depot pack's
+# re-apply, its plan drawn as what changes and what already matches),
+# `teammates` (an open card of a teammate invite), `teammates-list` (the teammates view open on its row),
 # `held-message` (a mapping card that holds a stranger's mail, which the
 # operator reads on the card above its options before a pick),
 # `delivered-message` (that card dealt with by "Let in, once", the mail

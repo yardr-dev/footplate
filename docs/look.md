@@ -186,6 +186,23 @@ with Copy as a link word beside it, returning the plain command; a
 setup ask's taken account is outlined, as a lever is, and its Approve
 is the card's one fill likewise.
 
+A depot pack ask's plan stands in the run block, between the command and the
+yard's sentences. Its first line says what it comes to, in the body role. Then
+two sections, `What changes` and `Already matches`, each headed in the section
+role semibold with its count in the meta role and quiet (`4 · kept as the
+yard's` for the second), over a hairline; a section with no row is not drawn.
+A row is the kind as a chip in a column 4.5 rems wide (`PLAN_KIND`), in the
+make of the context drawer's kicker (the code role in the mono face, `faint`,
+a 1px `line` border, a 4px radius), then the name in the mono face and under it
+its lines. In what changes the lines are mono at the code role, with a `+` in
+`ok` before what is put in and a `−` in the accent text colour before what is
+taken out, as the board draws them; in what already matches they are the yard's
+words in the meta role, `faint`. Rows are ruled apart by hairlines, 10 above and
+below in what changes and 7 in what matches. A section shows three rows
+(`PLAN_ROWS_SHOWN`) and the rest stand behind `Show K more`, a link word in the
+meta role under them that opens them in place and reads `Fold` once they are
+open.
+
 A stranger's text stands in a block of the same make: the side ground, a 1px
 `line` border, the control's radius, 12 and 10 of padding. It is a mapping
 card's held message (between the context and the options, the open card's and

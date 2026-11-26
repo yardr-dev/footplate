@@ -372,11 +372,12 @@ begin with who says them (`yardmaster says: …`) and are drawn as the text
 they are, with no block in them. Under them is the one block of the card,
 and all of it is the yard's: the command whole, in a code block that wraps
 where the window is narrower and is never cut; what the command does, in
-one line from its help; the yard's sentences for what the command changes
-and what is there now, each on its own line — for a source or a pack every
-call, command and object, never a summary; and the command that takes the
-change back, with who may run it. An ask that adds a source or applies a
-pack holds its texts behind one tap in the block: each declaration,
+one line from its help; for a depot pack's re-apply, the plan the yard
+sent, laid out for reading (below); the yard's sentences for what the
+command changes and what is there now, each on its own line — for a source
+or a pack every call, command and object, never a summary; and the command
+that takes the change back, with who may run it. An ask that adds a source
+or applies a pack holds its texts behind one tap in the block: each declaration,
 command file, file change and removed entry, and each depot file's change
 and new text, whole as carried, each in a block that copies it to the
 letter. The tap is for checking the yard's reading against them; the
@@ -384,6 +385,23 @@ approval is live whether or not it was opened. Every card's header leads
 with the name of the open yard, before the bead and how long it waits, and
 a run ask's block leads with it too, with the user the command runs as: "in
 plantime, when you approve, the yard runs this as mckean, and nothing else:".
+A depot pack's re-apply, where the yard sends its plan, draws it over the
+yard's sentences: one line of what it comes to (`2 changes across 1 flow
+and 1 hook. 4 more already match the yard and will not move.`), then
+`What changes`, a row for each object the import would create, change or
+find dropped from the pack and each depot whose beads would follow another
+flow, and `Already matches`, a row for each object it leaves as the yard has
+it and each depot whose beads already follow the flow. A row is the
+object's kind (`flow`, `crew`, `group`, `file`, and `hook` for a stage map)
+as a chip, its name in the mono face, and under it a line for each field it
+moves (`field: old → new`, `+ new` where there was nothing, `− old` where
+nothing is left) or, where the yard keeps its own, what it keeps and why.
+Objects of the yard that the pack does not carry have no row. A section
+shows its first three rows; `Show K more` opens the rest in place and `Fold`
+shuts them. The rows are the plan laid out for reading: the sentences under
+them stay whole, since the approval is given on those, and the tap and the
+take-back are as they were. A source's add and a source pack carry no plan,
+and stand as plain.
 A teammate invite or removal carries its own head above that lead: the
 address, the yard user and the role the command was given — an operator
 named as one that can approve and administer the yard — with the note that

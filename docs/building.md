@@ -343,7 +343,9 @@ a far yard whose web view is the browser's address at the edge,
 `https://my.yardr.dev/?yard=mac`: the page's row carries Open, and nothing
 is asked of the edge), `run` (an
 open card of a run ask: the forged one of the run card's test, whose
-question forges the yard's lines), `frame` (a short-command run ask
+question forges the yard's lines), `run-pack` (an open card of a depot
+pack's re-apply, whose plan the card draws as what changes and what
+already matches), `frame` (a short-command run ask
 with its moves row and its bead's thread and image under it, its head
 naming the stage alone), `decide` (that card with the bead's flow
 served, for its head's stage dots), `teammates` (an open card of a

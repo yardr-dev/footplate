@@ -7609,11 +7609,11 @@ fn shot_section() -> Option<Section> {
 
 /// The row a screenshot state opens on instead of the yard's own: the
 /// refused mail's conversation for the undelivered shot, the open card
-/// for the plain, plain-select, page, run, frame, teammates, weighty-mapping,
-/// secret, secret-harness, secret-harness-empty, setup-host and pair-ask
-/// shots (the refused shot's with its refusal), the decided pairing card
-/// for the pair-qr and pair-ended shots, the board for the arrivals and
-/// departures shots, one arrival's bead for the arrival shot, yardr's line
+/// for the plain, plain-select, page, run, run-pack, frame, teammates,
+/// weighty-mapping, secret, secret-harness, secret-harness-empty, setup-host
+/// and pair-ask shots (the refused shot's with its refusal), the decided
+/// pairing card for the pair-qr and pair-ended shots, the board for the arrivals
+/// and departures shots, one arrival's bead for the arrival shot, yardr's line
 /// for the flow shot, the first parked bead's card for the waiting shots,
 /// the open ask's card for the old-waiting shot, whose yard parks none,
 /// the arrivals pane for the lines-panel and lines-departures shots,
@@ -7657,6 +7657,7 @@ fn shot_selected() -> Option<Selected> {
             ));
         }
         Ok("run")
+        | Ok("run-pack")
         | Ok("teammates")
         | Ok("weighty")
         | Ok("weighty-mapping")

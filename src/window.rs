@@ -34695,7 +34695,10 @@ yardr.dev
     const DEPOT_DIFF: &str =
         "--- was\n+++ is\n@@ -1,3 +1,3 @@\n-flow: old\n+flow: default\n stages:\n";
 
-    /// The pack apply ask 7 on bead-s for a depot kind's re-apply.
+    /// The pack apply ask 7 on bead-s for a depot kind's re-apply: five
+    /// objects the import moves and four that already match the yard,
+    /// besides one it leaves alone, each section one past what it shows
+    /// before its `Show K more`, and the flows of two types of the depot.
     fn run_depot() -> Value {
         json!({
             "argv": ["pack", "apply", "starter"],
@@ -34708,10 +34711,25 @@ yardr.dev
                      "label": "yardr ecbab0933da6",
                      "plan": {"objects": [
                          {"kind": "file", "name": "flows/default.md", "action": "change",
+                          "changes": [{"field": "content", "old": "sha256 111111111111",
+                                       "new": "sha256 222222222222"}],
                           "file_old_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
                           "file_new_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
                           "text": DEPOT_TEXT, "diff": DEPOT_DIFF},
-                         {"kind": "crew", "name": "builders", "action": "unchanged"}
+                         {"kind": "map", "name": "gh", "action": "change",
+                          "changes": [{"field": "map", "old": "",
+                                       "new": "pull_request synchronize · stage=triage → pushed"}]},
+                         {"kind": "file", "name": "roles/pr-reviewer.md", "action": "create"},
+                         {"kind": "file", "name": "scripts/old", "action": "dropped"},
+                         {"kind": "crew", "name": "builders", "action": "unchanged"},
+                         {"kind": "group", "name": "reviewers", "action": "kept",
+                          "keeps": ["limit 4: the group is the yard's"]},
+                         {"kind": "group", "name": "assembly", "action": "takes",
+                          "keeps": ["its cmd: set by hand"]},
+                         {"kind": "file", "name": "notes.md", "action": "not_in_pack"}
+                     ], "governs": [
+                         {"type": "pr", "flow": "contributors.pr", "now": "none"},
+                         {"type": "bug", "flow": "contributors.bug", "now": "contributors.bug"}
                      ]}}
         })
     }
@@ -35948,6 +35966,160 @@ yardr.dev
             click_carried_chip(&view, cx, carried_text_key(section, ix, bytes));
             assert_eq!(clipboard(cx).as_deref(), Some(bytes), "{section}");
         }
+    }
+
+    /// A depot re-apply's card draws the plan the yard sent as the design
+    /// board does: a line for what it comes to, over a `What changes`
+    /// section and an `Already matches` one, each with a row for the
+    /// objects it holds, its first three and the rest behind `Show K more`,
+    /// which opens that section's in place and folds them again. What the
+    /// pack does not carry has no row. The yard's sentences stand under
+    /// them, where the approval is given. A run ask with no plan, a plain
+    /// run or a source pack, draws none of it.
+    #[gpui::test]
+    fn a_depot_re_apply_card_draws_its_plan_as_what_changes_and_what_already_matches(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        let (view, cx) = opened_on_a_depot_ask(&yard, &file, cx);
+
+        // The line of what it comes to, the two sections, then the yard's
+        // sentences, in that order and inside the yard's block.
+        assert!(drawn(cx, "run plan summary bead-s 7"));
+        let block = bounds_of(cx, "run bead-s 7");
+        let summary = bounds_of(cx, "run plan summary bead-s 7");
+        let changes = bounds_of(cx, "run changes head bead-s 7");
+        let matches = bounds_of(cx, "run matches head bead-s 7");
+        let does = bounds_of(cx, "run does bead-s 7 0");
+        assert!(summary.left() >= block.left() && summary.right() <= block.right());
+        assert!(summary.bottom() <= changes.top(), "{summary:?} {changes:?}");
+        assert!(changes.bottom() <= matches.top(), "{changes:?} {matches:?}");
+        assert!(matches.bottom() <= does.top(), "{matches:?} {does:?}");
+
+        // Each section shows its first three rows, in order, and a control
+        // for the rest; a fourth row is not drawn until it is pressed.
+        for (section, head, next, left) in [
+            ("changes", changes, matches, 2),
+            ("matches", matches, does, 1),
+        ] {
+            let mut above = head.bottom();
+            // A pixel of slack: the rows' heights are fractions.
+            for ix in 0..3 {
+                let row = bounds_of(cx, &format!("run {section} bead-s 7 {ix}"));
+                assert!(
+                    row.top() + px(1.) >= above
+                        && row.left() >= block.left()
+                        && row.right() <= block.right(),
+                    "{section} {ix}: {row:?} under {above:?} in {block:?}"
+                );
+                above = row.bottom();
+            }
+            let more = bounds_of(cx, &format!("run {section} more bead-s 7"));
+            assert!(
+                more.top() + px(1.) >= above && more.bottom() <= next.top() + px(1.),
+                "{section}: {more:?} between {above:?} and {next:?}"
+            );
+            assert!(
+                !drawn(cx, &format!("run {section} bead-s 7 3")),
+                "{left} more"
+            );
+        }
+        let unfolded = |view: &Entity<Footplate>, cx: &mut VisualTestContext, section: &str| {
+            view.read_with(cx, |v, _| {
+                v.model
+                    .as_ref()
+                    .unwrap()
+                    .unfolded(&format!("run {section} bead-s 7"))
+            })
+        };
+        assert!(!unfolded(&view, cx, "changes") && !unfolded(&view, cx, "matches"));
+
+        // The chip is yard text too: it stands as plain, selectable text,
+        // and the selection copies only its word.
+        assert!(drawn(cx, "run changes kind bead-s 7 0"));
+        let kind = bounds_of(cx, "run changes kind bead-s 7 0");
+        drag(
+            cx,
+            gpui::point(kind.left() + px(5.), kind.center().y),
+            gpui::point(kind.right() - px(5.), kind.center().y),
+        );
+        assert_eq!(selected(&view, cx).as_deref(), Some("file"));
+        cx.simulate_keystrokes("secondary-c");
+        assert_eq!(clipboard(cx).as_deref(), Some("file"));
+
+        // The control opens its own section's rest in place, and the other
+        // stays as it was.
+        click_on(cx, "run changes more bead-s 7");
+        wait(cx, "the rest of what changes", |cx| {
+            drawn(cx, "run changes bead-s 7 4")
+        });
+        assert!(drawn(cx, "run changes bead-s 7 3"));
+        assert!(!drawn(cx, "run changes bead-s 7 5"));
+        assert!(unfolded(&view, cx, "changes") && !unfolded(&view, cx, "matches"));
+        assert!(!drawn(cx, "run matches bead-s 7 3"));
+        click_on(cx, "run matches more bead-s 7");
+        wait(cx, "the rest of what already matches", |cx| {
+            drawn(cx, "run matches bead-s 7 3")
+        });
+        assert!(unfolded(&view, cx, "matches"));
+        assert!(!drawn(cx, "run matches bead-s 7 4"));
+        // Pressed again, it folds again. (What was drawn stays drawn to the
+        // test's eyes, so this half reads the model.)
+        click_on(cx, "run changes more bead-s 7");
+        cx.run_until_parked();
+        assert!(!unfolded(&view, cx, "changes") && unfolded(&view, cx, "matches"));
+
+        // The yard's sentences and the tap's texts are the card's own, as
+        // before the rows stood.
+        for ix in 0..DEPOT_DOES.len() {
+            assert!(
+                drawn(cx, &format!("run does bead-s 7 {ix}")),
+                "sentence {ix}"
+            );
+        }
+        assert!(drawn(cx, "texts bead-s 7"));
+
+        // At the window's floor the rows are narrower than their words:
+        // they wrap, and each row stands inside the block.
+        let wide = bounds_of(cx, "run changes bead-s 7 1").size.height;
+        cx.simulate_resize(gpui::size(px(624.), px(640.)));
+        let block = bounds_of(cx, "run bead-s 7");
+        for (section, rows) in [("changes", 3), ("matches", 4)] {
+            for ix in 0..rows {
+                let row = bounds_of(cx, &format!("run {section} bead-s 7 {ix}"));
+                assert!(
+                    row.left() >= block.left()
+                        && row.right() <= block.right()
+                        && row.bottom() <= block.bottom(),
+                    "{section} {ix}: {row:?} in {block:?}"
+                );
+            }
+        }
+        let narrow = bounds_of(cx, "run changes bead-s 7 1").size.height;
+        assert!(
+            narrow > wide,
+            "the hook's mapping wraps: {narrow:?} over {wide:?}"
+        );
+
+        // A plain run and a source pack carry no plan, and draw none.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        let (_view, cx) = opened_on_a_run_ask(&yard, &file, cx);
+        assert!(drawn(cx, "run bead-s 7"));
+        assert!(drawn(cx, "run does bead-s 7 0"));
+        assert!(!drawn(cx, "run plan summary bead-s 7"));
+        assert!(!drawn(cx, "run changes head bead-s 7"));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        let (_view, cx) = opened_on_a_pack_ask(&yard, &file, cx);
+        assert!(drawn(cx, "run bead-s 7"));
+        assert!(drawn(cx, "run does bead-s 7 0"));
+        assert!(!drawn(cx, "run plan summary bead-s 7"));
+        assert!(!drawn(cx, "run matches head bead-s 7"));
     }
 
     /// A run ask whose question forges the yard's lines, with a context

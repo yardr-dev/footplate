@@ -13,21 +13,23 @@ use gpui::{
 use super::Expanded;
 use super::Footplate;
 use super::ask::{
-    ANSWER_WORDS, APPROVE_ELSEWHERE, Approval, DECLINE_IS_NO_PICK, OutsideKind, RECOMMENDED,
-    RUN_PROPOSED, RunText, SEND_WORDS, SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate,
-    answer_label, approval, approve_button, approve_move_label, ask_line, asked_age, asks_on_you,
-    candidate_choice_line, card_head, carried_texts, decided_keys, decision_head, description_line,
-    fenced, fold_head, fold_label, give_label, give_unlock_label, is_device_pair_run, lever_plate,
-    lever_words, move_button, pair_door, read_label, recommended_line, run_keys, run_runs,
-    run_texts, secret_goes, secret_keys, section_head, send_button, setup_keys, setup_runs,
-    show_button, take_back_label, teammate_email, teammate_kind, teammate_of, teammate_role,
-    teammate_user, texts_label, typeback_line, typeback_mismatch, words_send,
+    ANSWER_WORDS, APPROVE_ELSEWHERE, Approval, DECLINE_IS_NO_PICK, OutsideKind, PLAN_CHANGES,
+    PLAN_MATCHES, PLAN_ROWS_SHOWN, PlanRow, RECOMMENDED, RUN_PROPOSED, RunText, SEND_WORDS,
+    SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate, answer_label, approval,
+    approve_button, approve_move_label, ask_line, asked_age, asks_on_you, candidate_choice_line,
+    card_head, carried_texts, decided_keys, decision_head, description_line, fenced, fold_head,
+    fold_label, give_label, give_unlock_label, is_device_pair_run, lever_plate, lever_words,
+    move_button, pair_door, plan_mark, plan_matches_count, plan_more_label, plan_rows,
+    plan_summary, read_label, recommended_line, run_keys, run_runs, run_texts, secret_goes,
+    secret_keys, section_head, send_button, setup_keys, setup_runs, show_button, take_back_label,
+    teammate_email, teammate_kind, teammate_of, teammate_role, teammate_user, texts_label,
+    typeback_line, typeback_mismatch, words_send,
 };
 use super::expanded_text_key;
 use super::keys::{APPROVE_KEY, SETUP_SECRET_CONTEXT};
 use super::metrics::{
-    ASK_QUESTION_MIN, LEVER_H, RADIUS_CARD, RADIUS_CONTROL, ROW_ASK_CHARS, ROW_LAMP, ROW_LAMP_GAP,
-    ROW_MARK, ROW_TITLE_CHARS, STAGE_TIE, THREAD_PIC_H, THREAD_PIC_W,
+    ASK_QUESTION_MIN, LEVER_H, PLAN_KIND, RADIUS_CARD, RADIUS_CONTROL, ROW_ASK_CHARS, ROW_LAMP,
+    ROW_LAMP_GAP, ROW_MARK, ROW_TITLE_CHARS, STAGE_TIE, THREAD_PIC_H, THREAD_PIC_W,
 };
 use super::rail::{Picture, RailTip, UnsentNote, post_note};
 use super::state::{Adding, ApprovalPairing};
@@ -43,7 +45,8 @@ use crate::model::{
 };
 use crate::select::{self};
 use crate::theme::{
-    Palette, TYPE_BODY, TYPE_CODE, TYPE_LABEL, TYPE_META, TYPE_QUESTION, TYPE_TITLE, yard_color,
+    Palette, TYPE_BODY, TYPE_CODE, TYPE_LABEL, TYPE_META, TYPE_QUESTION, TYPE_SECTION, TYPE_TITLE,
+    yard_color,
 };
 use crate::unlock;
 
@@ -4783,7 +4786,8 @@ impl Footplate {
         self.change(cx, |m| m.toggle_payloads(&seqs));
     }
 
-    /// A press on a message's fold: the rest of it shows, or it folds again.
+    /// A press on a fold's control, a message's or a plan section's: the
+    /// rest of it shows, or it folds again.
     pub(crate) fn fold_message(&mut self, key: String, cx: &mut Context<Self>) {
         self.change(cx, |m| {
             m.toggle_fold(&key);
@@ -5108,7 +5112,8 @@ impl Footplate {
     /// What a run ask proposes, in the one block of its card, which is all
     /// the yard's and none of it the asker's: the command whole, in a code
     /// block that wraps where the window is narrower and is never cut; the
-    /// command's one line from its help; the yard's sentences for what it
+    /// command's one line from its help; a depot pack's plan as what
+    /// changes and what already matches; the yard's sentences for what it
     /// changes, each on its own line; the texts the ask holds behind one
     /// tap, for checking the yard's reading against them; and the command
     /// that takes it back, with who may run it. `open` is an ask that can
@@ -5209,6 +5214,9 @@ impl Footplate {
                     .child(select::text(key, line, &self.selection)),
             );
         }
+        if let Some(pack) = &run.pack {
+            block = block.children(self.plan_block((bead, ask), pack, palette, cx));
+        }
         for (ix, does) in run.does.iter().enumerate() {
             let line = format!("the yard says: {}", model::plain(does));
             let key = expanded_text_key(card_key, "does", ix, &line);
@@ -5228,6 +5236,232 @@ impl Footplate {
             cx,
         ));
         block
+    }
+
+    /// A depot pack ask's plan as the design board draws it: one line for
+    /// what it comes to, then what changes and what already matches the
+    /// yard, a row each. Nothing where the plan has no row to draw, as for
+    /// a yard from before the rows. The rows are the plan laid out for
+    /// reading: the yard's sentences stand under them, and the approval is
+    /// given on those.
+    fn plan_block(
+        &self,
+        at: (&str, u64),
+        pack: &api::RunPack,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let (bead, ask) = at;
+        let (moves, matches) = plan_rows(pack.plan.as_ref()?, &pack.depot);
+        if moves.is_empty() && matches.is_empty() {
+            return None;
+        }
+        let summary = plan_summary(&moves, matches.len());
+        let mut block = div().flex().flex_col().gap_3().child(
+            div()
+                .debug_selector(|| format!("run plan summary {bead} {ask}"))
+                .text_size(rems(TYPE_BODY))
+                .child(select::verbatim(
+                    expanded_text_key(select::key(at), "plan summary", 0, &summary),
+                    summary.clone(),
+                    &self.selection,
+                )),
+        );
+        let sections = [
+            ("changes", PLAN_CHANGES, moves.len().to_string(), &moves),
+            (
+                "matches",
+                PLAN_MATCHES,
+                plan_matches_count(matches.len()),
+                &matches,
+            ),
+        ];
+        for (section, head, count, rows) in sections {
+            if !rows.is_empty() {
+                block =
+                    block.child(self.plan_section(section, at, (head, count), rows, palette, cx));
+            }
+        }
+        Some(block)
+    }
+
+    /// One section of a plan: its head with its count, its first rows, and
+    /// where more stand, the link word that shows them and folds them
+    /// again. The fold is the model's, one for each section of each card,
+    /// as a message's is.
+    fn plan_section(
+        &self,
+        section: &'static str,
+        at: (&str, u64),
+        (head, count): (&str, String),
+        rows: &[PlanRow],
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let (bead, ask) = at;
+        let key = format!("run {section} {bead} {ask}");
+        let open = self.model.as_ref().is_some_and(|m| m.unfolded(&key));
+        let shown = match open {
+            true => rows.len(),
+            false => rows.len().min(PLAN_ROWS_SHOWN),
+        };
+        let mut group = div().flex().flex_col().child(
+            div()
+                .debug_selector(|| format!("run {section} head {bead} {ask}"))
+                .flex()
+                .flex_row()
+                .items_baseline()
+                .gap_2()
+                .pb_2()
+                .border_b_1()
+                .border_color(palette.line)
+                .child(
+                    div()
+                        .text_size(rems(TYPE_SECTION))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(head.to_string()),
+                )
+                .child(
+                    div()
+                        .text_size(rems(TYPE_META))
+                        .text_color(palette.faint)
+                        .child(count),
+                ),
+        );
+        for (ix, row) in rows.iter().take(shown).enumerate() {
+            group = group.child(self.plan_row(section, at, ix, row, palette, cx));
+        }
+        if rows.len() > PLAN_ROWS_SHOWN {
+            let left = rows.len() - PLAN_ROWS_SHOWN;
+            // In a row of its own: a column's child stretches, and the
+            // control would take the section's whole width to press.
+            group = group.child(
+                div().flex().pt_2().child(
+                    link_word(
+                        format!("run {section} more {bead} {ask}"),
+                        plan_more_label(left, open),
+                        palette,
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.fold_message(key.clone(), cx)),
+                    ),
+                ),
+            );
+        }
+        group
+    }
+
+    /// One row of a plan: the kind as a chip, the name in mono, and under
+    /// it what is said of it. What changes is the card's news and has the
+    /// room, its lines in mono with the mark of what is put in or taken
+    /// out; what already matches is quieter, its lines the yard's words.
+    fn plan_row(
+        &self,
+        section: &'static str,
+        at: (&str, u64),
+        ix: usize,
+        row: &PlanRow,
+        palette: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let (bead, ask) = at;
+        let card_key = select::key(at);
+        let mono = select::mono(cx);
+        let moving = section == "changes";
+        let mut chip = div()
+            .rounded(px(4.))
+            .border_1()
+            .border_color(palette.line)
+            .px_1()
+            .text_size(rems(TYPE_CODE))
+            .text_color(palette.faint);
+        let mut subject = div().text_size(rems(TYPE_CODE)).child(select::verbatim(
+            expanded_text_key(
+                card_key,
+                &format!("plan {section} subject"),
+                ix,
+                &row.subject,
+            ),
+            row.subject.clone(),
+            &self.selection,
+        ));
+        if let Some(mono) = &mono {
+            chip = chip.font_family(mono.clone());
+            subject = subject.font_family(mono.clone());
+        }
+        let kind_chip = (!row.kind.is_empty()).then(|| {
+            chip.debug_selector(|| format!("run {section} kind {bead} {ask} {ix}"))
+                .child(select::verbatim(
+                    expanded_text_key(card_key, &format!("plan {section} kind"), ix, &row.kind),
+                    row.kind.clone(),
+                    &self.selection,
+                ))
+        });
+        let mut words = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(3.))
+            .child(subject);
+        for (at_line, line) in row.lines.iter().enumerate() {
+            let key = expanded_text_key(
+                card_key,
+                &format!("plan {section} line {ix}"),
+                at_line,
+                line,
+            );
+            words = words.child(match moving {
+                true => {
+                    let (mark, rest) = plan_mark(line);
+                    let mut one = div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(6.))
+                        .text_size(rems(TYPE_CODE));
+                    if let Some(mono) = &mono {
+                        one = one.font_family(mono.clone());
+                    }
+                    if let Some(mark) = mark {
+                        let color = match mark {
+                            '+' => palette.ok,
+                            _ => palette.text_accent,
+                        };
+                        one =
+                            one.child(div().flex_none().text_color(color).child(mark.to_string()));
+                    }
+                    one.child(div().flex_1().min_w_0().child(select::verbatim(
+                        key,
+                        rest.to_string(),
+                        &self.selection,
+                    )))
+                }
+                false => div()
+                    .text_size(rems(TYPE_META))
+                    .text_color(palette.faint)
+                    .child(select::verbatim(key, line.clone(), &self.selection)),
+            });
+        }
+        // The board's measures: a row of what changes stands 10 high above
+        // and below its words and one of what matches 7, and the lines of a
+        // row are 3 apart.
+        div()
+            .debug_selector(|| format!("run {section} {bead} {ask} {ix}"))
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap_3()
+            .py(px(if moving { 10. } else { 7. }))
+            .border_b_1()
+            .border_color(palette.line)
+            .child(
+                div()
+                    .flex_none()
+                    .min_w(rems(PLAN_KIND))
+                    .flex()
+                    .children(kind_chip),
+            )
+            .child(words)
     }
 
     /// The end of a run or setup ask's block: the ask's own texts behind

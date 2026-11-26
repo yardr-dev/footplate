@@ -1432,8 +1432,9 @@ pub struct RunRemoved {
 /// A pack apply ask's pack as the yard's server read it from its own
 /// binary: its name, kind, the depot a depot kind would be re-applied to,
 /// and the build label the pack is embedded in. A depot kind carries the
-/// plan the server built; the plan's objects and governs stand in the
-/// yard's sentences, and its file texts and diffs behind the card.
+/// plan the server built; the card draws its objects and governs as what
+/// changes and what already matches, beside the yard's sentences, and its
+/// file texts and diffs stand behind the card.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RunPack {
     #[serde(default)]
@@ -1449,22 +1450,42 @@ pub struct RunPack {
 }
 
 /// A depot pack's plan as a card holds it: every object with its action
-/// and changes. The changes stand in the yard's sentences; what is kept
-/// here is what the tap shows: each changed file's new text and its
-/// unified diff old against new.
+/// and changes, and the flows its depot's beads follow once it is
+/// applied. The card draws the objects as what changes and what already
+/// matches, beside the yard's sentences; the tap shows each changed
+/// file's new text and its unified diff old against new.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RunPlan {
     #[serde(default, deserialize_with = "or_default")]
     pub objects: Vec<RunPlanObject>,
+    #[serde(default, deserialize_with = "or_default")]
+    pub governs: Vec<RunGovern>,
 }
 
-/// One object of a depot plan: of a file, its hashes whole, old and new,
-/// and for a create or change its new text and the unified diff old
-/// against new, whole, for the tap.
+/// One object of a depot plan: what it is and what the import would do
+/// with it, and of a file its hashes whole, old and new, and for a create
+/// or change its new text and the unified diff old against new, whole,
+/// for the tap. A yard from before the card drew the plan sends none of
+/// `kind`, `action`, `changes` and `keeps`.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RunPlanObject {
+    /// `file`, `group`, `flow`, `pointer`, `route`, `crew`,
+    /// `subscription`, `map` or `source`.
+    #[serde(default)]
+    pub kind: String,
     #[serde(default)]
     pub name: String,
+    /// `create`, `change`, `unchanged`, `not_in_pack`, `dropped`, `takes`
+    /// or `kept`.
+    #[serde(default)]
+    pub action: String,
+    /// What a change moves, a field at a time.
+    #[serde(default, deserialize_with = "or_default")]
+    pub changes: Vec<RunPlanChange>,
+    /// What the import leaves as the yard has it though the pack carries
+    /// it, and why: a line each.
+    #[serde(default, deserialize_with = "or_default")]
+    pub keeps: Vec<String>,
     #[serde(default)]
     pub file_old_sha256: String,
     #[serde(default)]
@@ -1473,6 +1494,31 @@ pub struct RunPlanObject {
     pub text: String,
     #[serde(default)]
     pub diff: String,
+}
+
+/// One field of a plan object an import would change, as the yard prints
+/// it: empty on the side that has no value.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct RunPlanChange {
+    #[serde(default)]
+    pub field: String,
+    #[serde(default)]
+    pub old: String,
+    #[serde(default)]
+    pub new: String,
+}
+
+/// The flow a depot's beads of one type would follow once the plan is
+/// applied, and the one they follow now. The type is empty for the
+/// depot's own flow; `now` is empty where the yard says nothing of it.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct RunGovern {
+    #[serde(default, rename = "type")]
+    pub flow_type: String,
+    #[serde(default)]
+    pub flow: String,
+    #[serde(default)]
+    pub now: String,
 }
 
 impl Run {
@@ -7550,8 +7596,9 @@ mod tests {
 
     /// A run ask that adds a source carries its texts: the yard's one line
     /// for the command, who may take it back, each declaration with its
-    /// command files, the pack with a depot plan's file texts and diffs.
-    /// What the card does not show (the yard's stale holding) is ignored.
+    /// command files, the pack with a depot plan's file texts and diffs,
+    /// what its objects change and keep, and its governs. What the card
+    /// does not show (the yard's stale holding) is ignored.
     /// A carrying out that failed says so beside what it printed.
     #[test]
     fn a_run_ask_that_adds_a_source_carries_its_texts_and_its_pack() {
@@ -7601,16 +7648,72 @@ mod tests {
             "pack": {"name": "starter", "kind": "dir", "depot": "yard", "label": "ecbab09",
                      "plan": {"objects": [
                          {"kind": "file", "name": "flows/default.md", "action": "change",
+                          "changes": [{"field": "content", "old": "sha256 1111", "new": "sha256 2222"}],
                           "file_old_sha256": "1111", "file_new_sha256": "2222",
                           "text": "new text\n", "diff": "--- was\n+++ is\n"},
+                         {"kind": "group", "name": "reviewers", "action": "kept",
+                          "keeps": ["limit 4: the group is the yard's"], "changes": null},
                          {"kind": "crew", "name": "builders", "action": "unchanged"}
+                     ], "governs": [
+                         {"type": "pr", "flow": "contributors.pr", "now": "none"},
+                         {"flow": "starter"}
                      ]}}
         }))
         .unwrap();
         let plan = depot.pack.as_ref().unwrap().plan.as_ref().unwrap();
-        assert_eq!(plan.objects.len(), 2);
+        assert_eq!(plan.objects.len(), 3);
         assert_eq!(plan.objects[0].diff, "--- was\n+++ is\n");
-        assert_eq!(plan.objects[1].text, "");
+        assert_eq!(plan.objects[2].text, "");
+        // What the card draws of an object: what it is, what the import
+        // does with it, what moves and what stays as the yard has it. A
+        // list the yard sent as null, or left out, is none.
+        let (file, group, crew) = (&plan.objects[0], &plan.objects[1], &plan.objects[2]);
+        assert_eq!(
+            (file.kind.as_str(), file.action.as_str()),
+            ("file", "change")
+        );
+        assert_eq!(
+            file.changes,
+            [RunPlanChange {
+                field: "content".into(),
+                old: "sha256 1111".into(),
+                new: "sha256 2222".into()
+            }]
+        );
+        assert_eq!(group.keeps, ["limit 4: the group is the yard's"]);
+        assert!(group.changes.is_empty());
+        assert!(crew.changes.is_empty() && crew.keeps.is_empty());
+        // The flows the depot's beads follow afterwards: the type is
+        // empty for the depot's own, and `now` for one the yard says
+        // nothing of.
+        assert_eq!(
+            plan.governs,
+            [
+                RunGovern {
+                    flow_type: "pr".into(),
+                    flow: "contributors.pr".into(),
+                    now: "none".into()
+                },
+                RunGovern {
+                    flow_type: String::new(),
+                    flow: "starter".into(),
+                    now: String::new()
+                }
+            ]
+        );
+        // A yard from before the card drew the plan sends none of it.
+        let old: Run = serde_json::from_value(json!({
+            "argv": ["pack", "apply", "starter"],
+            "pack": {"name": "starter", "kind": "dir", "depot": "yard",
+                     "plan": {"objects": [{"name": "flows/default.md", "diff": "d"}],
+                              "governs": null}}
+        }))
+        .unwrap();
+        let plan = old.pack.unwrap().plan.unwrap();
+        assert_eq!(plan.objects[0].kind, "");
+        assert_eq!(plan.objects[0].action, "");
+        assert!(plan.objects[0].changes.is_empty() && plan.objects[0].keeps.is_empty());
+        assert!(plan.governs.is_empty());
 
         let failed: Ran = serde_json::from_value(json!({
             "argv": ["pack", "apply", "telegram"],

@@ -19,6 +19,12 @@ pub(crate) const IMAGE_MARGIN: f32 = 2.;
 /// name stands in it where it is no image, so it goes with the text size.
 pub(crate) const ATTACHMENT: f32 = 3.5;
 
+/// How wide the column of a pack ask's plan rows that holds the kind chip
+/// stands, in rems: the longest of the usual kinds (`pointer`) whole, so
+/// every row's name starts at one place. A longer kind (`subscription`)
+/// pushes its own row's name past it. In rems because the word in it is.
+pub(crate) const PLAN_KIND: f32 = 4.5;
+
 /// How wide the Voice section's labels stand before their fields, in rems:
 /// the longest of them (`microphone`) whole, and every field after it at one
 /// place. In rems because the words in it are.

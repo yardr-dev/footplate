@@ -193,6 +193,7 @@ pub const STATES: &[&str] = &[
     "plain-select",
     "lines",
     "run",
+    "run-pack",
     "frame",
     "decide",
     "teammates",
@@ -3254,6 +3255,24 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("Bead", &bead_teammate());
         }
+        "run-pack" => {
+            // An open card of a depot pack's re-apply, whose plan the card
+            // draws as what changes and what already matches, as the
+            // design board's run card for the contributors pack does.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}]}"#,
+            );
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [queued_pack()], "decided": []}}).to_string(),
+            );
+            yard.answer("Bead", &bead_pack());
+        }
         _ => {
             // The run ask is the forged one of the run card's test
             // (window::tests::a_forged_run_ask_s_card_marks_every_asker_line):
@@ -4015,6 +4034,69 @@ fn queued_run(question: &str) -> serde_json::Value {
         "question": question, "asker": "yardmaster",
         "since": "2026-10-10T10:00:00Z", "run": run_of()
     })
+}
+
+/// The pack re-apply the run-pack shot proposes: the contributors pack
+/// into the depot signalbox, with the plan the yard sent, in the shape of
+/// the design board's card: a flow and a hook it would change, and a crew
+/// member, two groups and the flow of the depot's pull requests that the
+/// yard keeps as they are.
+fn pack_run_of() -> serde_json::Value {
+    json!({
+        "command": "yardr pack apply contributors --depot signalbox",
+        "argv": ["pack", "apply", "contributors", "--depot", "signalbox"],
+        "description": "Import a pack into a depot: set the depot to what the pack says",
+        "does": [
+            "pack contributors (embedded in yardr 5a4122c7c0b1), of kind dir, into the depot signalbox: it changes 1 flow and 1 stage map, and keeps 3 objects as the yard has them.",
+            "flow contributors.pr: change, stage triage added: triage on pushed",
+            "stage map gh (as yardmaster): change, one mapping added: pull_request synchronize, stage=triage, type=pr, to pushed.",
+            "4 objects already match the yard, and are not changed.",
+        ],
+        "back": "no one command takes this back: yardr pack check contributors --depot signalbox shows what stands",
+        "back_by": "the operator",
+        "pack": {"name": "contributors", "kind": "dir", "depot": "signalbox",
+                 "label": "yardr 5a4122c7c0b1",
+                 "plan": {"objects": [
+                     {"kind": "flow", "name": "contributors.pr", "action": "change",
+                      "changes": [{"field": "stage triage", "old": "",
+                                   "new": "triage on pushed"}]},
+                     {"kind": "map", "name": "gh", "action": "change",
+                      "changes": [{"field": "map", "old": "",
+                                   "new": "pull_request synchronize · stage=triage · type=pr → pushed"}]},
+                     {"kind": "crew", "name": "yardmaster", "action": "kept",
+                      "keeps": ["its role: the yard's copy, and the pack's roles/yardmaster.md is not set on it"]},
+                     {"kind": "group", "name": "reviewers", "action": "kept",
+                      "keeps": ["limit 4: the group is the yard's, and the pack's limit 2 is not set on it"]},
+                     {"kind": "group", "name": "signalbox-assembly", "action": "kept",
+                      "keeps": ["its cmd: set by hand, and the pack's scripts/merge-local is not set on it"]}
+                 ], "governs": [
+                     {"type": "pr", "flow": "contributors.pr", "now": "contributors.pr"}
+                 ]}}
+    })
+}
+
+/// The pack ask 7 on bead-s as the queue lists it.
+fn queued_pack() -> serde_json::Value {
+    json!({
+        "bead": "bead-s", "bead_title": "Contributors pack: move PRs on when pushed",
+        "topic": "", "ask": 7,
+        "question": "Apply the contributors pack again, so pull requests waiting for a maintainer move on when the contributor pushes?",
+        "asker": "yardmaster",
+        "since": "2026-10-10T10:00:00Z", "run": pack_run_of()
+    })
+}
+
+/// The bead of that ask.
+fn bead_pack() -> String {
+    json!({"result": {"id": "bead-s",
+        "title": "Contributors pack: move PRs on when the contributor pushes",
+        "body": "The body.", "stage": "new", "labels": [], "notes": [], "asks": [
+            {"ask": 7, "to": "jo", "asker": "yardmaster",
+             "since": "2026-10-10T10:00:00Z",
+             "question": "Apply the contributors pack again, so pull requests waiting for a maintainer move on when the contributor pushes?",
+             "context": ["The upgrade moved the pack past the depot."],
+             "options": [], "state": "open", "run": pack_run_of()}]}})
+    .to_string()
 }
 
 /// The arrival yd-zulu whole, as the Bead call answers it.
@@ -5025,6 +5107,39 @@ mod tests {
                     assert_eq!(bead.asks.len(), 1, "{state}");
                     assert_eq!(bead.asks[0].question.lines().count(), 3, "{state}");
                     assert!(bead.asks[0].run.is_some(), "{state}");
+                }
+                "run-pack" => {
+                    // The plan the card draws as rows: five objects and the
+                    // depot's flow of its pull requests, the flow and the
+                    // map to change, the rest kept as they stand.
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    let run = loaded.asks.open[0].run.as_ref().unwrap();
+                    let plan = run.pack.as_ref().unwrap().plan.as_ref().unwrap();
+                    let moves: Vec<(&str, &str)> = plan
+                        .objects
+                        .iter()
+                        .map(|o| (o.kind.as_str(), o.action.as_str()))
+                        .collect();
+                    assert_eq!(
+                        moves,
+                        [
+                            ("flow", "change"),
+                            ("map", "change"),
+                            ("crew", "kept"),
+                            ("group", "kept"),
+                            ("group", "kept"),
+                        ],
+                        "{state}"
+                    );
+                    assert!(
+                        plan.objects[2..].iter().all(|o| o.keeps.len() == 1),
+                        "{state}"
+                    );
+                    assert_eq!(plan.governs.len(), 1, "{state}");
+                    assert_eq!(plan.governs[0].now, plan.governs[0].flow, "{state}");
+                    let bead = yard.client().bead("bead-s").unwrap();
+                    assert_eq!(bead.asks.len(), 1, "{state}");
+                    assert_eq!(bead.asks[0].run.as_ref(), Some(run), "{state}");
                 }
                 "frame" | "decide" => {
                     assert_eq!(loaded.asks.open.len(), 5, "{state}");

@@ -1985,7 +1985,9 @@ pub struct Model {
     /// The yard has no HookPayload call: one from before it. Nothing offers
     /// to read a delivery whole, and none is asked for.
     payload_unserved: bool,
-    /// The messages standing whole where a fold cuts them, by their key.
+    /// The folds standing open, by their key: the messages standing whole
+    /// where a fold cuts them, and the pack ask plan sections standing with
+    /// every row.
     unfolded: HashSet<String>,
     /// The bead the drawer was opened on last. The queue read again keeps
     /// it read, as it keeps the open travelling bead: it is none of the
@@ -6302,12 +6304,13 @@ impl Model {
         }
     }
 
-    /// Whether the message `key` stands whole, with no fold cutting it.
+    /// Whether the fold `key` stands open: a message whole, with no fold
+    /// cutting it, or every row of a pack ask's plan section.
     pub fn unfolded(&self, key: &str) -> bool {
         self.unfolded.contains(key)
     }
 
-    /// A press on a fold's `Show all`, or on its `Fold`.
+    /// A press on a fold's `Show all` or `Show K more`, or on its `Fold`.
     pub fn toggle_fold(&mut self, key: &str) {
         if !self.unfolded.remove(key) {
             self.unfolded.insert(key.to_string());

@@ -41942,11 +41942,22 @@ yardr.dev
         });
         assert_eq!(open_row(&view, cx), yardmaster);
 
-        // This machine's again: the row it was left on, where it stood.
+        // This machine's again: the row it was left on, where it stood. The
+        // frame that puts the view there leaves `returning` standing: it goes
+        // on the frame after, which the window asks for with
+        // `request_animation_frame` and gpui's test platform never draws.
+        // Which of the two frames the wait first looks at depends on how many
+        // were drawn before it: a yard on this machine's socket starts three
+        // tasks whose ends draw one each (the switch's read, the web view's
+        // and the sandbox origin's probes), a yard at an address, as Windows
+        // has every yard, none. So the place alone is one frame early there:
+        // the wait is for the place and for `returning` to be gone.
         cx.simulate_keystrokes("secondary-1");
         wait(cx, "the place it was left at", |cx| {
             cx.update(|window, _| window.refresh());
-            texts(&view, cx) == full && above_newest(&view, cx) == px(40.)
+            texts(&view, cx) == full
+                && above_newest(&view, cx) == px(40.)
+                && view.read_with(cx, |v, _| v.returning.is_none())
         });
         assert_eq!(open_row(&view, cx), assembly);
         assert!(shows_jump(&view, cx));
@@ -42032,7 +42043,9 @@ yardr.dev
         cx.simulate_keystrokes("secondary-1");
         wait(cx, "the card where it stood", |cx| {
             cx.update(|window, _| window.refresh());
-            open_row(&view, cx) == card && card_offset_of(&view, cx).y == px(-400.)
+            open_row(&view, cx) == card
+                && card_offset_of(&view, cx).y == px(-400.)
+                && view.read_with(cx, |v, _| v.returning.is_none())
         });
         assert!(expanded_of(&view, cx, "bead-a", 3));
         view.read_with(cx, |v, _| assert!(v.returning.is_none()));
@@ -42121,7 +42134,9 @@ yardr.dev
         cx.simulate_keystrokes("secondary-1");
         wait(cx, "the dealt-with card where it stood", |cx| {
             cx.update(|window, _| window.refresh());
-            open_row(&view, cx) == card && card_offset_of(&view, cx).y == px(-400.)
+            open_row(&view, cx) == card
+                && card_offset_of(&view, cx).y == px(-400.)
+                && view.read_with(cx, |v, _| v.returning.is_none())
         });
         assert!(decided_detail_of(&view, cx, "bead-a", 3).expanded);
         view.read_with(cx, |v, _| assert!(v.returning.is_none()));
@@ -42229,6 +42244,15 @@ yardr.dev
         wait(cx, "the older page", |cx| {
             cx.update(|window, _| window.refresh());
             texts(&view, cx).len() == 100
+        });
+        // The view goes up a frame at a time, as far as the rows are
+        // measured, and `returning` goes on the frame that finds nothing
+        // left. Waited for, not counted: a yard at an address (Windows') has
+        // drawn fewer frames by now than one on a socket, and the three that
+        // follow do not always finish it.
+        wait(cx, "the view back where it stood", |cx| {
+            cx.update(|window, _| window.refresh());
+            view.read_with(cx, |v, _| v.returning.is_none())
         });
         frames(cx);
         // The view comes back to the place within a pixel: it goes up by what

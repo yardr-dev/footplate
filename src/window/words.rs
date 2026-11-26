@@ -60,21 +60,29 @@ pub(crate) fn landed_age(waits: &str) -> String {
 }
 
 /// What a stage column's head says under its name: the routed group's
-/// name, that it waits on a person where the group is manual, and its
-/// seats where the yard serves them. A group with no route says why,
-/// as does a paused one: a stage nothing can move through is the one a
-/// person most needs named.
+/// name, then what the stage waits for. A siding says this depot's waiting
+/// beads against its fold (`1 of 4 to fold`), not that it waits on a
+/// person: the yard folds it by itself. Any other manual group says it
+/// waits on a person, and no seats: its limit is a ceiling nobody reaches
+/// and its `taken` counts the group's beads in every depot, where the
+/// count before these words is this depot's. A group the yard serves says
+/// its seats. A group with no route says why, as does a paused one, which
+/// a siding's fold gives way to: a stage nothing can move through is the
+/// one a person most needs named.
 pub(crate) fn stage_group_words(stage: &FlowStage) -> String {
     if stage.group.is_empty() {
         return "no route matches".to_string();
     }
     let mut words = stage.group.clone();
-    if stage.human {
+    if stage.human && stage.fold.is_none() {
         words.push_str(" · waiting on a person");
     }
-    match (stage.limit, stage.taken) {
-        (Some(0), _) => words.push_str(" · paused"),
-        (Some(limit), Some(taken)) => {
+    match (stage.limit, stage.taken, stage.fold) {
+        (Some(0), _, _) => words.push_str(" · paused"),
+        (_, _, Some(fold)) => {
+            words.push_str(&format!(" · {} of {fold} to fold", stage.beads.len()));
+        }
+        (Some(limit), Some(taken), None) if !stage.human => {
             words.push_str(&format!(" · {taken} of {limit} seats"));
         }
         _ => {}

@@ -5819,9 +5819,10 @@ mod tests {
 
     /// One flow whose groups stand mixed: one line, three, one, one,
     /// and a terminal row, each lit by a bead. The long group combines
-    /// the longest routed name, a person group and seats; it takes
-    /// three DejaVu lines at the usual and largest sizes. The rules'
-    /// level is read from the window, not computed from the font.
+    /// the longest routed name, a person group and its pause (a person
+    /// group says no seats); it takes three DejaVu lines at the usual
+    /// and largest sizes. The rules' level is read from the window, not
+    /// computed from the font.
     fn flows_mixed_groups() -> String {
         let stage = |name: &str, group: &str, human: bool, terminal: bool| {
             json!({"stage": name, "group": group, "human": human,
@@ -5842,7 +5843,7 @@ mod tests {
                 {"name": "yardr", "kind": "git", "travelling": 5, "flows": [
                     {"name": "default", "type": "", "source": "store", "stages": [
                         stage("backlog", "siding", false, false),
-                        seated("new", "signalbox-pr-reviewers", 50, 0, true),
+                        seated("new", "signalbox-pr-reviewers", 0, 0, true),
                         stage("review", "outside", false, false),
                         stage("decide", "", false, false),
                         stage("approved", "", false, true),
@@ -20310,7 +20311,9 @@ yardr.dev
 
     /// A stage column's head says whose group works there: its name,
     /// that it waits on a person where the group is manual, and its
-    /// seats where the yard serves them. No route and paused say why.
+    /// seats where the yard serves them and the group is not a person's.
+    /// A siding says its waiting beads against its fold instead. No route
+    /// and paused say why.
     #[test]
     fn a_stage_column_s_head_says_whose_group_works_there() {
         let stage =
@@ -20325,9 +20328,16 @@ yardr.dev
             stage_group_words(&stage("muse-builders", false, Some(3), Some(2))),
             "muse-builders · 2 of 3 seats"
         );
+        // A person's group has no seats to count: a manual group's limit
+        // is a ceiling nobody reaches, and its taken counts its beads in
+        // every depot, where the head's count is this depot's.
         assert_eq!(
             stage_group_words(&stage("mckean", true, Some(1), Some(1))),
-            "mckean · waiting on a person · 1 of 1 seats"
+            "mckean · waiting on a person"
+        );
+        assert_eq!(
+            stage_group_words(&stage("mckean", true, Some(0), Some(0))),
+            "mckean · waiting on a person · paused"
         );
         assert_eq!(
             stage_group_words(&stage("muse-builders", false, None, None)),
@@ -20341,6 +20351,25 @@ yardr.dev
             stage_group_words(&stage("", false, None, None)),
             "no route matches"
         );
+        // A siding says this depot's waiting beads against its fold, and
+        // nothing of its limit or of the beads it holds in other depots.
+        let siding = FlowStage {
+            fold: Some(4),
+            beads: vec![FlowBead::default()],
+            ..stage("siding", true, Some(50), Some(4))
+        };
+        assert_eq!(stage_group_words(&siding), "siding · 1 of 4 to fold");
+        let empty = FlowStage {
+            beads: Vec::new(),
+            ..siding.clone()
+        };
+        assert_eq!(stage_group_words(&empty), "siding · 0 of 4 to fold");
+        // A paused siding reads paused, as every paused group does.
+        let paused = FlowStage {
+            limit: Some(0),
+            ..siding
+        };
+        assert_eq!(stage_group_words(&paused), "siding · paused");
     }
 
     /// Who works a bead, for its hover and its details line: the

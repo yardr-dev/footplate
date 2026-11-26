@@ -469,8 +469,8 @@ pub struct FlowLanding {
 }
 
 /// One stage of a flow and the open beads in it, with the stage's wait
-/// light, whether entering it closes the bead, and its routed group's
-/// seats.
+/// light, whether entering it closes the bead, its routed group's seats
+/// and, where the group is a siding, its fold.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct FlowStage {
     pub stage: String,
@@ -498,6 +498,11 @@ pub struct FlowStage {
     /// group. Absent where no route matches.
     #[serde(default)]
     pub taken: Option<usize>,
+    /// How many waiting beads fill one fold, set where the stage's group
+    /// is a siding. Absent on every other stage, and from a yard too old
+    /// to say it.
+    #[serde(default)]
+    pub fold: Option<usize>,
     #[serde(default, deserialize_with = "or_default")]
     pub beads: Vec<FlowBead>,
 }
@@ -9808,6 +9813,9 @@ mod tests {
                         {"stage": "review", "group": "mckean", "human": true,
                          "lamp": "none", "terminal": false, "limit": 1, "taken": 1,
                          "beads": []},
+                        {"stage": "siding", "group": "siding", "human": true,
+                         "lamp": "none", "terminal": false, "limit": 50, "taken": 4,
+                         "fold": 4, "beads": []},
                         {"stage": "merged", "group": "", "human": false,
                          "lamp": "none", "terminal": true, "beads": []}
                     ],
@@ -9851,7 +9859,7 @@ mod tests {
         assert_eq!(depot.flows[0].source.as_str(), "store");
         assert_eq!(depot.flows[1].flow_type.as_str(), "design");
         let stages = &depot.flows[0].stages;
-        assert_eq!(stages.len(), 3);
+        assert_eq!(stages.len(), 4);
         assert_eq!(
             (
                 stages[0].stage.as_str(),
@@ -9877,10 +9885,25 @@ mod tests {
         assert_eq!(stages[1].lamp.as_str(), "none");
         assert_eq!((stages[1].limit, stages[1].taken), (Some(1), Some(1)));
         assert!(stages[1].beads.is_empty());
+        // The fold is a siding stage's alone: a stage that says none, as
+        // every stage of a yard too old to say it, reads none.
+        assert_eq!((stages[0].fold, stages[1].fold), (None, None));
+        assert_eq!(
+            (
+                stages[2].group.as_str(),
+                stages[2].limit,
+                stages[2].taken,
+                stages[2].fold
+            ),
+            ("siding", Some(50), Some(4), Some(4))
+        );
         // The terminal stage closes its beads; with no route it serves
         // no seats, absent rather than zero.
-        assert!(stages[2].terminal);
-        assert_eq!((stages[2].limit, stages[2].taken), (None, None));
+        assert!(stages[3].terminal);
+        assert_eq!(
+            (stages[3].limit, stages[3].taken, stages[3].fold),
+            (None, None, None)
+        );
         // What landed under the landed station, newest first; a flow
         // that serves none, or a yard too old to serve them, reads
         // empty.

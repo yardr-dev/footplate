@@ -466,9 +466,12 @@ details at their end, the move back picked and its note typed),
 moves the stage in one line), `lines-panel` (the arrivals panel over that
 yard, its stats counting the open ask with the three parked beads
 after it), `lines-departures` (that yard's board with its banner, counting
-the same), `lines-arrivals` (the arrivals pane over the rich yard: the depot
-tree with its nested flows, the head's stats, each moving flow a track of
-stations with its beads' chips, the quiet flows as one line each),
+the same), `lines-siding` (that yard's default flow open from its tree: its
+list grouped by stage, the siding's head saying its one waiting bead against
+its fold, `1 · people · 1 of 4 to fold`), `lines-arrivals` (the arrivals
+pane over the rich yard: the depot tree with its nested flows, the head's
+stats, each moving flow a track of stations with its beads' chips, the quiet
+flows as one line each),
 `lines-flow` (yardr's default flow open from that tree: its list grouped by
 stage, the empty stages folded), `lines-board` (footplate's board over its
 pull-request flow: one bead past triage, two terminals, two landings under

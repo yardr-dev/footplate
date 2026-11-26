@@ -267,10 +267,13 @@ stages' strip — each but the backlog's a 10-wide knot on the track
 with its name and the stages with beads named with their count —
 scrolling sideways past the pane's edge; `Grouped by stage · moving a
 bead goes through a Decide card`; then one group per stage with beads,
-each head with its count and its group words, the backlog's rows with
-the stage past them (`→ next`), and the served landing rows under the
-flow's landed end with their elapsed time. Empty stages fold to one
-row naming them. A row is 40 high: the
+each head with its count and its group words (the group's name, then
+what it waits for: `waiting on a person`, a siding's `1 of 4 to fold`
+— this depot's beads against its fold — or a served group's `2 of 3
+seats`; `paused` and `no route matches` say why a stage cannot move),
+the backlog's rows with the stage past them (`→ next`), and the served
+landing rows under the flow's landed end with their elapsed time. Empty
+stages fold to one row naming them. A row is 40 high: the
 mark (the working dot, the rust dot, the backlog's ring, the landed
 check), the short id in mono (`FLOW_ID`), the title, and at the
 right who works it with how long it has stood. The board under the

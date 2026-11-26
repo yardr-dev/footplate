@@ -290,6 +290,7 @@ pub const STATES: &[&str] = &[
     "lines-help",
     "lines-panel",
     "lines-departures",
+    "lines-siding",
     "lines-arrivals",
     "lines-flow",
     "lines-board",
@@ -2712,7 +2713,8 @@ fn populate(yard: &Yard, state: &str) {
             yard.answer("Bead", &bead_links());
         }
         "waiting" | "waiting-folded" | "waiting-end" | "old-waiting" | "lines-waiting"
-        | "lines-waiting-end" | "lines-help" | "lines-panel" | "lines-departures" => {
+        | "lines-waiting-end" | "lines-help" | "lines-panel" | "lines-departures"
+        | "lines-siding" => {
             // The Decide list: one open ask, and under it three beads
             // parked for jo's move, the longest waiting first: a bead with
             // a move forward and a move back that wants a note, one with
@@ -2727,6 +2729,9 @@ fn populate(yard: &Yard, state: &str) {
             // stage. The panel and departures shots open the arrivals pane
             // over the same yard instead: its stats and its banner
             // count the open ask with the three parked beads after it. The
+            // siding shot opens plantime's default flow, where the stages'
+            // heads stand: the siding's says its one waiting bead against
+            // its fold of four. The
             // old-waiting shot is the Decide list on a yard whose yardr
             // refuses the call by name, as one from before the call was a
             // stable one does: no section, the words that the yard is too
@@ -2841,7 +2846,7 @@ fn populate(yard: &Yard, state: &str) {
                                         "expected": "—", "remark": "waits for jo",
                                         "tone": "amber", "working": false}]},
                             {"stage": "siding", "group": "people", "human": true,
-                             "lamp": "turn", "terminal": false,
+                             "lamp": "turn", "terminal": false, "fold": 4,
                              "beads": [{"bead": "plantime-9c1e",
                                         "title": "Fold the October small fixes",
                                         "expected": "—", "remark": "waits for jo",
@@ -4508,7 +4513,7 @@ mod tests {
                 }
                 "waiting" | "waiting-folded" | "waiting-end" | "old-waiting" | "lines-waiting"
                 | "lines-waiting-end" | "lines-help" | "lines-panel" | "lines-departures"
-                | "frame" | "decide" => {
+                | "lines-siding" | "frame" | "decide" => {
                     assert_eq!(history(&loaded).len(), 12, "{state}")
                 }
                 "pair-qr" | "pair-ended" | "delivered-message" => {
@@ -5461,7 +5466,7 @@ mod tests {
                     assert!(!telling.text("until").is_empty(), "{state}");
                 }
                 "waiting" | "waiting-folded" | "waiting-end" | "lines-waiting"
-                | "lines-waiting-end" | "lines-panel" | "lines-departures" => {
+                | "lines-waiting-end" | "lines-panel" | "lines-departures" | "lines-siding" => {
                     // One open ask, and three beads parked for jo's move,
                     // the longest waiting first, with the moves the yard
                     // offers each: the first open on its card, where the
@@ -5481,6 +5486,12 @@ mod tests {
                     assert_eq!(bead.stage, "ready", "{state}");
                     assert_eq!(bead.notes.len(), 1, "{state}");
                     assert_eq!(loaded.flows.depots[0].flows[0].stages.len(), 6, "{state}");
+                    // The siding's head says its fold: `1 of 4 to fold`.
+                    assert_eq!(
+                        loaded.flows.depots[0].flows[0].stages[3].fold,
+                        Some(4),
+                        "{state}"
+                    );
                     // The panel and departures shots draw their own board
                     // over the shared one: the three parked beads, in the
                     // same order.

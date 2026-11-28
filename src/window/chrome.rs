@@ -2895,11 +2895,11 @@ impl Footplate {
             Selected::Waiting(bead) => {
                 self.ask_words.insert((bead.clone(), 0), typed);
             }
-            // The Lines details of a parked bead end with the same line:
-            // its note is the card's, kept the same way. A bead that is
-            // not parked draws no line to type in.
+            // The Lines details of a bead with moves end with the same
+            // line: its note is the card's, kept the same way. A bead with
+            // no moves draws no line to type in.
             Selected::Bead(bead) => {
-                if self.model.as_ref().is_some_and(|m| m.is_parked(bead)) {
+                if self.model.as_ref().is_some_and(|m| m.has_moves(bead)) {
                     self.ask_words.insert((bead.clone(), 0), typed);
                 }
             }
@@ -2936,9 +2936,9 @@ impl Footplate {
                 .ask_words
                 .remove(&(bead.clone(), 0))
                 .unwrap_or_default(),
-            // The note of a parked bead is the same on its Lines details.
+            // The note of a bead with moves is the same on its Lines details.
             Some(Selected::Bead(bead))
-                if self.model.as_ref().is_some_and(|m| m.is_parked(bead)) =>
+                if self.model.as_ref().is_some_and(|m| m.has_moves(bead)) =>
             {
                 self.ask_words
                     .remove(&(bead.clone(), 0))
@@ -3608,6 +3608,40 @@ impl Footplate {
                         },
                     )
                 }
+                // Made only when a bead detail opens or changes for a bead
+                // not already in `Waiting`. A yard too old for it has no
+                // call to make again.
+                Effect::BeadMoves { bead, generation } => self.ask_in(
+                    session,
+                    cx,
+                    {
+                        let bead = bead.clone();
+                        move |client, me| client.bead_moves(&bead, me)
+                    },
+                    move |this, answered, cx| match answered {
+                        Ok(row) => {
+                            let had_row = row.is_some();
+                            this.change_in(session, cx, |m| {
+                                m.bead_moves(&bead, generation, row);
+                                Vec::new()
+                            });
+                            if had_row
+                                && session == this.session
+                                && this.line.read(cx).text().is_empty()
+                                && this.model.as_ref().is_some_and(|m| {
+                                    m.selected() == Some(&Selected::Bead(bead.clone()))
+                                })
+                                && let Some(kept) = this.ask_words.remove(&(bead.clone(), 0))
+                            {
+                                this.line.update(cx, |line, cx| line.set_text(&kept, cx));
+                            }
+                        }
+                        Err(err) => this.change_in(session, cx, |m| {
+                            m.bead_moves_failed(&bead, generation, &err);
+                            Vec::new()
+                        }),
+                    },
+                ),
                 // The trailing read of a gated kind, once its interval is
                 // over: waited out, then made where the kind is still
                 // wanted and none is out.
@@ -7646,6 +7680,14 @@ fn shot_selected() -> Option<Selected> {
         }
         // The same bead's Lines details, from the board.
         Ok("lines-waiting") | Ok("lines-waiting-end") | Ok("lines-help") => {
+            return Some(Selected::Bead("plantime-4f2a".into()));
+        }
+        // A first-stage bead detail with its moves from `BeadMoves`, and a
+        // bead detail with an open ask and its "Answer in Decide" button.
+        Ok("lines-first-stage") => {
+            return Some(Selected::Bead("plantime-2b09".into()));
+        }
+        Ok("lines-asked") => {
             return Some(Selected::Bead("plantime-4f2a".into()));
         }
         // The same yard's default flow, where the stages' heads stand.

@@ -289,6 +289,8 @@ pub const STATES: &[&str] = &[
     "lines-waiting",
     "lines-waiting-end",
     "lines-help",
+    "lines-first-stage",
+    "lines-asked",
     "lines-panel",
     "lines-departures",
     "lines-siding",
@@ -2859,6 +2861,154 @@ fn populate(yard: &Yard, state: &str) {
                                         "expected": "—", "remark": "waits for jo",
                                         "tone": "amber", "working": false}]},
                             {"stage": "live", "group": "shippers", "human": false,
+                             "lamp": "none", "terminal": true, "beads": []}
+                        ]}
+                    ], "elsewhere": []}
+                ], "unassigned": []}})
+                .to_string(),
+            );
+        }
+        "lines-first-stage" => {
+            // A first-stage bead detail in Lines: `Waiting` is empty (first
+            // stages stay out of `Waiting`), and `BeadMoves` serves the
+            // moves for `plantime-2b09` in `triage` of `plantime`'s issue
+            // flow, so the detail ends with its moves and note line.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}]}"#,
+            );
+            yard.answer("UserAsks", r#"{"result": {"open": [], "decided": []}}"#);
+            yard.answer("Waiting", r#"{"result": []}"#);
+            let midnight = shot_midnight();
+            yard.answer(
+                "BeadMoves",
+                &json!({"result": {
+                    "bead": "plantime-2b09",
+                    "title": "Slow redraw when resizing a narrow window",
+                    "depot": "plantime",
+                    "stage": "triage",
+                    "group": "triage",
+                    "since": shot_since(&midnight, 0, 9, 15),
+                    "revision": "01KJ8W3C5T0E9XRQ2NAM4PBD7F",
+                    "actions": [
+                        {"kind": "done", "label": "accepted: move to backlog",
+                         "outcome": "accepted", "to": "backlog"},
+                        {"kind": "done", "label": "dropped: finish as dropped (closes the bead)",
+                         "outcome": "dropped", "to": "dropped", "terminal": true}
+                    ]
+                }})
+                .to_string(),
+            );
+            yard.answer(
+                "Bead",
+                &json!({"result": {
+                    "id": "plantime-2b09",
+                    "title": "Slow redraw when resizing a narrow window",
+                    "body": "Dragging the window down to 640px drops frames on the timetable pane.",
+                    "stage": "triage",
+                    "labels": ["kind:bug"],
+                    "notes": [{"seq": 2, "kind": "note", "author": "yardmaster",
+                               "text": "reproduced at 640x400; ready for triage",
+                               "at": shot_since(&midnight, 0, 9, 10)}],
+                    "asks": []
+                }})
+                .to_string(),
+            );
+            yard.answer(
+                "Flows",
+                &json!({"result": {"travelling": 1, "depots": [
+                    {"name": "plantime", "kind": "git", "travelling": 1, "flows": [
+                        {"name": "issue", "type": "issue", "source": "store", "stages": [
+                            {"stage": "triage", "group": "triage", "human": true,
+                             "lamp": "turn", "terminal": false,
+                             "beads": [{"bead": "plantime-2b09",
+                                        "title": "Slow redraw when resizing a narrow window",
+                                        "expected": "—", "remark": "waits for jo, yardmaster",
+                                        "tone": "amber", "working": false}]},
+                            {"stage": "backlog", "group": "people", "human": true,
+                             "lamp": "none", "terminal": false, "beads": []},
+                            {"stage": "new", "group": "builders", "human": false,
+                             "lamp": "none", "terminal": false, "limit": 2, "taken": 0,
+                             "beads": []},
+                            {"stage": "merged", "group": "assembly", "human": false,
+                             "lamp": "none", "terminal": true, "beads": []}
+                        ]}
+                    ], "elsewhere": []}
+                ], "unassigned": []}})
+                .to_string(),
+            );
+        }
+        "lines-asked" => {
+            // A bead detail in Lines with an open ask put to jo: the detail
+            // shows an "Answer in Decide" button in place of the plain asks
+            // words, and no moves (the ask is the next step).
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}]}"#,
+            );
+            let midnight = shot_midnight();
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [{
+                    "bead": "plantime-4f2a",
+                    "bead_title": "Release the autumn timetable",
+                    "ask": 7,
+                    "question": "Ship the autumn timetable with the platform notes?",
+                    "asker": "yardmaster",
+                    "since": shot_since(&midnight, 0, 9, 20)
+                }], "decided": []}})
+                .to_string(),
+            );
+            yard.answer("Waiting", r#"{"result": []}"#);
+            yard.answer("BeadMoves", r#"{"result": null}"#);
+            yard.answer(
+                "Bead",
+                &json!({"result": {
+                    "id": "plantime-4f2a",
+                    "title": "Release the autumn timetable",
+                    "body": "The folded carriers are printed and checked; the branch is green.",
+                    "stage": "decide",
+                    "labels": ["release"],
+                    "notes": [{"seq": 4, "kind": "note", "author": "assembly",
+                               "text": "folded 6 beads, tests pass",
+                               "at": shot_since(&midnight, 0, 9, 0)}],
+                    "asks": [{
+                        "ask": 7,
+                        "question": "Ship the autumn timetable with the platform notes?",
+                        "state": "open",
+                        "options": [
+                            {"number": 1, "label": "Ship with platform notes"},
+                            {"number": 2, "label": "Hold until Monday"}
+                        ]
+                    }]
+                }})
+                .to_string(),
+            );
+            yard.answer(
+                "Flows",
+                &json!({"result": {"travelling": 1, "depots": [
+                    {"name": "plantime", "kind": "git", "travelling": 1, "flows": [
+                        {"name": "default", "type": "", "source": "store", "stages": [
+                            {"stage": "backlog", "group": "people", "human": true,
+                             "lamp": "none", "terminal": false, "beads": []},
+                            {"stage": "new", "group": "builders", "human": false,
+                             "lamp": "none", "terminal": false, "limit": 2, "taken": 0,
+                             "beads": []},
+                            {"stage": "decide", "group": "decisions", "human": true,
+                             "lamp": "turn", "terminal": false,
+                             "beads": [{"bead": "plantime-4f2a",
+                                        "title": "Release the autumn timetable",
+                                        "expected": "—", "remark": "waits for jo",
+                                        "tone": "amber", "working": false}]},
+                            {"stage": "merged", "group": "assembly", "human": false,
                              "lamp": "none", "terminal": true, "beads": []}
                         ]}
                     ], "elsewhere": []}
@@ -5687,6 +5837,31 @@ mod tests {
                     );
                     assert!(!stage.beads[0].working, "{state}");
                     assert_eq!(stage.beads[0].bead, "plantime-4f2a", "{state}");
+                }
+                "lines-first-stage" => {
+                    assert!(loaded.asks.open.is_empty(), "{state}");
+                    assert!(loaded.parked.is_empty(), "{state}");
+                    assert!(!loaded.waiting_too_old, "{state}");
+                    let bead = yard.client().bead("plantime-2b09").unwrap();
+                    assert_eq!(bead.stage, "triage", "{state}");
+                    let moves = yard
+                        .client()
+                        .bead_moves("plantime-2b09", "jo")
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(moves.actions.len(), 2, "{state}");
+                    assert_eq!(moves.actions[0].outcome, "accepted", "{state}");
+                }
+                "lines-asked" => {
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    assert_eq!(loaded.asks.open[0].bead, "plantime-4f2a", "{state}");
+                    assert_eq!(loaded.asks.open[0].ask, 7, "{state}");
+                    assert!(loaded.parked.is_empty(), "{state}");
+                    assert_eq!(
+                        yard.client().bead_moves("plantime-4f2a", "jo").unwrap(),
+                        None,
+                        "{state}"
+                    );
                 }
                 "decisions" | "decisions-filtered" | "decisions-more" => {
                     // One open ask with four options on its card.

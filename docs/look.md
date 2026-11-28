@@ -298,6 +298,18 @@ toggle is the depot board's columns for the one flow. In a narrow pane,
 long titles, stage names, group words and metadata end with an ellipsis;
 their character budgets grow with the pane so the text stays inside it.
 
+A bead's detail pane opens from Lines or a mail reference with the bead's
+head, its body and its notes. Where the yard holds an open ask on the bead
+put to the viewer, each ask stands above the body on `raised` with a 1px
+`line` border, `Waiting on you` in `text_accent` beside the ask number and
+asker in `faint`, the question's first line in the label role, and one
+filled primary button, `Answer in Decide`, which opens that ask in Decide;
+open asks to others only keep the quiet count words. Where the bead has no
+open ask to the viewer and the yard serves moves for them — parked in
+`Waiting` or at a flow's first stage via `BeadMoves` — the detail ends with
+the same move buttons, note field and keys line as a parked bead's Decide
+card (or the one quiet stage-help line where the yard predates `Waiting`).
+
 A press on a station opens the stage's context drawer at the window's
 right, over the Lines views. It is 440 wide (`CONTEXT_WIDTH`), grown
 with the text: beside the pane where the pane keeps 440 past it (at

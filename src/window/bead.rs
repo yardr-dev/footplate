@@ -40,7 +40,7 @@ use crate::model::{
 };
 use crate::save;
 use crate::select;
-use crate::theme::Palette;
+use crate::theme::{Palette, TYPE_LABEL, TYPE_META};
 use crate::voice::{self, Ask, Caption, Speaking, Start, State, Update};
 
 /// Whether the letter `seq` shows its time in the gutter: it reads
@@ -2930,7 +2930,100 @@ impl Footplate {
             .flex()
             .flex_col()
             .gap_4();
-        if detail.open_asks > 0 {
+        let viewer_asks = model.bead_open_asks(&detail.bead);
+        if !viewer_asks.is_empty() {
+            let mut asks = div().flex().flex_col().gap_2().debug_selector({
+                let bead = detail.bead.clone();
+                move || format!("bead asks {bead}")
+            });
+            for ask in viewer_asks {
+                let bead_click = detail.bead.clone();
+                let ask_seq = ask.ask;
+                let head = model::row_head(&ask.question);
+                let meta = match ask.asker.is_empty() {
+                    true => format!("· ask {ask_seq}"),
+                    false => format!("· ask {ask_seq} · {}", ask.asker),
+                };
+                asks = asks.child(
+                    div()
+                        .p_3()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(palette.line)
+                        .bg(palette.raised)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .gap_1()
+                                        .text_size(rems(TYPE_META))
+                                        .child(
+                                            div()
+                                                .text_color(palette.text_accent)
+                                                .child("Waiting on you"),
+                                        )
+                                        .child(div().text_color(palette.faint).child(meta)),
+                                )
+                                .when(!head.is_empty(), |el| {
+                                    el.child(
+                                        div()
+                                            .min_w_0()
+                                            .text_size(rems(TYPE_LABEL))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(palette.text)
+                                            .child(head),
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "bead ask {} {ask_seq}",
+                                    detail.bead
+                                )))
+                                .debug_selector({
+                                    let bead = detail.bead.clone();
+                                    move || format!("bead ask {bead} {ask_seq}")
+                                })
+                                .flex_none()
+                                .min_h(px(32.))
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(palette.button)
+                                .bg(palette.button)
+                                .text_size(rems(TYPE_LABEL))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(palette.on_button)
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(palette.button_hover))
+                                .active(|style| style.bg(palette.button_pressed))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.drawer = None;
+                                    this.select(Selected::Decision(bead_click.clone()), window, cx);
+                                    this.select_ask(bead_click.clone(), ask_seq, cx);
+                                }))
+                                .child("Answer in Decide"),
+                        ),
+                );
+            }
+            list = list.child(asks);
+        } else if detail.open_asks > 0 {
             list = list.child(
                 div()
                     .text_sm()

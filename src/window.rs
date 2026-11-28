@@ -42072,6 +42072,255 @@ yardr.dev
         assert!(!drawn(cx, "waiting move bead-q 1"));
     }
 
+    /// A first-stage bead detail (not in `Waiting`) reads `BeadMoves`, draws
+    /// its moves without changing the Waiting count, moves on a pick and
+    /// shows its new stage after the re-read; a bead with open asks to the
+    /// viewer draws "Answer in Decide" buttons that open Decide on that ask,
+    /// while open asks to others keep the plain words; and a yard without
+    /// `BeadMoves` behaves as before with no notice.
+    #[gpui::test]
+    fn a_first_stage_bead_detail_offers_moves_and_open_asks_open_decide(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Waiting", r#"{"result": []}"#);
+        yard.answer(
+            "UserAsks",
+            r#"{"result": {"open": [
+                {"bead": "bead-asked", "bead_title": "Asked twice", "ask": 3,
+                 "question": "First question?", "asker": "yardmaster",
+                 "since": "2026-10-08T09:00:00Z"},
+                {"bead": "bead-asked", "bead_title": "Asked twice", "ask": 7,
+                 "question": "Second question?", "asker": "yardmaster",
+                 "since": "2026-10-08T09:30:00Z"}
+            ], "decided": []}}"#,
+        );
+        yard.answer(
+            "Arrivals",
+            r#"{"result": {"rows": [
+                {"bead": "bead-triage", "title": "Triage an issue", "line": "plantime",
+                 "stage": "triage", "expected": "—", "remark": "waits for jo", "tone": "amber"},
+                {"bead": "bead-asked", "title": "Asked twice", "line": "plantime",
+                 "stage": "decide", "expected": "—", "remark": "waits for jo", "tone": "amber"},
+                {"bead": "bead-others", "title": "Asked of someone else", "line": "plantime",
+                 "stage": "decide", "expected": "—", "remark": "waits for sam", "tone": "amber"}
+            ]}}"#,
+        );
+        yard.answer(
+            "Flows",
+            r#"{"result": {"travelling": 3, "depots": [{
+                "name": "plantime", "kind": "git", "travelling": 3,
+                "flows": [{"name": "issue", "type": "issue", "source": "store", "stages": [
+                    {"stage": "triage", "group": "triage", "human": true, "lamp": "turn", "terminal": false,
+                     "beads": [{"bead": "bead-triage", "title": "Triage an issue", "expected": "—",
+                                "remark": "waits for jo", "tone": "amber", "working": false}]},
+                    {"stage": "backlog", "group": "people", "human": true, "lamp": "none", "terminal": false,
+                     "beads": []},
+                    {"stage": "decide", "group": "decisions", "human": true, "lamp": "turn", "terminal": false,
+                     "beads": [
+                        {"bead": "bead-asked", "title": "Asked twice", "expected": "—",
+                         "remark": "waits for jo", "tone": "amber", "working": false},
+                        {"bead": "bead-others", "title": "Asked of someone else", "expected": "—",
+                         "remark": "waits for sam", "tone": "amber", "working": false}
+                     ]},
+                    {"stage": "merged", "group": "assembly", "human": false, "lamp": "none", "terminal": true,
+                     "beads": []}
+                ]}],
+                "elsewhere": []
+            }], "unassigned": []}}"#,
+        );
+        yard.answer_for(
+            "Bead",
+            "bead",
+            "bead-triage",
+            r#"{"result": {"id": "bead-triage", "title": "Triage an issue",
+                "body": "Needs triage before backlog.", "stage": "triage",
+                "labels": [], "notes": [], "asks": []}}"#,
+        );
+        yard.answer_for(
+            "Bead",
+            "bead",
+            "bead-asked",
+            r#"{"result": {"id": "bead-asked", "title": "Asked twice",
+                "body": "Waiting on jo.", "stage": "decide", "labels": [], "notes": [],
+                "asks": [
+                    {"ask": 3, "question": "First question?", "state": "open", "options": []},
+                    {"ask": 7, "question": "Second question?", "state": "open", "options": []}
+                ]}}"#,
+        );
+        yard.answer_for(
+            "Bead",
+            "bead",
+            "bead-others",
+            r#"{"result": {"id": "bead-others", "title": "Asked of someone else",
+                "body": "Waiting on sam.", "stage": "decide", "labels": [], "notes": [],
+                "asks": [{"ask": 5, "question": "For sam?", "state": "open", "options": []}]}}"#,
+        );
+        yard.answer("BeadMoves", r#"{"result": null}"#);
+        yard.answer_for(
+            "BeadMoves",
+            "bead",
+            "bead-triage",
+            r#"{"result": {
+                "bead": "bead-triage", "title": "Triage an issue", "depot": "plantime",
+                "stage": "triage", "group": "triage", "since": "2026-10-08T09:00:00Z",
+                "revision": "rev-triage",
+                "actions": [
+                    {"kind": "done", "label": "accepted: move to backlog",
+                     "outcome": "accepted", "to": "backlog"},
+                    {"kind": "done", "label": "dropped: finish as dropped (closes the bead)",
+                     "outcome": "dropped", "to": "dropped", "terminal": true}
+                ]
+            }}"#,
+        );
+
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+        to_timetable(&view, cx);
+        click_on(cx, "row arrivals");
+        to_departures(cx);
+        wait(cx, "the board", |cx| drawn(cx, "arrival bead-triage"));
+
+        // First-stage bead detail shows its moves while `Waiting` stays 0.
+        click_on(cx, "arrival bead-triage");
+        wait(cx, "first-stage moves", |cx| {
+            has_bead(&view, cx, "bead-triage")
+                && drawn(cx, "waiting move bead-triage 1")
+                && drawn(cx, "waiting move bead-triage 2")
+        });
+        view.read_with(cx, |v, _| {
+            let m = v.model.as_ref().unwrap();
+            assert_eq!(m.parked_count(), 0);
+            assert!(!m.is_parked("bead-triage"));
+            assert!(m.has_moves("bead-triage"));
+            assert_eq!(v.keys_view(), KeysView::Moves);
+        });
+
+        // Picking "accepted" moves the bead to `backlog` and the detail's
+        // stage updates to `backlog` after the re-read.
+        yard.answer(
+            "MoveBead",
+            r#"{"result": {"bead": "bead-triage", "stage": "backlog"}}"#,
+        );
+        yard.answer_for(
+            "Bead",
+            "bead",
+            "bead-triage",
+            r#"{"result": {"id": "bead-triage", "title": "Triage an issue",
+                "body": "Needs triage before backlog.", "stage": "backlog",
+                "labels": [], "notes": [], "asks": []}}"#,
+        );
+        yard.answer_for("BeadMoves", "bead", "bead-triage", r#"{"result": null}"#);
+        click_on(cx, "waiting move bead-triage 1");
+        wait(cx, "moved to backlog", |cx| {
+            !yard.asked("MoveBead").is_empty()
+                && view.read_with(cx, |v, _| {
+                    v.model
+                        .as_ref()
+                        .and_then(|m| m.arrival_detail("bead-triage"))
+                        .is_some_and(|d| d.stage == "backlog")
+                })
+        });
+        assert_eq!(
+            yard.asked("MoveBead"),
+            [json!({
+                "bead": "bead-triage", "outcome": "accepted",
+                "revision": "rev-triage", "actor": "jo"
+            })]
+        );
+        assert_eq!(
+            view.read_with(cx, |v, _| v.keys_view()),
+            KeysView::Timetable
+        );
+
+        // Open asks to the viewer show "Answer in Decide" buttons and no
+        // moves; pressing one selects that ask in Decide.
+        click_on(cx, "bead back");
+        wait(cx, "the board", |cx| drawn(cx, "arrival bead-asked"));
+        click_on(cx, "arrival bead-asked");
+        wait(cx, "asked detail", |cx| {
+            drawn(cx, "bead ask bead-asked 3") && drawn(cx, "bead ask bead-asked 7")
+        });
+        assert!(!drawn(cx, "waiting move bead-asked 1"));
+        click_on(cx, "bead ask bead-asked 7");
+        wait(cx, "opened in Decide", |cx| {
+            view.read_with(cx, |v, _| {
+                let m = v.model.as_ref().unwrap();
+                m.selected() == Some(&Selected::Decision("bead-asked".into()))
+                    && m.current_ask() == Some(("bead-asked".into(), 7))
+            })
+        });
+
+        // Open asks to others only keep today's plain words and no button.
+        to_timetable(&view, cx);
+        click_on(cx, "row arrivals");
+        wait(cx, "the board", |cx| drawn(cx, "arrival bead-others"));
+        click_on(cx, "arrival bead-others");
+        wait(cx, "others detail", |cx| drawn(cx, "bead asks bead-others"));
+        assert!(!drawn(cx, "bead ask bead-others 5"));
+        click_on(cx, "bead asks bead-others");
+        cx.run_until_parked();
+        assert_eq!(
+            open_row(&view, cx),
+            Some(Selected::Bead("bead-others".into()))
+        );
+    }
+
+    /// Against a yard that serves `Waiting` but predates `BeadMoves`, a
+    /// bead detail behaves as before: no moves, no stage help line, no
+    /// notice, and `Waiting` stays intact.
+    #[gpui::test]
+    fn a_yard_without_bead_moves_keeps_the_bead_detail_as_before(cx: &mut TestAppContext) {
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer("Waiting", r#"{"result": []}"#);
+        yard.answer(
+            "Arrivals",
+            r#"{"result": {"rows": [
+                {"bead": "bead-triage", "title": "Triage an issue", "line": "plantime",
+                 "stage": "triage", "expected": "—", "remark": "waits for jo", "tone": "amber"}
+            ]}}"#,
+        );
+        yard.answer(
+            "Flows",
+            r#"{"result": {"travelling": 1, "depots": [{
+                "name": "plantime", "kind": "git", "travelling": 1,
+                "flows": [{"name": "issue", "type": "issue", "source": "store", "stages": [
+                    {"stage": "triage", "group": "triage", "human": true, "lamp": "turn", "terminal": false,
+                     "beads": [{"bead": "bead-triage", "title": "Triage an issue", "expected": "—",
+                                "remark": "waits for jo", "tone": "amber", "working": false}]},
+                    {"stage": "merged", "group": "assembly", "human": false, "lamp": "none", "terminal": true,
+                     "beads": []}
+                ]}],
+                "elsewhere": []
+            }], "unassigned": []}}"#,
+        );
+        yard.answer_for(
+            "Bead",
+            "bead",
+            "bead-triage",
+            r#"{"result": {"id": "bead-triage", "title": "Triage an issue",
+                "body": "Needs triage.", "stage": "triage",
+                "labels": [], "notes": [], "asks": []}}"#,
+        );
+        // No `BeadMoves` answer scripted: fake yard answers `no such method BeadMoves`.
+        let (view, cx) = opened(&yard, &["Shall I land it?"], cx);
+        cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+        to_timetable(&view, cx);
+        click_on(cx, "row arrivals");
+        to_departures(cx);
+        wait(cx, "the board", |cx| drawn(cx, "arrival bead-triage"));
+        click_on(cx, "arrival bead-triage");
+        wait(cx, "bead-triage on old yard", |cx| {
+            has_bead(&view, cx, "bead-triage")
+                && drawn(cx, "bead title bead-triage")
+                && view.read_with(cx, |v, _| v.model.as_ref().unwrap().bead_moves_too_old())
+        });
+        assert_eq!(notice(&view, cx), "");
+        assert!(!view.read_with(cx, |v, _| v.model.as_ref().unwrap().waiting_too_old()));
+        assert!(!drawn(cx, "waiting move bead-triage 1"));
+        assert!(!drawn(cx, "stage help bead-triage"));
+    }
+
     /// A yard opened again is on the row it was left on, and that row's
     /// conversation as far above its newest as it stood: not on the row a
     /// yard opens on, at its newest. Each yard has its own.

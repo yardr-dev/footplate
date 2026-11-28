@@ -1,6 +1,7 @@
-//! The parked beads' views: a bead's row in the decisions' Waiting section,
-//! the card that offers the moves the yard serves it, and what the moves
-//! do: pick one, write its note, make it.
+//! The parked beads' views and the moves block shared with Lines details:
+//! a bead's row in the decisions' Waiting section, the card or detail that
+//! offers the moves the yard serves it, and what the moves do: pick one,
+//! write its note, make it.
 
 use gpui::{
     ClickEvent, Context, Div, Focusable, FontWeight, SharedString, Stateful, Window, div,
@@ -39,8 +40,8 @@ pub(crate) const NO_MOVE_UNTIL_FIXED: &str = "no move is offered until the flow 
 pub(crate) const STAGE_HELP: &str =
     "this stage is moved by its people: yardr review on the yard's machine offers them its moves";
 
-/// The keys of a parked bead's card, as they stand under it. Several moves
-/// are picked by number; a lone move stands picked.
+/// The keys under a bead's move block. Several moves are picked by number;
+/// a lone move stands picked.
 pub(crate) fn waiting_keys(moves: usize) -> String {
     match moves {
         0 => String::new(),
@@ -87,10 +88,9 @@ pub(crate) fn note_wanted(label: &str) -> String {
 
 impl Footplate {
     /// The bead whose moves are in view: a parked bead's card, or the Lines
-    /// details of a bead the yard parks for the person once the bead is
-    /// read, whose block is the card's own. The settings stand where the
-    /// card does, and the Feedback form over it, and the keys are not for
-    /// moves that are not in view.
+    /// details of a bead whose moves `BeadMoves` serves. The settings stand
+    /// where the card does, the Feedback form stands over it, and the keys
+    /// are not for moves that are not in view.
     pub(crate) fn waiting_card(&self) -> Option<String> {
         if self.settings_open || self.feedback.is_some() {
             return None;
@@ -101,15 +101,15 @@ impl Footplate {
             // The details draw "Reading the bead." and no block until the
             // bead is read; a drawer beside another row shuts as a bead
             // opens full width, so none is open here.
-            Selected::Bead(bead) if model.is_parked(bead) && model.has_bead(bead) => {
+            Selected::Bead(bead) if model.has_moves(bead) && model.has_bead(bead) => {
                 Some(bead.clone())
             }
             _ => None,
         }
     }
 
-    /// How many moves the open parked bead's card offers: the line for the
-    /// note stands where there are any.
+    /// How many moves the open parked card or bead detail offers: the line
+    /// for the note stands where there are any.
     pub(crate) fn waiting_moves(&self) -> usize {
         let Some(bead) = self.waiting_card() else {
             return 0;
@@ -484,10 +484,10 @@ impl Footplate {
             .child(STAGE_HELP)
     }
 
-    /// Enter on a parked bead's card, and a click on a move: the move
-    /// the pick names, or the only one offered. A move that wants words and
-    /// finds the line empty is not made, and says so; so does Enter when
-    /// several are offered and none is picked.
+    /// Enter in a parked bead's card or a Lines detail, and a click on a
+    /// move: the move the pick names, or the only one offered. A move that
+    /// wants words and finds the line empty is not made, and says so; so
+    /// does Enter when several are offered and none is picked.
     pub(crate) fn make_picked_move(&mut self, bead: String, cx: &mut Context<Self>) {
         // Folded moves stand unfolded first: expanding is local, so it
         // goes even while the yard is not answering.
@@ -555,8 +555,11 @@ impl Footplate {
                     Err(err) => {
                         let refused = (bead.clone(), 0);
                         this.refused_in(session, refused, model::not_moved(&err), cx);
-                        this.change_in(session, cx, |_| {
-                            vec![Effect::Waiting, Effect::Bead { bead }]
+                        this.change_in(session, cx, |m| {
+                            let mut effects =
+                                vec![Effect::Waiting, Effect::Bead { bead: bead.clone() }];
+                            effects.extend(m.reread_bead_moves(&bead));
+                            effects
                         });
                     }
                 }
@@ -609,9 +612,9 @@ impl Footplate {
         }
     }
 
-    /// Esc on a parked bead's card, with the window holding the keys: the
-    /// pick first, then the words, as an ask's card has it. Esc in the line
-    /// leaves the line alone, and what is typed stays.
+    /// Esc in a parked bead's card or a Lines detail, with the window
+    /// holding the keys: the pick first, then the words, as an ask's card
+    /// has it. Esc in the line leaves the line alone, and what is typed stays.
     pub(crate) fn leave_waiting(
         &mut self,
         bead: String,

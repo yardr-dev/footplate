@@ -465,7 +465,11 @@ old in its place, the open ask's card open), `lines-waiting`
 `lines-waiting-end` (those
 details at their end, the move back picked and its note typed),
 `lines-help` (the same details on a yard from before the call, which say who
-moves the stage in one line), `lines-panel` (the arrivals panel over that
+moves the stage in one line), `lines-first-stage` (the details of a bead at its
+flow's first stage, not in `Waiting`, with the moves `BeadMoves` serves under
+its body), `lines-asked` (the details of a bead with an open ask put to the
+viewer, showing the "Answer in Decide" button in place of the plain asks
+words), `lines-panel` (the arrivals panel over that
 yard, its stats counting the open ask with the three parked beads
 after it), `lines-departures` (that yard's board with its banner, counting
 the same), `lines-siding` (that yard's default flow open from its tree: its

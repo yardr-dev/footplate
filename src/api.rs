@@ -4812,6 +4812,15 @@ impl Client {
         self.list("Waiting", json!({ "name": name }))
     }
 
+    /// One bead's moves for the person, as [`Client::waiting`] lists them,
+    /// with a flow's first stage served too. Answers `None` where the bead
+    /// has no row for the person (not in a manual stage of theirs, carrying
+    /// an open ask to them, closed, held, missing, or hidden from them). A
+    /// yard from before the call says it has no such method.
+    pub fn bead_moves(&self, bead: &str, name: &str) -> Result<Option<Parked>> {
+        self.answer("BeadMoves", json!({ "bead": bead, "name": name }))
+    }
+
     /// The arrivals board: the open beads still travelling, up to 15
     /// rows in arrival order, each with its expected arrival and remark.
     /// A yard not yet upgraded serves the rows as a bare list, which
@@ -5893,6 +5902,7 @@ const READS: &[&str] = &[
     "UserAsks",
     "UserOpenAsks",
     "Waiting",
+    "BeadMoves",
     "Arrivals",
     "Flows",
     "Line",
@@ -11181,6 +11191,76 @@ mod tests {
         assert_eq!(err.to_string(), "no such method Waiting");
         // A read: a timeout on it changed nothing.
         assert!(reads("Waiting"));
+    }
+
+    /// `BeadMoves` asks for one bead's moves for the user by bead and name,
+    /// reading the same row shape as `Waiting`, `None` when the yard answers
+    /// `null`, and `no such method` on a yard from before the call.
+    #[test]
+    fn bead_moves_reads_one_bead_or_none_for_the_user() {
+        for yard in [Yard::start(), Yard::start_tcp()] {
+            let client = yard.client();
+            let way = client.place();
+            // A yard from before the call says so, as for `Waiting`.
+            let err = client.bead_moves("yd-triage", "jo").unwrap_err();
+            assert_eq!(err.to_string(), "no such method BeadMoves", "{way}");
+            yard.answer(
+                "BeadMoves",
+                r#"{"result": {
+                    "bead": "yd-triage", "title": "Triage the issue", "depot": "yard",
+                    "stage": "triage", "group": "triage", "since": "2026-10-08T09:30:00Z",
+                    "revision": "01KJ8W3C5T0E9XRQ2NAM4PBD7F",
+                    "actions": [
+                        {"kind": "done", "label": "accepted: move to backlog",
+                         "outcome": "accepted", "to": "backlog"},
+                        {"kind": "done", "label": "dropped: finish as dropped (closes the bead)",
+                         "outcome": "dropped", "to": "dropped", "terminal": true}
+                    ]
+                }}"#,
+            );
+            let row = client.bead_moves("yd-triage", "jo").unwrap().unwrap();
+            assert_eq!(
+                yard.asked("BeadMoves").last(),
+                Some(&json!({"bead": "yd-triage", "name": "jo"})),
+                "{way}"
+            );
+            assert_eq!(
+                (
+                    row.bead.as_str(),
+                    row.title.as_str(),
+                    row.depot.as_str(),
+                    row.stage.as_str(),
+                    row.group.as_str(),
+                    row.revision.as_str()
+                ),
+                (
+                    "yd-triage",
+                    "Triage the issue",
+                    "yard",
+                    "triage",
+                    "triage",
+                    "01KJ8W3C5T0E9XRQ2NAM4PBD7F"
+                ),
+                "{way}"
+            );
+            assert_eq!(row.actions.len(), 2, "{way}");
+            assert_eq!(
+                (
+                    row.actions[0].kind.as_str(),
+                    row.actions[0].outcome.as_str(),
+                    row.actions[0].to.as_str(),
+                    row.actions[0].terminal
+                ),
+                ("done", "accepted", "backlog", false),
+                "{way}"
+            );
+            assert!(row.actions[1].terminal, "{way}");
+            // No row for this user (non-member, open ask, hidden, closed): null.
+            yard.answer("BeadMoves", r#"{"result": null}"#);
+            assert_eq!(client.bead_moves("yd-triage", "jo").unwrap(), None, "{way}");
+            // A read: a timeout on it changed nothing.
+            assert!(reads("BeadMoves"), "{way}");
+        }
     }
 
     /// `MoveBead` makes the move a `Waiting` row offered, by the argument

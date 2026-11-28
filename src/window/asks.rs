@@ -14,8 +14,8 @@ use super::Expanded;
 use super::Footplate;
 use super::ask::{
     ANSWER_WORDS, APPROVE_ELSEWHERE, Approval, DECLINE_IS_NO_PICK, OutsideKind, PLAN_CHANGES,
-    PLAN_MATCHES, PLAN_ROWS_SHOWN, PlanRow, RECOMMENDED, RUN_PROPOSED, RunText, SEND_WORDS,
-    SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate, answer_label, approval,
+    PLAN_DIFFERS, PLAN_MATCHES, PLAN_ROWS_SHOWN, PlanRow, RECOMMENDED, RUN_PROPOSED, RunText,
+    SEND_WORDS, SETUP_PROPOSED, SETUP_TAKE, TEAMMATE_CORRECTION, Teammate, answer_label, approval,
     approve_button, approve_move_label, ask_line, asked_age, asks_on_you, candidate_choice_line,
     card_head, carried_texts, decided_keys, decision_head, description_line, fenced, fold_head,
     fold_label, give_label, give_unlock_label, is_device_pair_run, lever_plate, lever_words,
@@ -5239,11 +5239,11 @@ impl Footplate {
     }
 
     /// A depot pack ask's plan as the design board draws it: one line for
-    /// what it comes to, then what changes and what already matches the
-    /// yard, a row each. Nothing where the plan has no row to draw, as for
-    /// a yard from before the rows. The rows are the plan laid out for
-    /// reading: the yard's sentences stand under them, and the approval is
-    /// given on those.
+    /// what it comes to, then what changes, what differs and stays as the
+    /// yard has it, and what already matches the yard, a row each. Nothing
+    /// where the plan has no row to draw, as for a yard from before the
+    /// rows. The rows are the plan laid out for reading: the yard's
+    /// sentences stand under them, and the approval is given on those.
     fn plan_block(
         &self,
         at: (&str, u64),
@@ -5252,11 +5252,11 @@ impl Footplate {
         cx: &mut Context<Self>,
     ) -> Option<Div> {
         let (bead, ask) = at;
-        let (moves, matches) = plan_rows(pack.plan.as_ref()?, &pack.depot);
-        if moves.is_empty() && matches.is_empty() {
+        let (moves, differs, matches) = plan_rows(pack.plan.as_ref()?, &pack.depot);
+        if moves.is_empty() && differs.is_empty() && matches.is_empty() {
             return None;
         }
-        let summary = plan_summary(&moves, matches.len());
+        let summary = plan_summary(&moves, differs.len(), matches.len());
         let mut block = div().flex().flex_col().gap_3().child(
             div()
                 .debug_selector(|| format!("run plan summary {bead} {ask}"))
@@ -5269,6 +5269,7 @@ impl Footplate {
         );
         let sections = [
             ("changes", PLAN_CHANGES, moves.len().to_string(), &moves),
+            ("differs", PLAN_DIFFERS, differs.len().to_string(), &differs),
             (
                 "matches",
                 PLAN_MATCHES,

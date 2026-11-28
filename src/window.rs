@@ -19759,10 +19759,11 @@ yardr.dev
         assert!(store_mail.contains("\"stages\":[\"kept\",\"inbox\"]"));
         click_on(cx, "line depot yardr");
         wait(cx, "yardr's line again", |cx| drawn(cx, "line detail new"));
-        // A pack's flow is a store flow its pack brought: it offers the
-        // controls, says whose it is and what pack apply then keeps, and
-        // files the flow card, never a bead of the depot (which has no
-        // file of it), approving nothing.
+        // A pack's flow is a store flow its line brought: it offers the
+        // controls, says where it was copied from and what pack apply
+        // writes, shows no terminal command to take it back, and files
+        // the flow card, never a bead of the depot (which has no file
+        // of it), approving nothing.
         click_on(cx, "line flow managed pack starter");
         wait(cx, "the pack flow", |cx| drawn(cx, "line detail intake"));
         for control in ["add", "up", "down", "remove"] {
@@ -19771,9 +19772,10 @@ yardr.dev
                 "{control}"
             );
         }
-        for words in ["door", "pack whose", "pack keeps", "pack take"] {
+        for words in ["door", "pack whose", "pack keeps"] {
             assert!(drawn(cx, &format!("line stages intake {words}")), "{words}");
         }
+        assert!(!drawn(cx, "line stages intake pack take"));
         assert_eq!(yard.asked("Mail").len(), 2);
         click_on(cx, "line stages intake down");
         wait(cx, "the pack flow's card", |_| {
@@ -35986,8 +35988,10 @@ yardr.dev
         let (view, cx) = opened_on_a_depot_ask(&yard, &file, cx);
 
         // The line of what it comes to, the two sections, then the yard's
-        // sentences, in that order and inside the yard's block.
+        // sentences, in that order and inside the yard's block. An older
+        // yard with no `differs` objects draws no `differs` section.
         assert!(drawn(cx, "run plan summary bead-s 7"));
+        assert!(!drawn(cx, "run differs head bead-s 7"));
         let block = bounds_of(cx, "run bead-s 7");
         let summary = bounds_of(cx, "run plan summary bead-s 7");
         let changes = bounds_of(cx, "run changes head bead-s 7");
@@ -36102,6 +36106,123 @@ yardr.dev
             narrow > wide,
             "the hook's mapping wraps: {narrow:?} over {wide:?}"
         );
+
+        // A yard with `differs` objects draws its own section between
+        // What changes and Already matches, showing the first three rows
+        // and folding the rest behind its own Show K more control.
+        let run_differs = json!({
+            "argv": ["pack", "apply", "starter", "--depot", "web"],
+            "command": "yardr pack apply starter --depot web",
+            "description": "Import a pack into a depot",
+            "does": ["pack starter into depot web: creates 1 group, 4 differ, 2 unchanged."],
+            "back": "no one command takes this back",
+            "back_by": "the operator",
+            "pack": {"name": "starter", "kind": "git", "depot": "web",
+                     "label": "yardr 0077eb255",
+                     "plan": {"objects": [
+                         {"kind": "group", "name": "web-checkers", "action": "create"},
+                         {"kind": "flow", "name": "starter.default", "action": "differs",
+                          "changes": [{"field": "stages", "old": "new, triage, review", "new": "new, review"}]},
+                         {"kind": "group", "name": "web-builders", "action": "differs",
+                          "changes": [{"field": "limit", "old": "3", "new": "2"}]},
+                         {"kind": "file", "name": "flows/default/new.md", "action": "differs"},
+                         {"kind": "pointer", "name": "depot web -> starter.short", "action": "differs",
+                          "changes": [{"field": "flow", "old": "starter.short", "new": "starter.default"}]},
+                         {"kind": "file", "name": "roles/reviewer.md", "action": "unchanged"}
+                     ], "governs": [
+                         {"type": "", "flow": "starter.default", "now": "starter.default"}
+                     ]}}
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [{
+                "bead": "bead-s", "bead_title": "Apply starter", "topic": "", "ask": 7,
+                "question": "Apply starter?", "asker": "yardmaster",
+                "since": "2026-10-10T10:00:00Z", "run": run_differs
+            }], "decided": []}})
+            .to_string(),
+        );
+        yard.answer(
+            "Bead",
+            &json!({"result": {"id": "bead-s", "title": "Apply starter", "body": "The body.",
+            "stage": "new", "labels": [], "notes": [], "asks": [{
+                "ask": 7, "to": "jo", "asker": "yardmaster",
+                "since": "2026-10-10T10:00:00Z",
+                "question": "Apply starter?", "context": [], "options": [],
+                "state": "open", "run": run_differs
+            }]}})
+            .to_string(),
+        );
+        let at = env_on(&yard, &file);
+        let (view, cx) = opened_on_the_ask(at, &file, cx);
+        let changes = bounds_of(cx, "run changes head bead-s 7");
+        let differs = bounds_of(cx, "run differs head bead-s 7");
+        let matches = bounds_of(cx, "run matches head bead-s 7");
+        assert!(changes.bottom() <= differs.top(), "{changes:?} {differs:?}");
+        assert!(differs.bottom() <= matches.top(), "{differs:?} {matches:?}");
+        for ix in 0..3 {
+            assert!(drawn(cx, &format!("run differs bead-s 7 {ix}")), "{ix}");
+        }
+        assert!(!drawn(cx, "run differs bead-s 7 3"));
+        click_on(cx, "run differs more bead-s 7");
+        wait(cx, "the rest of what differs", |cx| {
+            drawn(cx, "run differs bead-s 7 3")
+        });
+        assert!(view.read_with(cx, |v, _| {
+            v.model.as_ref().unwrap().unfolded("run differs bead-s 7")
+        }));
+
+        // A plan whose objects are all `unchanged` or `differs` draws no
+        // What changes section and still draws the summary and differs.
+        let run_unchanged_differs = json!({
+            "argv": ["pack", "apply", "starter", "--depot", "web"],
+            "command": "yardr pack apply starter --depot web",
+            "description": "Import a pack into a depot",
+            "does": ["pack starter into depot web: nothing written, 1 differs."],
+            "back": "no one command takes this back",
+            "back_by": "the operator",
+            "pack": {"name": "starter", "kind": "git", "depot": "web",
+                     "label": "yardr 0077eb255",
+                     "plan": {"objects": [
+                         {"kind": "group", "name": "web-builders", "action": "differs",
+                          "changes": [{"field": "limit", "old": "3", "new": "2"}]},
+                         {"kind": "file", "name": "roles/reviewer.md", "action": "unchanged"}
+                     ], "governs": []}}
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("footplate/settings.json");
+        let yard = Yard::start();
+        a_yard_of_jo(&yard);
+        yard.answer(
+            "UserAsks",
+            &json!({"result": {"open": [{
+                "bead": "bead-s", "bead_title": "Check starter", "topic": "", "ask": 7,
+                "question": "Check starter?", "asker": "yardmaster",
+                "since": "2026-10-10T10:00:00Z", "run": run_unchanged_differs
+            }], "decided": []}})
+            .to_string(),
+        );
+        yard.answer(
+            "Bead",
+            &json!({"result": {"id": "bead-s", "title": "Check starter", "body": "The body.",
+            "stage": "new", "labels": [], "notes": [], "asks": [{
+                "ask": 7, "to": "jo", "asker": "yardmaster",
+                "since": "2026-10-10T10:00:00Z",
+                "question": "Check starter?", "context": [], "options": [],
+                "state": "open", "run": run_unchanged_differs
+            }]}})
+            .to_string(),
+        );
+        let at = env_on(&yard, &file);
+        let (_view, cx) = opened_on_the_ask(at, &file, cx);
+        assert!(drawn(cx, "run plan summary bead-s 7"));
+        assert!(!drawn(cx, "run changes head bead-s 7"));
+        assert!(drawn(cx, "run differs head bead-s 7"));
+        assert!(drawn(cx, "run matches head bead-s 7"));
 
         // A plain run and a source pack carry no plan, and draw none.
         let dir = tempfile::tempdir().unwrap();

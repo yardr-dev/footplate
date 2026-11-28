@@ -602,13 +602,14 @@ pub(crate) fn run_texts(run: &api::Run) -> Vec<RunText> {
     texts
 }
 
-/// How many rows each of a pack ask's two plan sections shows before the
+/// How many rows each of a pack ask's plan sections shows before the
 /// rest stand behind `Show K more`.
 pub(crate) const PLAN_ROWS_SHOWN: usize = 3;
 
-/// The head of the plan's section of what the import would move, and of
-/// the one of what the yard already has as the pack says.
+/// The heads of a pack ask's plan sections: what the import would move,
+/// what differs and stays as the yard has it, and what already matches.
 pub(crate) const PLAN_CHANGES: &str = "What changes";
+pub(crate) const PLAN_DIFFERS: &str = "The yard's own version stays";
 pub(crate) const PLAN_MATCHES: &str = "Already matches";
 
 /// One row of a pack ask's plan as the card draws it: the kind of thing
@@ -621,18 +622,23 @@ pub(crate) struct PlanRow {
     pub(crate) lines: Vec<String>,
 }
 
-/// The plan's rows in its two sections, each in the plan's order, the
+/// The plan's rows in its three sections, each in the plan's order, the
 /// objects before the flows the depot's beads follow: what the import
 /// would move (an object it creates, changes or finds dropped from the
-/// pack, and a depot whose beads would follow another flow) and what
-/// already matches the yard (an object unchanged, kept as the yard has it
-/// or taken by a group of the yard, and a depot whose beads already follow
-/// the flow). An object of the yard that the pack does not carry
-/// (`not_in_pack`) stands in neither, as does an action this window has no
-/// word for: the yard's sentences say them. `depot` names the depot a
-/// flow of no type is the flow of.
-pub(crate) fn plan_rows(plan: &api::RunPlan, depot: &str) -> (Vec<PlanRow>, Vec<PlanRow>) {
+/// pack, and a depot whose beads would follow another flow), what
+/// differs and stays as the yard has it (`differs`), and what already
+/// matches the yard (an object unchanged, kept as the yard has it on an
+/// older yard, or taken by a group of the yard, and a depot whose beads
+/// already follow the flow). An object of the yard that the pack does
+/// not carry (`not_in_pack`, from an older yard) stands in none, as
+/// does an action this window has no word for: the yard's sentences say
+/// them. `depot` names the depot a flow of no type is the flow of.
+pub(crate) fn plan_rows(
+    plan: &api::RunPlan,
+    depot: &str,
+) -> (Vec<PlanRow>, Vec<PlanRow>, Vec<PlanRow>) {
     let mut moves = Vec::new();
+    let mut differs = Vec::new();
     let mut matches = Vec::new();
     for object in &plan.objects {
         let row = |lines| PlanRow {
@@ -642,6 +648,7 @@ pub(crate) fn plan_rows(plan: &api::RunPlan, depot: &str) -> (Vec<PlanRow>, Vec<
         };
         match object.action.as_str() {
             "create" | "change" | "dropped" => moves.push(row(change_lines(object))),
+            "differs" => differs.push(row(differs_lines(object))),
             "unchanged" | "kept" | "takes" => matches.push(row(keep_lines(object))),
             _ => {}
         }
@@ -669,7 +676,7 @@ pub(crate) fn plan_rows(plan: &api::RunPlan, depot: &str) -> (Vec<PlanRow>, Vec<
             lines: vec![line],
         });
     }
-    (moves, matches)
+    (moves, differs, matches)
 }
 
 /// The word a plan row's chip says: the object's kind as the yard names
@@ -720,6 +727,31 @@ fn change_lines(object: &api::RunPlanObject) -> Vec<String> {
     }
 }
 
+/// What a row of what differs says: each differing field as
+/// `<field>: yard <old>, line <new>` (or the side present where one is
+/// empty). A `differs` object with no fields has no lines, so the row
+/// shows kind and name alone.
+fn differs_lines(object: &api::RunPlanObject) -> Vec<String> {
+    object
+        .changes
+        .iter()
+        .map(|change| {
+            let (field, old, new) = (
+                model::plain(&change.field),
+                model::plain(&change.old),
+                model::plain(&change.new),
+            );
+            match (old.is_empty(), new.is_empty()) {
+                (false, false) => format!("{field}: yard {old}, line {new}"),
+                (true, false) => format!("{field}: line {new}"),
+                (false, true) => format!("{field}: yard {old}"),
+                (true, true) => field,
+            }
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 /// What a row of what already matches says: what the import leaves as
 /// the yard has it though the pack carries it, and why, a line each.
 fn keep_lines(object: &api::RunPlanObject) -> Vec<String> {
@@ -747,9 +779,12 @@ pub(crate) fn plan_mark(line: &str) -> (Option<char>, &str) {
 }
 
 /// What the plan comes to, in one line over its sections: how many
-/// changes across which kinds, and how many more already match the yard.
-pub(crate) fn plan_summary(moves: &[PlanRow], matching: usize) -> String {
-    let (moved, more) = match moves.len() {
+/// changes across which kinds, how many differ and stay as the yard has
+/// them, and how many more already match the yard. A plan whose objects
+/// are all `unchanged` or `differs` changes nothing and says
+/// `Nothing changes.`.
+pub(crate) fn plan_summary(moves: &[PlanRow], differing: usize, matching: usize) -> String {
+    let (mut line, more) = match moves.len() {
         0 => ("Nothing changes.".to_string(), ""),
         n => (
             format!(
@@ -760,10 +795,15 @@ pub(crate) fn plan_summary(moves: &[PlanRow], matching: usize) -> String {
             " more",
         ),
     };
+    match differing {
+        0 => {}
+        1 => line.push_str(" 1 differs and stays as the yard has it."),
+        n => line.push_str(&format!(" {n} differ and stay as the yard has them.")),
+    }
     match matching {
-        0 => moved,
-        1 => format!("{moved} 1{more} already matches the yard and will not move."),
-        n => format!("{moved} {n}{more} already match the yard and will not move."),
+        0 => line,
+        1 => format!("{line} 1{more} already matches the yard and will not move."),
+        n => format!("{line} {n}{more} already match the yard and will not move."),
     }
 }
 
@@ -1463,21 +1503,26 @@ mod tests {
 
     /// An object that is created, changed or dropped, and a depot whose
     /// beads would follow another flow, are what the import moves; one
-    /// unchanged, kept as the yard has it or taken by a group of the yard,
-    /// and a depot whose beads already follow the flow, already match;
-    /// what the pack does not carry, or says nothing of, is in neither. A
-    /// stage map reads as the hook it makes.
+    /// that differs stays as the yard has it in its own section; one
+    /// unchanged, kept as the yard has it on an older yard, or taken by
+    /// a group of the yard, and a depot whose beads already follow the
+    /// flow, already match; what the pack does not carry, or says
+    /// nothing of, is in none. A stage map reads as the hook it makes.
     #[test]
     fn a_plan_s_objects_and_flows_stand_in_what_changes_or_what_already_matches() {
         let mut keeper = object("group", "reviewers", "kept");
         keeper.keeps = vec!["limit 4: the group is the yard's".to_string()];
         let mut mapped = object("map", "gh", "change");
         mapped.changes = vec![change("map", "", "pull_request synchronize → pushed")];
+        let mut differing_flow = object("flow", "starter.default", "differs");
+        differing_flow.changes = vec![change("stages", "new, triage, review", "new, review")];
         let plan = api::RunPlan {
             objects: vec![
                 object("file", "roles/pr-reviewer.md", "create"),
                 object("flow", "contributors.pr", "change"),
                 object("file", "roles/old.md", "dropped"),
+                differing_flow,
+                object("file", "flows/default/new.md", "differs"),
                 object("crew", "builders", "unchanged"),
                 keeper,
                 object("group", "assembly", "takes"),
@@ -1492,7 +1537,7 @@ mod tests {
                 govern("bug", "contributors.bug", "contributors.bug"),
             ],
         };
-        let (moves, matches) = plan_rows(&plan, "signalbox");
+        let (moves, differs, matches) = plan_rows(&plan, "signalbox");
         let moved: Vec<(&str, &str)> = moves
             .iter()
             .map(|row| (row.kind.as_str(), row.subject.as_str()))
@@ -1505,6 +1550,17 @@ mod tests {
                 ("file", "roles/old.md"),
                 ("hook", "gh"),
                 ("depot", "pr"),
+            ]
+        );
+        let differing: Vec<(&str, &str)> = differs
+            .iter()
+            .map(|row| (row.kind.as_str(), row.subject.as_str()))
+            .collect();
+        assert_eq!(
+            differing,
+            [
+                ("flow", "starter.default"),
+                ("file", "flows/default/new.md"),
             ]
         );
         let matching: Vec<(&str, &str)> = matches
@@ -1522,8 +1578,10 @@ mod tests {
         );
     }
 
-    /// A row says what it moves, a line a field; a kept row says what the
-    /// yard keeps; a depot's beads say which flow they follow now.
+    /// A row says what it moves, a line a field; a differing row says
+    /// yard against line for each field, or kind and name alone with no
+    /// fields; a kept row says what the yard keeps; a depot's beads say
+    /// which flow they follow now.
     #[test]
     fn a_plan_row_says_what_it_moves_or_keeps() {
         let mut flow = object("flow", "contributors.pr", "change");
@@ -1533,6 +1591,15 @@ mod tests {
             change("stage ciwait", "ciwait on pushed", ""),
             change("scope", "", ""),
         ];
+        let mut differing_flow = object("flow", "starter.default", "differs");
+        differing_flow.changes = vec![
+            change("stages", "new, triage, review", "new, review"),
+            change("stage triage", "triage -> review", ""),
+            change("stage check", "", "check -> review"),
+            change("scope", "", ""),
+        ];
+        let mut differing_group = object("group", "web-builders", "differs");
+        differing_group.changes = vec![change("limit", "3", "2")];
         let mut kept = object("group", "reviewers", "kept");
         kept.keeps = vec![
             "limit 4: the group is the yard's".to_string(),
@@ -1546,6 +1613,9 @@ mod tests {
                 object("file", "roles/pr-reviewer.md", "create"),
                 object("group", "new-group", "create"),
                 object("file", "roles/old.md", "dropped"),
+                differing_flow,
+                differing_group,
+                object("file", "flows/default/new.md", "differs"),
                 kept,
                 taken,
                 object("crew", "builders", "unchanged"),
@@ -1557,7 +1627,7 @@ mod tests {
                 govern("", "starter", "starter"),
             ],
         };
-        let (moves, matches) = plan_rows(&plan, "signalbox");
+        let (moves, differs, matches) = plan_rows(&plan, "signalbox");
         assert_eq!(
             moves,
             [
@@ -1582,6 +1652,24 @@ mod tests {
             ]
         );
         assert_eq!(
+            differs,
+            [
+                row(
+                    "flow",
+                    "starter.default",
+                    &[
+                        "stages: yard new, triage, review, line new, review",
+                        "stage triage: yard triage -> review",
+                        "stage check: line check -> review",
+                        "scope",
+                    ]
+                ),
+                row("group", "web-builders", &["limit: yard 3, line 2"]),
+                // Differs, with no fields: kind and name alone.
+                row("file", "flows/default/new.md", &[]),
+            ]
+        );
+        assert_eq!(
             matches,
             [
                 row("group", "reviewers", &["limit 4: the group is the yard's"]),
@@ -1596,7 +1684,7 @@ mod tests {
             ]
         );
         // No depot named: the flow of no type is still the depot's.
-        let (moves, _) = plan_rows(
+        let (moves, _, _) = plan_rows(
             &api::RunPlan {
                 governs: vec![govern("", "starter", "none")],
                 ..api::RunPlan::default()
@@ -1615,9 +1703,11 @@ mod tests {
     fn a_plan_row_is_made_of_plain_text() {
         let mut flow = object("fl\u{1b}ow", "con\u{7}tributors", "change");
         flow.changes = vec![change("sta\u{1b}ge", "o\u{7}ld", "ne\u{2028}w")];
-        let (moves, _) = plan_rows(
+        let mut diff = object("gro\u{1b}up", "bui\u{7}lders", "differs");
+        diff.changes = vec![change("li\u{1b}mit", "3\u{7}", "2\u{2028}")];
+        let (moves, differs, _) = plan_rows(
             &api::RunPlan {
-                objects: vec![flow],
+                objects: vec![flow, diff],
                 governs: vec![
                     govern("p\u{1b}r", "flo\u{7}w", "no\u{1b}w"),
                     govern("", "flo\u{7}w", "no\u{1b}w"),
@@ -1633,11 +1723,16 @@ mod tests {
                 row("depot", "depot", &["follows flow, was now"]),
             ]
         );
+        assert_eq!(
+            differs,
+            [row("group", "builders", &["limit: yard 3, line 2"])]
+        );
     }
 
     /// The line over the sections counts what changes by kind, in the
-    /// order the kinds first stand, the crew as one body, and says how
-    /// many more already match the yard, where any do.
+    /// order the kinds first stand, the crew as one body, says how many
+    /// differ and stay as the yard has them, and how many more already
+    /// match the yard, where any do.
     #[test]
     fn a_plan_s_summary_counts_what_changes_by_kind_and_what_already_matches() {
         let moves = [
@@ -1646,16 +1741,20 @@ mod tests {
             row("crew", "yardmaster", &[]),
         ];
         assert_eq!(
-            plan_summary(&moves, 6),
+            plan_summary(&moves, 0, 6),
             "3 changes across 1 flow, 1 hook and the crew. 6 more already match the yard and will not move."
         );
         assert_eq!(
-            plan_summary(&moves, 1),
+            plan_summary(&moves, 0, 1),
             "3 changes across 1 flow, 1 hook and the crew. 1 more already matches the yard and will not move."
         );
         assert_eq!(
-            plan_summary(&moves, 0),
+            plan_summary(&moves, 0, 0),
             "3 changes across 1 flow, 1 hook and the crew."
+        );
+        assert_eq!(
+            plan_summary(&moves, 2, 4),
+            "3 changes across 1 flow, 1 hook and the crew. 2 differ and stay as the yard has them. 4 more already match the yard and will not move."
         );
         // Plurals are the kind's word and an s; the crew stays the crew.
         let many = [
@@ -1666,22 +1765,35 @@ mod tests {
             row("crew", "e", &[]),
         ];
         assert_eq!(
-            plan_summary(&many, 0),
+            plan_summary(&many, 0, 0),
             "5 changes across 2 files, 1 group and the crew."
         );
         assert_eq!(
-            plan_summary(&[row("flow", "a", &[])], 2),
-            "1 change across 1 flow. 2 more already match the yard and will not move."
+            plan_summary(&[row("flow", "a", &[])], 1, 2),
+            "1 change across 1 flow. 1 differs and stays as the yard has it. 2 more already match the yard and will not move."
         );
-        // Nothing moves: what matches is all there is.
+        // Nothing moves: unchanged or differs alone still says Nothing changes.
         assert_eq!(
-            plan_summary(&[], 4),
+            plan_summary(&[], 0, 4),
             "Nothing changes. 4 already match the yard and will not move."
         );
         assert_eq!(
-            plan_summary(&[], 1),
+            plan_summary(&[], 0, 1),
             "Nothing changes. 1 already matches the yard and will not move."
         );
+        assert_eq!(
+            plan_summary(&[], 2, 0),
+            "Nothing changes. 2 differ and stay as the yard has them."
+        );
+        assert_eq!(
+            plan_summary(&[], 1, 0),
+            "Nothing changes. 1 differs and stays as the yard has it."
+        );
+        assert_eq!(
+            plan_summary(&[], 2, 4),
+            "Nothing changes. 2 differ and stay as the yard has them. 4 already match the yard and will not move."
+        );
+        assert_eq!(PLAN_DIFFERS, "The yard's own version stays");
         assert_eq!(plan_matches_count(6), "6 · kept as the yard's");
     }
 

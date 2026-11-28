@@ -386,17 +386,23 @@ with the name of the open yard, before the bead and how long it waits, and
 a run ask's block leads with it too, with the user the command runs as: "in
 plantime, when you approve, the yard runs this as mckean, and nothing else:".
 A depot pack's re-apply, where the yard sends its plan, draws it over the
-yard's sentences: one line of what it comes to (`2 changes across 1 flow
-and 1 hook. 4 more already match the yard and will not move.`), then
-`What changes`, a row for each object the import would create, change or
-find dropped from the pack and each depot whose beads would follow another
-flow, and `Already matches`, a row for each object it leaves as the yard has
-it and each depot whose beads already follow the flow. A row is the
-object's kind (`flow`, `crew`, `group`, `file`, and `hook` for a stage map)
-as a chip, its name in the mono face, and under it a line for each field it
-moves (`field: old → new`, `+ new` where there was nothing, `− old` where
-nothing is left) or, where the yard keeps its own, what it keeps and why.
-Objects of the yard that the pack does not carry have no row. A section
+yard's sentences: one line of what it comes to (`1 change across 1 group.
+2 differ and stay as the yard has them. 2 more already match the yard and
+will not move.`, or `Nothing changes.` where nothing moves and every object
+is `unchanged` or `differs`), then up to three sections: `What changes` (a
+row for each object the import would create, change or find dropped from
+the pack and each depot whose beads would follow another flow), `The yard's
+own version stays` (a row for each `differs` object, which apply leaves as
+the yard has it), and `Already matches` (a row for each object unchanged,
+kept on an older yard, or taken by a group of the yard, and each depot
+whose beads already follow the flow). A row is the object's kind (`flow`,
+`crew`, `group`, `file`, and `hook` for a stage map) as a chip, its name in
+the mono face, and under it a line for each field it moves (`field: old →
+new`, `+ new` where there was nothing, `− old` where nothing is left), for
+a `differs` object each differing field (`<field>: yard <old>, line <new>`,
+or kind and name alone where it carries no fields), or, where an older yard
+keeps its own, what it keeps and why. Objects of the yard that the pack
+does not carry (`not_in_pack`, from older yards) have no row. A section
 shows its first three rows; `Show K more` opens the rest in place and `Fold`
 shuts them. The rows are the plan laid out for reading: the sentences under
 them stay whole, since the approval is given on those, and the tap and the
@@ -623,8 +629,8 @@ detail and the context drawer's Stage tab draw the same section under the
 file's head:
 
 - where the text comes from, in one quiet line: `store flow`, or `from
-  pack starter: you change the yard's copy, applying the pack again keeps
-  it`;
+  line starter: you change the yard's version, applying again leaves it
+  and writes only what the yard lacks`;
 - the yard's warning, in red, where the file's `## Ask` is broken. The
   yard saves such a file all the same, and says so on every read until
   it is fixed;
@@ -747,15 +753,13 @@ flow with no moves, no stage file and no route yet. Move up and Move
 down change the order alone, on the same card. Remove takes the
 stage and its moves out.
 
-A pack's flow, which a pack brought into the depot and the line names
+A pack's flow, which a line brought into the depot and the line names
 `pack <name>`, is a store flow too, and the same controls file the
-same card. The row says what the card says of it: the flow is the
-pack's, imported into the depot, and the card sets the yard's version
-and changes nothing of the pack; `yardr pack apply` then keeps the
-yard's version, whatever the pack moves, and sets the pack's again
-only where it is told to (`--take flow/<name>`). The command that
-takes the pack's own version instead stands under it, to be run in a
-terminal: the window runs nothing.
+same card. The row says what the card says of it: the flow was copied
+from the line into the depot, and the card sets the yard's version and
+changes nothing of the line; `yardr pack apply` writes only what the
+yard lacks, so the yard's version stays and the plan reports it as
+`differs`. No terminal command is shown.
 
 On a git depot's repository flow the same controls compose the
 depot bead's mail instead: it names the depot, the flow and its

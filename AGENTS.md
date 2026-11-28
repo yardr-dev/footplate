@@ -43,8 +43,9 @@ The window, its state and the yard:
   - `src/window/ask.rs`: the words and keys of an ask's card: its heads and
     counts (a section head, and the one that folds its rows), its buttons,
     and the texts a run or a setup holds, with the rows of a depot pack
-    ask's plan (`plan_rows`: what changes and what already matches, as plain
-    functions) and the words that sum them.
+    ask's plan (`plan_rows`: what changes, what differs and stays as the
+    yard has it, and what already matches, as plain functions) and the
+    words that sum them.
   - `src/window/asks.rs`: the decisions' views: the decisions list with its
     "Beads to move" section, which the code still calls Waiting (the rows
     are `waiting.rs`'s; its head folds them away) and its decided history
@@ -71,9 +72,10 @@ The window, its state and the yard:
     kept in the secret field and `secret_typed` alone (the call hands it
     back, `give_kept`), never the line, and leaving the card forgets it.
     A depot pack ask's run block draws the plan the yard sent over the yard's
-    sentences (`plan_block`: a line of what it comes to, `What changes` and
-    `Already matches`, each section's first three rows and its `Show K more`,
-    which is the model's fold of a message, kept by card and section).
+    sentences (`plan_block`: a line of what it comes to, `What changes`,
+    `The yard's own version stays` and `Already matches`, each section's
+    first three rows and its `Show K more`, which is the model's fold of
+    a message, kept by card and section).
     A mapping card's held messages (`IdentityHeldPayloads`, open or put
     aside, between the card's words and its options) and the hook
     deliveries its pick released (`HookPayload`, behind `Read message`)

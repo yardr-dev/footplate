@@ -9828,8 +9828,9 @@ pub const STAGE_FILE_NONE: &str = "none";
 pub enum StageSource {
     /// The yard's store: its stage files are the yard's own.
     Store,
-    /// A pack's flow, imported into the store: the stage files are the
-    /// yard's copy, and applying the pack again keeps what was changed.
+    /// A flow copied from a line into the store: the stage files are the
+    /// yard's version, and applying the line again leaves them and writes
+    /// only what the yard lacks.
     Pack(String),
     /// A repository's flow, the commit it was read at or `directory`:
     /// the file is the repository's, copied into the yard's store before
@@ -9870,7 +9871,7 @@ impl StageSource {
         match self {
             StageSource::Store => Some("store flow".to_string()),
             StageSource::Pack(pack) => Some(format!(
-                "from pack {pack}: you change the yard's copy, applying the pack again keeps it"
+                "from line {pack}: you change the yard's version, applying again leaves it and writes only what the yard lacks"
             )),
             StageSource::Repo(from) => Some(format!(
                 "from repository ({from}): copy this flow into the yard before editing its stages"
@@ -10319,40 +10320,32 @@ pub fn line_flow_mail(depot: &str, flow: &str, proposed: &str) -> String {
 }
 
 /// What a pack's flow says under its Stages row: the lines the flow
-/// card itself carries for a flow a pack manages, which yardr words in
-/// `flowPackWords` and its take-back (`internal/store/runask_flow.go`),
-/// so that what the window says before a change is filed is what the
-/// card says once it stands in Decide.
+/// card itself carries for a flow copied from a line, which yardr words
+/// in `flowPackWords` (`internal/store/runask_flow.go`), so that what
+/// the window says before a change is filed is what the card says once
+/// it stands in Decide.
 pub struct LinePackWords {
-    /// Whose the flow is, and what the card sets: the yard's version,
-    /// never the pack where it is kept.
+    /// Where the flow was copied from, and what the card sets: the
+    /// yard's version, never the line's.
     pub whose: String,
-    /// What `pack apply` then keeps, and the only way it sets the
-    /// pack's again.
+    /// What `yardr pack apply` then does: writes only what the yard
+    /// lacks, leaving the yard's version as it is.
     pub keeps: String,
-    /// The card's take-back to the pack's own version, up to the
-    /// command.
-    pub back: String,
-    /// The command that takes the pack's own version of the flow, run
-    /// in a terminal.
-    pub door: String,
 }
 
-/// The words of a flow that `pack` manages, in `depot`: the pack its
-/// source names and the depot it was imported into, which is the depot
-/// the line is of, since the line names no other import (yardr joins
-/// only the imports into the depot it reads). `flow` is the flow's
-/// name, which the `--take` names it by.
-pub fn line_pack_words(pack: &str, depot: &str, flow: &str) -> LinePackWords {
+/// The words of a flow copied from `pack` into `depot` (or the yard,
+/// where no depot is named): copied verbatim from yardr's
+/// `flowPackWords`.
+pub fn line_pack_words(pack: &str, depot: &str) -> LinePackWords {
+    let into = match depot.is_empty() {
+        true => "the yard".to_string(),
+        false => format!("depot {depot}"),
+    };
     LinePackWords {
         whose: format!(
-            "The flow is the pack {pack}'s, imported into depot {depot}: this sets the yard's version of it, and changes nothing of the pack."
+            "The flow was copied from the line {pack} into {into}: this sets the yard's version of it, and changes nothing of the line."
         ),
-        keeps: format!(
-            "yardr pack apply then keeps the yard's version, whatever the pack moves, and sets the pack's again only where it is told to (--take flow/{flow})."
-        ),
-        back: "For the pack's own version of the flow instead, in a terminal:".to_string(),
-        door: format!("yardr pack apply {pack} --depot {depot} --take flow/{flow}"),
+        keeps: "yardr pack apply writes only what the yard lacks: the yard's version stays, and the plan reports it as differs.".to_string(),
     }
 }
 
@@ -18233,7 +18226,9 @@ mod tests {
         assert_eq!(source("store").words().as_deref(), Some("store flow"));
         assert_eq!(
             source("pack starter").words().as_deref(),
-            Some("from pack starter: you change the yard's copy, applying the pack again keeps it")
+            Some(
+                "from line starter: you change the yard's version, applying again leaves it and writes only what the yard lacks"
+            )
         );
         assert_eq!(
             source("repo@abcdef0").words().as_deref(),
@@ -19123,28 +19118,25 @@ mod tests {
             line_group_mail("yardr", "checkers", "exec"),
             "depot: yardr\ngroup: checkers\nrunner: exec\n\nFile the group card group add checkers --runner exec. The card will stand in Decide; nothing changes until it is approved there, and the group does nothing until a route sends it work."
         );
-        // A pack's flow says what the flow card says of it, copied from
-        // yardr's `flowPackWords` (its whose and keeps lines) and the
-        // take-back of `flowSetCard` (its words around the door, which
-        // the window sets before the command): the pack and the depot as
-        // the line names them. When the card's words move, these do.
-        let words = line_pack_words("starter", "yardr", "managed");
+        // A flow copied from a line says what the flow card says of it,
+        // copied verbatim from yardr's `flowPackWords`: the line and the
+        // depot (or the yard, where no depot is named). When the card's
+        // words move, these do.
+        let words = line_pack_words("starter", "yardr");
         assert_eq!(
             words.whose,
-            "The flow is the pack starter's, imported into depot yardr: this sets the yard's version of it, and changes nothing of the pack."
+            "The flow was copied from the line starter into depot yardr: this sets the yard's version of it, and changes nothing of the line."
         );
         assert_eq!(
             words.keeps,
-            "yardr pack apply then keeps the yard's version, whatever the pack moves, and sets the pack's again only where it is told to (--take flow/managed)."
+            "yardr pack apply writes only what the yard lacks: the yard's version stays, and the plan reports it as differs."
         );
+        let bare = line_pack_words("starter", "");
         assert_eq!(
-            words.back,
-            "For the pack's own version of the flow instead, in a terminal:"
+            bare.whose,
+            "The flow was copied from the line starter into the yard: this sets the yard's version of it, and changes nothing of the line."
         );
-        assert_eq!(
-            words.door,
-            "yardr pack apply starter --depot yardr --take flow/managed"
-        );
+        assert_eq!(bare.keeps, words.keeps);
         // The flow as its file writes it, and as its card carries it:
         // order first in both, a limited outcome whole in both.
         let stages = vec![

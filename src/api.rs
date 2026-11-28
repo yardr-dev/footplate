@@ -1451,9 +1451,10 @@ pub struct RunPack {
 
 /// A depot pack's plan as a card holds it: every object with its action
 /// and changes, and the flows its depot's beads follow once it is
-/// applied. The card draws the objects as what changes and what already
-/// matches, beside the yard's sentences; the tap shows each changed
-/// file's new text and its unified diff old against new.
+/// applied. The card draws the objects as what changes, what differs and
+/// stays as the yard has it, and what already matches, beside the yard's
+/// sentences; the tap shows each changed file's new text and its unified
+/// diff old against new.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct RunPlan {
     #[serde(default, deserialize_with = "or_default")]
@@ -1475,8 +1476,8 @@ pub struct RunPlanObject {
     pub kind: String,
     #[serde(default)]
     pub name: String,
-    /// `create`, `change`, `unchanged`, `not_in_pack`, `dropped`, `takes`
-    /// or `kept`.
+    /// `create`, `change`, `unchanged`, `differs`, `dropped`, or `takes`;
+    /// older yards also send `kept` and `not_in_pack`.
     #[serde(default)]
     pub action: String,
     /// What a change moves, a field at a time.

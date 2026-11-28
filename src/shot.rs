@@ -194,6 +194,7 @@ pub const STATES: &[&str] = &[
     "lines",
     "run",
     "run-pack",
+    "run-pack-differs",
     "frame",
     "decide",
     "teammates",
@@ -3423,6 +3424,24 @@ fn populate(yard: &Yard, state: &str) {
             );
             yard.answer("Bead", &bead_pack());
         }
+        "run-pack-differs" => {
+            // An open card of a depot pack's re-apply whose plan holds a
+            // `differs` flow and a `differs` group, drawn in `The yard's
+            // own version stays` between What changes and Already matches.
+            yard.answer(
+                "UserInbox",
+                r#"{"result": {"mail": [{"seq": 12, "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}], "unread": 1, "last": 12, "from": ["yardmaster"]}}"#,
+            );
+            yard.answer(
+                "Conversation",
+                r#"{"result": [{"seq": 12, "at": "2026-10-08T09:30:00Z", "from": "yardmaster", "to": "jo", "text": "Shall I land it?", "read": false}]}"#,
+            );
+            yard.answer(
+                "UserAsks",
+                &json!({"result": {"open": [queued_pack_differs()], "decided": []}}).to_string(),
+            );
+            yard.answer("Bead", &bead_pack_differs());
+        }
         _ => {
             // The run ask is the forged one of the run card's test
             // (window::tests::a_forged_run_ask_s_card_marks_every_asker_line):
@@ -4246,6 +4265,66 @@ fn bead_pack() -> String {
              "question": "Apply the contributors pack again, so pull requests waiting for a maintainer move on when the contributor pushes?",
              "context": ["The upgrade moved the pack past the depot."],
              "options": [], "state": "open", "run": pack_run_of()}]}})
+    .to_string()
+}
+
+/// The pack re-apply the run-pack-differs shot proposes: the starter line
+/// into depot web, creating one missing group while leaving a differing
+/// flow, a differing group and a differing stage file as the yard has
+/// them, beside what already matches.
+fn pack_differs_run_of() -> serde_json::Value {
+    json!({
+        "command": "yardr pack apply starter --depot web",
+        "argv": ["pack", "apply", "starter", "--depot", "web"],
+        "description": "Import a pack into a depot: write only what the yard lacks",
+        "does": [
+            "pack starter (embedded in yardr 0077eb255), of kind git, into the depot web: it creates 1 group, leaves 3 differing objects as the yard has them, and 2 objects already match.",
+            "group web-checkers: create",
+            "flow starter.default: differs, stages yard new, triage, review, merged, line new, review, merged; left as the yard has it",
+            "group web-builders: differs, limit yard 3, line 2; left as the yard has it",
+            "file flows/default/new.md: differs; left as the yard has it",
+            "2 objects already match the yard, and are not changed.",
+        ],
+        "back": "no one command takes this back: yardr pack check starter --depot web shows what stands",
+        "back_by": "the operator",
+        "pack": {"name": "starter", "kind": "git", "depot": "web",
+                 "label": "yardr 0077eb255",
+                 "plan": {"objects": [
+                     {"kind": "group", "name": "web-checkers", "action": "create"},
+                     {"kind": "flow", "name": "starter.default", "action": "differs",
+                      "changes": [{"field": "stages", "old": "new, triage, review, merged",
+                                   "new": "new, review, merged"}]},
+                     {"kind": "group", "name": "web-builders", "action": "differs",
+                      "changes": [{"field": "limit", "old": "3", "new": "2"}]},
+                     {"kind": "file", "name": "flows/default/new.md", "action": "differs"},
+                     {"kind": "file", "name": "roles/reviewer.md", "action": "unchanged"}
+                 ], "governs": [
+                     {"type": "", "flow": "starter.default", "now": "starter.default"}
+                 ]}}
+    })
+}
+
+/// The pack-differs ask 7 on bead-s as the queue lists it.
+fn queued_pack_differs() -> serde_json::Value {
+    json!({
+        "bead": "bead-s", "bead_title": "Apply starter line to web",
+        "topic": "", "ask": 7,
+        "question": "Apply the starter line to depot web to restore the missing checkers group?",
+        "asker": "yardmaster",
+        "since": "2026-10-10T10:00:00Z", "run": pack_differs_run_of()
+    })
+}
+
+/// The bead of that ask.
+fn bead_pack_differs() -> String {
+    json!({"result": {"id": "bead-s",
+        "title": "Apply starter line to web",
+        "body": "The body.", "stage": "new", "labels": [], "notes": [], "asks": [
+            {"ask": 7, "to": "jo", "asker": "yardmaster",
+             "since": "2026-10-10T10:00:00Z",
+             "question": "Apply the starter line to depot web to restore the missing checkers group?",
+             "context": ["The checkers group was removed; the yard's edited flow and builders limit stay as they are."],
+             "options": [], "state": "open", "run": pack_differs_run_of()}]}})
     .to_string()
 }
 
@@ -5287,6 +5366,37 @@ mod tests {
                     );
                     assert_eq!(plan.governs.len(), 1, "{state}");
                     assert_eq!(plan.governs[0].now, plan.governs[0].flow, "{state}");
+                    let bead = yard.client().bead("bead-s").unwrap();
+                    assert_eq!(bead.asks.len(), 1, "{state}");
+                    assert_eq!(bead.asks[0].run.as_ref(), Some(run), "{state}");
+                }
+                "run-pack-differs" => {
+                    // The plan with `differs` objects (a flow, a group with
+                    // changes, and a file with none) beside a created group
+                    // and what already matches.
+                    assert_eq!(loaded.asks.open.len(), 1, "{state}");
+                    let run = loaded.asks.open[0].run.as_ref().unwrap();
+                    let plan = run.pack.as_ref().unwrap().plan.as_ref().unwrap();
+                    let actions: Vec<(&str, &str)> = plan
+                        .objects
+                        .iter()
+                        .map(|o| (o.kind.as_str(), o.action.as_str()))
+                        .collect();
+                    assert_eq!(
+                        actions,
+                        [
+                            ("group", "create"),
+                            ("flow", "differs"),
+                            ("group", "differs"),
+                            ("file", "differs"),
+                            ("file", "unchanged"),
+                        ],
+                        "{state}"
+                    );
+                    assert_eq!(plan.objects[1].changes.len(), 1, "{state}");
+                    assert_eq!(plan.objects[2].changes.len(), 1, "{state}");
+                    assert!(plan.objects[3].changes.is_empty(), "{state}");
+                    assert_eq!(plan.governs.len(), 1, "{state}");
                     let bead = yard.client().bead("bead-s").unwrap();
                     assert_eq!(bead.asks.len(), 1, "{state}");
                     assert_eq!(bead.asks[0].run.as_ref(), Some(run), "{state}");

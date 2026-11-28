@@ -7643,7 +7643,7 @@ fn shot_section() -> Option<Section> {
 
 /// The row a screenshot state opens on instead of the yard's own: the
 /// refused mail's conversation for the undelivered shot, the open card
-/// for the plain, plain-select, page, run, run-pack, frame, teammates,
+/// for the plain, plain-select, page, run, run-pack, run-pack-differs, frame, teammates,
 /// weighty-mapping, secret, secret-harness, secret-harness-empty, setup-host
 /// and pair-ask shots (the refused shot's with its refusal), the decided
 /// pairing card for the pair-qr and pair-ended shots, the board for the arrivals
@@ -7700,6 +7700,7 @@ fn shot_selected() -> Option<Selected> {
         }
         Ok("run")
         | Ok("run-pack")
+        | Ok("run-pack-differs")
         | Ok("teammates")
         | Ok("weighty")
         | Ok("weighty-mapping")

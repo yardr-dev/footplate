@@ -38,6 +38,7 @@
 # Open), `run` (an
 # open card of a run ask), `run-pack` (an open card of a depot pack's
 # re-apply, its plan drawn as what changes and what already matches),
+# `run-pack-differs` (that card with `differs` objects in their own section),
 # `teammates` (an open card of a teammate invite), `teammates-list` (the teammates view open on its row),
 # `held-message` (a mapping card that holds a stranger's mail, which the
 # operator reads on the card above its options before a pick),

@@ -188,17 +188,19 @@ is the card's one fill likewise.
 
 A depot pack ask's plan stands in the run block, between the command and the
 yard's sentences. Its first line says what it comes to, in the body role. Then
-two sections, `What changes` and `Already matches`, each headed in the section
-role semibold with its count in the meta role and quiet (`4 · kept as the
-yard's` for the second), over a hairline; a section with no row is not drawn.
+up to three sections, `What changes`, `The yard's own version stays` and
+`Already matches`, each headed in the section role semibold with its count in
+the meta role and quiet (`4 · kept as the yard's` for the third), over a
+hairline; a section with no row is not drawn.
 A row is the kind as a chip in a column 4.5 rems wide (`PLAN_KIND`), in the
 make of the context drawer's kicker (the code role in the mono face, `faint`,
 a 1px `line` border, a 4px radius), then the name in the mono face and under it
 its lines. In what changes the lines are mono at the code role, with a `+` in
 `ok` before what is put in and a `−` in the accent text colour before what is
-taken out, as the board draws them; in what already matches they are the yard's
-words in the meta role, `faint`. Rows are ruled apart by hairlines, 10 above and
-below in what changes and 7 in what matches. A section shows three rows
+taken out, as the board draws them; in what differs (`<field>: yard <old>, line
+<new>`) and what already matches they are in the meta role, `faint`. Rows are
+ruled apart by hairlines, 10 above and below in what changes and 7 in what
+differs and what matches. A section shows three rows
 (`PLAN_ROWS_SHOWN`) and the rest stand behind `Show K more`, a link word in the
 meta role under them that opens them in place and reads `Fold` once they are
 open.
@@ -350,10 +352,10 @@ one section for where the text comes from and what can be done with it
 (`stagefile.rs`). Each line is quiet in the meta role (the Line window's
 small text) except two. The yard's warning of a broken `## Ask` stands
 first, right under the file line, in `warn`: its words are the yard's.
-Then one line says where the text comes from (`store flow`, `from pack X:
-you change the yard's copy, applying the pack again keeps it`, `from
-repository (repo@abcdef0): copy this flow into the yard before editing its
-stages`). Where the yard says the store flow differs from the
+Then one line says where the text comes from (`store flow`, `from line X:
+you change the yard's version, applying again leaves it and writes only
+what the yard lacks`, `from repository (repo@abcdef0): copy this flow into
+the yard before editing its stages`). Where the yard says the store flow differs from the
 repository's, one line more follows it, in the accent text colour and
 never in `warn`, since a difference is no error (`differs from the
 repository's file: …` on the stage whose file differs, `this flow

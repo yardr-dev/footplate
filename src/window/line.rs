@@ -29,7 +29,6 @@ use super::ui::{field, shorten, small_button};
 use crate::api::{Event, LineFlow, LinePrompt, LineStage};
 use crate::input;
 use crate::model::{self, EditNow, Model, PromptOwner, Selected};
-use crate::select;
 use crate::theme::{Palette, TYPE_META};
 
 /// What the editor says before Send, which is design yardr-y1cn's two
@@ -1438,13 +1437,12 @@ impl Footplate {
     /// One flow's Stages row under its open stage: Add, Move up,
     /// Move down and Remove for that stage, by the door its source
     /// names. A store flow files its flow card, and so does a pack's
-    /// flow, a store flow its pack brought, under the card's own lines
-    /// for it: whose it is, what `yardr pack apply` then keeps and the
-    /// `--take` that sets the pack's again; a git depot's repository
-    /// flow composes the depot bead's mail; a dir depot's directory
-    /// flow offers no control and names the terminal; a type's flow is
-    /// not edited here. A removal with beads standing files nothing
-    /// and names them.
+    /// flow, a store flow its line brought, under the card's own lines
+    /// for it: where it was copied from and what `yardr pack apply`
+    /// writes; a git depot's repository flow composes the depot bead's
+    /// mail; a dir depot's directory flow offers no control and names
+    /// the terminal; a type's flow is not edited here. A removal with
+    /// beads standing files nothing and names them.
     fn line_stages(
         &self,
         depot: &str,
@@ -1685,7 +1683,7 @@ impl Footplate {
                 .child(door),
         );
         if let Some(pack) = &pack {
-            let words = model::line_pack_words(pack, &depot, &flow.name);
+            let words = model::line_pack_words(pack, &depot);
             for (name, text) in [("whose", words.whose), ("keeps", words.keeps)] {
                 row = row.child(
                     div()
@@ -1698,30 +1696,6 @@ impl Footplate {
                         .child(text),
                 );
             }
-            // The command is one a person types at a terminal: drawn as
-            // code is, and not run from here.
-            let mut command = div()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .bg(palette.code)
-                .text_sm()
-                .child(words.door);
-            if let Some(mono) = select::mono(cx) {
-                command = command.font_family(mono);
-            }
-            row = row.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .debug_selector({
-                        let stage = stage_name.clone();
-                        move || format!("line stages {stage} pack take")
-                    })
-                    .child(div().text_sm().text_color(palette.faint).child(words.back))
-                    .child(div().flex().flex_row().child(command)),
-            );
         }
         if let Some(refused) = &self.line_refused {
             row = row.child(
